@@ -1,3 +1,4 @@
+// CI verification only.
 // The channel a new install starts with: a notification on this computer that there's something to look at. It can't take
 // an answer; `agent-autoloop status` shows the card and `agent-autoloop answer` answers it.
 //   "channels": { "desktop": { "key": "…" } } in config.json
