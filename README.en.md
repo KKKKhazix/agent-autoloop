@@ -176,12 +176,14 @@ HTTP hub process on Apple M5 Pro, 24 GB, Node 24.21.0; reproduce with `npm run b
 
 | Metric | Measured |
 |---|---:|
-| Cold start | 78.12 ms |
-| Idle memory | 59.97 MB RSS |
-| Durable writes | 3,262 events/s |
-| Dispatch p99 | 1.10 ms |
-| Kernel lines | 1,405 |
+| Cold start | 85.75 ms |
+| Idle memory | 60.17 MB RSS |
+| 1,000 concurrent waiting polls | 172.06 MB RSS |
+| Durable writes | 2,374 events/s |
+| Dispatch p99 | 1.51 ms |
+| Kernel lines | 1,613 |
 | Runtime dependencies | 0 |
+| 200,000 simulation steps (observation) | 79.9 s, 2,503 steps/s |
 
 Idle memory and memory under 1,000 concurrent long-poll connections are measured separately. See the [measurement scope](docs/protocol.md#结构与预算); kernel line counts include TypeScript comments and blank lines.
 
