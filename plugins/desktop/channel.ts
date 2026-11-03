@@ -64,3 +64,4 @@ export default async function desktop({ hub, log, signal }: ChannelContext) {
     }
   }
 }
+
