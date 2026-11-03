@@ -40,6 +40,7 @@ db.function("card_token", { deterministic: true }, (id, at) => credential(enviro
 db.function("card_hash", { deterministic: true }, (id, at) => digest(credential(environment, "card", id, at)));
 
 const schema = readFileSync(new URL("../kernel/schema.sql", import.meta.url), "utf8");
+const views: string[] = [];
 for (const [, table, body] of schema.matchAll(/CREATE TABLE (\w+) \(([\s\S]*?)\n\);/g)) {
   const columns = [...body.matchAll(/^  (\w+) (?:INTEGER|TEXT)/gm)].map(([, column]) => column);
   const selected = columns.map((column) =>
@@ -47,9 +48,13 @@ for (const [, table, body] of schema.matchAll(/CREATE TABLE (\w+) \(([\s\S]*?)\n
       ? "card_token(json_extract(data,'$.id'),json_extract(data,'$.created_at')) AS token"
       : `json_extract(data,'$.${column}') AS ${column}`,
   );
-  db.exec(`DROP VIEW IF EXISTS ${table}`);
-  db.exec(`CREATE VIEW ${table} AS SELECT ${selected.join(",")} FROM projections WHERE collection='${table}'`);
+  views.push(
+    `DROP VIEW IF EXISTS ${table}; CREATE VIEW ${table} AS SELECT ${selected.join(",")} FROM projections WHERE collection='${table}'`,
+  );
 }
+
+// Other processes must see either the old views or the new ones, never the gap between DROP and CREATE.
+db.exec(`BEGIN IMMEDIATE; ${views.join(";")}; COMMIT`);
 
 // The persisted projection is expendable; the log alone rebuilds it.
 const format = digest(

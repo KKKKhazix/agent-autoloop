@@ -1,5 +1,6 @@
 // Failure modes: a draft mutates its base; filtered reads miss changed/new rows or retain deleted rows;
 // restart replays all history, reuses a deleted ID, or trusts an incompatible projection;
+// opening a second process briefly drops views used by the running service;
 // history size forces a point lookup to scan or populate a whole JavaScript table.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -54,4 +55,32 @@ test("restart reuses projections and preserves deleted ID high water", () => {
   const expected = snapshot(reopened);
   assert.deepEqual(snapshot(openView(db, "format-b")), expected);
   db.close();
+});
+
+test("opening another process never exposes a missing SQL view", async () => {
+  const { setup } = await import("./helpers.ts");
+  const { join } = await import("node:path");
+  const home = setup("projection-open");
+  const other = new DatabaseSync(join(home, "hub.db"));
+  other.exec(
+    "CREATE TABLE projections(collection TEXT,key TEXT,data TEXT,PRIMARY KEY(collection,key)); CREATE VIEW cards AS SELECT data FROM projections WHERE collection='cards'",
+  );
+  other.function("card_token", (_id, _at) => "");
+  const exec = DatabaseSync.prototype.exec;
+  let checked = false;
+  DatabaseSync.prototype.exec = function (sql) {
+    exec.call(this, sql);
+    if (sql.includes("DROP VIEW IF EXISTS cards")) {
+      checked = true;
+      assert.equal(other.prepare("SELECT COUNT(*) AS n FROM cards").get()!.n, 0);
+    }
+  };
+  try {
+    const hub = await import("../host/runtime.ts");
+    hub.db.close();
+    assert.ok(checked);
+  } finally {
+    DatabaseSync.prototype.exec = exec;
+    other.close();
+  }
 });
