@@ -56,7 +56,7 @@ export function receipt(target: Target, observation: Observation, context: Conte
         subject: target.id,
         summary: observation.ok ? "网站巡检已恢复" : "网站巡检发现异常",
         detail: observation.reason,
-        link: target.url,
+        link: new URL(target.url).href,
       },
     ],
   };

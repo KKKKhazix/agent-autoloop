@@ -60,6 +60,13 @@ test("website outage wakes once while its card is open, recovery closes only tha
   assert.deepEqual(receipt(target, { ok: true, reason: "正常" }, empty), {});
 });
 
+test("a Chinese health URL remains a valid event link in the worker receipt", () => {
+  const result = receipt({ ...target, url: "https://例子.测试/健康" }, { ok: false, reason: "连接失败" }, empty);
+  const parsed = resultFrom(readMessage(`已检查\n\`\`\`agent-autoloop\n${JSON.stringify(result)}\n\`\`\``), {});
+  assert.equal(parsed.problem, undefined);
+  assert.equal(parsed.result.events![0].link, new URL("https://例子.测试/健康").href);
+});
+
 function collect(mode = "ok") {
   const dir = mkdtempSync(join(scratch, "brief-"));
   const cli = join(dir, "lark-cli");
