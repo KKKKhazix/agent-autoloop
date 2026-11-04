@@ -152,6 +152,8 @@ function unreadable(file: string, error: NodeJS.ErrnoException) {
 
 const initial = reloadRules();
 if (!rules) throw new Error(initial.problem ?? "缺少规则");
+// There's nobody to tell yet, and after this read the file looks unchanged, so the first tick has to read it again.
+if (initial.problem) loaded = { file: "", mtime: 0 };
 
 export const ruleNamed = (name: string) => rules.rules.find((rule) => rule.name === name);
 export const rulesFor = (source: string, type: string) =>
