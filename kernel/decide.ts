@@ -514,19 +514,19 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     return { ...told, duplicate: false };
   },
   heartbeat(draft, worker, running) {
-    // A busy worker comes every second, and every fact is a sync to disk; what reads these only cares about minutes.
-    const stale = (row?: Row) => !row?.seen_at || draft.now - Date.parse(row.seen_at) >= SEEN_EVERY;
     const key = `worker:${worker}`;
-    if (stale(draft.view.get("seen", key))) {
+    const mine: number[] = running.filter((id: number) => {
+      const run = draft.view.get("runs", id);
+      return run?.state === "claimed" && workerOf(draft.view, run) === worker;
+    });
+    // A busy worker comes every second and every fact is a sync to disk, yet what reads these thinks in minutes.
+    // One stale row refreshes them all, or rows out of step would each cost a fact of their own.
+    const stale = (row?: Row) => !row?.seen_at || draft.now - Date.parse(row.seen_at) >= SEEN_EVERY;
+    if (stale(draft.view.get("seen", key)) || mine.some((id) => stale(draft.view.get("runs", id)))) {
       put(draft, "seen", key, { kind: "worker", name: worker, seen_at: draft.at });
+      for (const id of mine) put(draft, "runs", id, { seen_at: draft.at });
     }
     closeOffline(draft, worker);
-    for (const id of running) {
-      const run = draft.view.get("runs", id);
-      if (run?.state === "claimed" && workerOf(draft.view, run) === worker && stale(run)) {
-        put(draft, "runs", id, { seen_at: draft.at });
-      }
-    }
   },
   channelSeen: (draft, name) =>
     void put(draft, "seen", `channel:${name}`, { kind: "channel", name, seen_at: draft.at }),
