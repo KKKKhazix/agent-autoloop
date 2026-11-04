@@ -6,6 +6,7 @@
 // Source event IDs must not collide with internally generated answer or timer IDs.
 // Quiet notices must not escape through a channel; a stale writer must receive Conflict rather than a database failure.
 // Existing logs can contain a queued run with an old agent after a rules change; replay must retain claimed configurations.
+// A busy worker's heartbeat each second must not write a fact each second; nor may writing less let its work look gone.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -86,6 +87,32 @@ test("old logs with stale queued routing claim the current configuration and rep
     } finally {
       rebuilt.close();
     }
+  } finally {
+    view.close();
+  }
+});
+test("a worker coming every second writes a few facts a minute, and its work never looks gone", () => {
+  let view = seeded();
+  const act = (now: number, type: string, ...args: unknown[]) => {
+    const decided = decide(view, { type, args }, now, environment);
+    view = evolve(view, decided.facts);
+    return decided;
+  };
+  try {
+    const start = 1_000_000;
+    act(start, "ingest", "app", { id: "held", type: "feedback.new" });
+    const job = act(start, "claimNext", "w1", "claim").value;
+    let facts = 0;
+    for (let second = 1; second <= 600; second++) {
+      const now = start + second * 1000;
+      facts += act(now, "heartbeat", "w1", [job.run]).facts.length;
+      act(now, "sweep");
+    }
+    assert.ok(facts <= 40, `${facts} facts in ten minutes`);
+    assert.equal(view.get("runs", job.run)!.state, "claimed", "not taken for gone");
+    assert.deepEqual(rows(view, "cards", { state: "open" }), [], "nobody was told the worker had gone");
+    const seen = Date.parse(view.get("seen", "worker:w1")!.seen_at);
+    assert.ok(start + 600_000 - seen < 20_000, "what it says about the worker is recent");
   } finally {
     view.close();
   }

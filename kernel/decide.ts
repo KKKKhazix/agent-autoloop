@@ -41,6 +41,8 @@ const RESEND_WINDOW = 57 * MINUTE;
 const MAX_HOPS = 8;
 /** Failures in a row after which a run stops being retried: each try spends the owner's real tokens. */
 const MAX_ATTEMPTS = 10;
+/** How often a worker's coming is written down. Far below what going quiet is judged by: minutes, in due.ts. */
+const SEEN_EVERY = 15_000;
 const NOT_TRYING = { tries: 0, first_try_at: null, not_before: null };
 const NOT_DELIVERED: Row = { version: 0, ref: null, ...NOT_TRYING, error: null, given_up: 0 };
 
@@ -512,11 +514,16 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     return { ...told, duplicate: false };
   },
   heartbeat(draft, worker, running) {
-    put(draft, "seen", `worker:${worker}`, { kind: "worker", name: worker, seen_at: draft.at });
+    // A busy worker comes every second, and every fact is a sync to disk; what reads these only cares about minutes.
+    const stale = (row?: Row) => !row?.seen_at || draft.now - Date.parse(row.seen_at) >= SEEN_EVERY;
+    const key = `worker:${worker}`;
+    if (stale(draft.view.get("seen", key))) {
+      put(draft, "seen", key, { kind: "worker", name: worker, seen_at: draft.at });
+    }
     closeOffline(draft, worker);
     for (const id of running) {
       const run = draft.view.get("runs", id);
-      if (run?.state === "claimed" && workerOf(draft.view, run) === worker) {
+      if (run?.state === "claimed" && workerOf(draft.view, run) === worker && stale(run)) {
         put(draft, "runs", id, { seen_at: draft.at });
       }
     }
