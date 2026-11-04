@@ -31,7 +31,10 @@ export type Reading = {
   /** What the session has used so far, for amounts the program only gives that way. */
   sessionUsage?: Usage;
   error?: string;
+  /** Its turn is over, though it may not have exited. */
   finished?: boolean;
+  /** It has this turn's prompt, in a conversation that's there. From here on the work may be half done. */
+  started?: boolean;
 };
 export type Adapter = {
   /** Its command line for this turn. */
