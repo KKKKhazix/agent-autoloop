@@ -12,7 +12,7 @@ import { evolve, rows, keyOf, statement, type Fact, type Row, type Table } from 
 import * as query from "../kernel/query.ts";
 import { eventRule, typeMatches } from "../kernel/rules.ts";
 import { stateOf as state } from "../kernel/state.ts";
-import { commit, openView } from "../kernel/store.ts";
+import { commitLatest, openView } from "../kernel/store.ts";
 import type { Job } from "../protocol/job.ts";
 import { parseRules as checkRules, RulesError } from "../protocol/rules.ts";
 import type { Rejected } from "../protocol/validate.ts";
@@ -23,8 +23,17 @@ const masterKeyFile = join(HOME, "master.key");
 if (!existsSync(masterKeyFile)) {
   writeFileSync(masterKeyFile, randomBytes(32).toString("base64url"), { mode: 0o600, flag: "wx" });
 }
+const masterKey = readFileSync(masterKeyFile, "utf8").trim();
+// An empty or cut-short key would still sign links, and card links derive from what channels see. Replacing it would
+// void every link and token, so that is left to the owner.
+if (!/^[A-Za-z0-9_-]{43}$/.test(masterKey)) {
+  throw new Error(
+    `${masterKeyFile} 坏了（应该是 43 个字符），中台不启动。从备份恢复这个文件；没有备份就删掉它，` +
+      "重启会生成新的，但已经发出的卡片链接和正在跑的轮次会失效。",
+  );
+}
 export const environment = {
-  secret: readFileSync(masterKeyFile, "utf8").trim(),
+  secret: masterKey,
   publicUrl: process.env.AGENT_AUTOLOOP_PUBLIC_URL ?? "",
 };
 
@@ -95,8 +104,7 @@ export const onChange = (listener: Listener) => {
 export function execute(type: string, args: any[], now = Date.now()) {
   let facts: Fact[] = [];
   let value: any;
-  const latest = getView();
-  current = commit(db, latest, () => {
+  current = commitLatest(db, format, (latest) => {
     ({ facts, value } = decide(latest, { type, args }, now, environment));
     return facts;
   });
