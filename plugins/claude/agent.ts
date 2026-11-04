@@ -51,15 +51,16 @@ export default {
             input: result.usage.input_tokens ?? 0,
             output: result.usage.output_tokens ?? 0,
             cached: (result.usage.cache_read_input_tokens ?? 0) + (result.usage.cache_creation_input_tokens ?? 0),
-            cost: result.total_cost_usd ?? 0,
           }
         : undefined;
+      // Resumed, it goes on counting the price from the session so far, though its tokens start again.
+      const sessionUsage = result.total_cost_usd === undefined ? undefined : { cost: result.total_cost_usd };
       const said = String(result.result ?? "");
       if (result.is_error || result.subtype !== "success") {
         const error = said.split("\n")[0] || result.subtype || "没留下结果";
-        return { session: result.session_id, usage, finished: true, error };
+        return { session: result.session_id, usage, sessionUsage, finished: true, error };
       }
-      return { text: said, session: result.session_id, usage, finished: true };
+      return { text: said, session: result.session_id, usage, sessionUsage, finished: true };
     }
     return code === null ? {} : { error: tail(stderr || stdout) || "没留下结果" };
   },

@@ -51,8 +51,6 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 In an interactive terminal, just type the option number. In a non-interactive terminal, run `agent-autoloop answer 1 2` to pick green. Then `agent-autoloop status` shows that the agent resumed its conversation and finished, along with rounds, tokens, and cost for today and the past seven days ([how they are counted](skills/agent-autoloop/SKILL.md#看情况回答)).
 
-Codex resumed sessions report only newly consumed tokens. A resume without a saved baseline is reported as missing usage; historical receipts are not recalculated. See [usage accounting](docs/plugins.md#agent-插件).
-
 ## How a piece of work flows
 
 The numbers match the diagram above:

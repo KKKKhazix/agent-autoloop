@@ -26,10 +26,10 @@ import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
-
 import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
 
 const RUNS = path.join(HOME, "worker", "runs");
+const NOTHING: Usage = { input: 0, output: 0, cached: 0, cost: 0 };
 const TIMEOUT_MINUTES = 180;
 /** A reader of the turn's end that doesn't exit is given this long. */
 const GRACE = 30_000;
@@ -83,6 +83,13 @@ function save(entry: Entry) {
   const file = path.join(entry.dir, "entry.json");
   writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
   renameSync(`${file}.tmp`, file);
+}
+
+/** How far a launch took its session's total. One that didn't go on in that session started it from nothing. */
+function sessionRise(entry: Entry, { session, sessionUsage }: Reading) {
+  if (!session || !sessionUsage) return;
+  saveUsage(entry.job.agent.use, session, sessionUsage);
+  return usageDelta(sessionUsage, session === entry.resume ? entry.usageBaseline : NOTHING);
 }
 
 /** What the agent's environment gets: never the hub's secrets, and nothing of a session the worker itself may be in. */
@@ -291,20 +298,7 @@ export function createWorker({
   function conclude(entry: Entry, adapter: Adapter, code: number | null) {
     // One ended because its turn was over but it wouldn't exit said what it had to say first.
     const seen = read(entry, adapter, entry.finishedAt ? 0 : code);
-    let usageThisLaunch = seen.usage;
-    if (seen.usageScope === "session") {
-      usageThisLaunch = undefined;
-      if (seen.session && seen.usage) {
-        // A fresh session starts at zero; an unknown resumed session does not.
-        const baseline =
-          !entry.resume || seen.session !== entry.resume
-            ? { input: 0, output: 0, cached: 0, cost: 0 }
-            : entry.usageBaseline;
-        usageThisLaunch = usageDelta(seen.usage, baseline);
-        saveUsage(entry.job.agent.use, seen.session, seen.usage);
-      }
-    }
-    entry.usage = addUsage(entry.usage, usageThisLaunch);
+    entry.usage = addUsage(addUsage(entry.usage, seen.usage), sessionRise(entry, seen));
     const session = seen.session ?? (entry.turn > 0 && adapter.link ? entry.session : undefined);
     if (seen.session) entry.session = seen.session;
     const usage = entry.usage && { usage: entry.usage };

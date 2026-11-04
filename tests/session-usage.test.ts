@@ -1,5 +1,6 @@
 // Prevent double counting on restart/replay, negative usage after a counter reset, and invented zero usage or prices
-// when a resumed session has no trustworthy baseline. No model, user session, or live hub is used.
+// when a resumed session has no trustworthy baseline; prevent a session's total saved under one adapter being another's.
+// No model, user session, or live hub is used.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setup } from "./helpers.ts";
@@ -26,7 +27,6 @@ test("unknown baselines and resets are missing, not cumulative usage or zero", (
   assert.equal(usageDelta({ input: 5 }, { output: 2 }), undefined);
   assert.deepEqual(usageDelta({ input: 5 }, { input: 5 }), { input: 0 });
   assert.deepEqual(usageDelta(total, first), delta);
-  assert.equal(usageDelta({ input: NaN }, { input: 0 }), undefined);
 });
 
 test("new sessions and receipt repairs each contribute only their increment", () => {

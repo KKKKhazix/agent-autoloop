@@ -28,6 +28,7 @@ process.env.AGENT_AUTOLOOP_SECRET_X = "must-not-leak";
 process.env.AGENT_AUTOLOOP_PUBLIC_URL = "https://hub.test";
 const { createWorker } = await import("../worker/worker.ts");
 const { HubError } = await import("../protocol/client.ts");
+const { saveUsage } = await import("../worker/usage.ts");
 
 // An adapter with a session: it answers with what the script printed, and takes `resume` so a test can see it was asked.
 mkdirSync(join(home, "plugins", "scripted"), { recursive: true });
@@ -593,32 +594,30 @@ test("the hub gone for ten minutes is told once, tried a few times if telling fa
   assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 5);
 });
 
+// An adapter that says what its script prints.
+mkdirSync(join(home, "plugins", "printed"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "printed", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read: (stdout, code) => (code === null || !stdout.trim() ? {} : { text: "好了", ...JSON.parse(stdout) }),
+};`,
+);
+const printing = (session: string, resumed: boolean, reading: object) =>
+  job({
+    use: "printed",
+    ...(resumed && { session }),
+    command: [`echo '${JSON.stringify({ session, ...reading })}'`],
+  });
+
 test("session totals are counted once across resumed jobs and worker restarts", async () => {
-  mkdirSync(join(home, "plugins", "cumulative"), { recursive: true });
-  writeFileSync(
-    join(home, "plugins", "cumulative", "agent.ts"),
-    `
-    export default {
-      command: (t) => ["/bin/sh", "-c", t.command[0]],
-      read(stdout, code) {
-        if (code === null || !stdout.trim()) return {};
-        const usage = JSON.parse(stdout);
-        return { text: "好了", session: "same-session", usage, usageScope: "session" };
-      },
-    };
-  `,
-  );
   const hub = fakeHub();
-  hub.jobs.push(job({ use: "cumulative", command: [`echo '{"input":52968,"output":126,"cached":26240}'`] }));
-  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 1);
-  hub.jobs.push(
-    job({
-      use: "cumulative",
-      session: "same-session",
-      command: [`echo '{"input":108943,"output":207,"cached":80384}'`],
-    }),
-  );
-  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 2);
+  const total = (sessionUsage: object, resumed = true) => printing("totals", resumed, { sessionUsage });
+  hub.jobs.push(total({ input: 52968, output: 126, cached: 26240 }, false));
+  await until(worker(hub), () => hub.results.length === 1);
+  hub.jobs.push(total({ input: 108943, output: 207, cached: 80384 }));
+  await until(worker(hub), () => hub.results.length === 2);
   assert.deepEqual(
     hub.results.map((r) => r.usage),
     [
@@ -632,22 +631,45 @@ test("session totals are counted once across resumed jobs and worker restarts", 
   );
   // An upgrade or a different worker may have no baseline for an existing session.
   rmSync(join(home, "worker", "usage"), { recursive: true });
-  hub.jobs.push(
-    job({
-      use: "cumulative",
-      session: "same-session",
-      command: [`echo '{"input":110000,"output":220,"cached":81000}'`],
-    }),
-  );
-  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 3);
+  hub.jobs.push(total({ input: 110000, output: 220, cached: 81000 }));
+  await until(worker(hub), () => hub.results.length === 3);
   assert.equal(hub.results[2].usage, undefined);
-  hub.jobs.push(
-    job({
-      use: "cumulative",
-      session: "same-session",
-      command: [`echo '{"input":110100,"output":230,"cached":81050}'`],
-    }),
-  );
-  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 4);
+  hub.jobs.push(total({ input: 110100, output: 230, cached: 81050 }));
+  await until(worker(hub), () => hub.results.length === 4);
   assert.deepEqual(hub.results[3].usage, { input: 100, output: 10, cached: 50 });
+});
+
+test("a price given for the session and tokens given for the launch each count once", async () => {
+  const hub = fakeHub();
+  const turn = (cached: number, cost: number, resumed = true) =>
+    printing("mixed", resumed, { usage: { input: 2, output: 3, cached }, sessionUsage: { cost } });
+  hub.jobs.push(turn(33335, 0.25, false));
+  await until(worker(hub), () => hub.results.length === 1);
+  hub.jobs.push(turn(33690, 0.75));
+  await until(worker(hub), () => hub.results.length === 2);
+  assert.deepEqual(
+    hub.results.map((r) => r.usage),
+    [
+      { input: 2, output: 3, cached: 33335, cost: 0.25 },
+      { input: 2, output: 3, cached: 33690, cost: 0.5 },
+    ],
+  );
+  rmSync(join(home, "worker", "usage"), { recursive: true });
+  hub.jobs.push(turn(34000, 1));
+  await until(worker(hub), () => hub.results.length === 3);
+  assert.deepEqual(hub.results[2].usage, { input: 2, output: 3, cached: 34000 }, "only the price can't be known");
+});
+
+test("a launch read again after a restart subtracts where it began, not where the session has got to", async () => {
+  const hub = fakeHub();
+  const { hold, open } = gate("usage-restart");
+  saveUsage("printed", "reread", { input: 100 });
+  const reading = JSON.stringify({ session: "reread", sessionUsage: { input: 150 } });
+  hub.jobs.push(job({ use: "printed", session: "reread", command: [`${hold}; echo '${reading}'`] }));
+  await worker(hub).tick();
+  // As after a worker that stopped once it had moved the session on, before the result was out.
+  saveUsage("printed", "reread", { input: 150 });
+  open();
+  await until(worker(hub), () => hub.results.length === 1);
+  assert.deepEqual(hub.results[0].usage, { input: 50 });
 });
