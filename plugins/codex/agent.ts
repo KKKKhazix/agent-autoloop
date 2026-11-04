@@ -33,9 +33,10 @@ export default {
     const seen: {
       text?: string;
       session?: string;
-      usage?: object;
+      sessionUsage?: object;
       error?: string;
       finished?: boolean;
+      started?: boolean;
       completed?: boolean;
     } = {};
     for (const line of stdout.split("\n")) {
@@ -46,11 +47,12 @@ export default {
         continue;
       }
       if (event.type === "thread.started") seen.session = event.thread_id;
+      else if (event.type === "turn.started") seen.started = true;
       else if (event.type === "item.completed" && event.item?.type === "agent_message") seen.text = event.item.text;
       else if (event.type === "turn.completed") {
         seen.completed = seen.finished = true;
         const { input_tokens = 0, output_tokens = 0, cached_input_tokens = 0 } = event.usage ?? {};
-        seen.usage = { input: input_tokens, output: output_tokens, cached: cached_input_tokens };
+        seen.sessionUsage = { input: input_tokens, output: output_tokens, cached: cached_input_tokens };
       } else if (event.type === "turn.failed") {
         seen.finished = true;
         seen.error = event.error?.message || "Codex 没跑完这一轮";
