@@ -294,6 +294,48 @@ test("receipt normalization leaves the request unchanged and can be decided twic
   assert.deepEqual(a, b);
 });
 
+test("the card about a worker not connecting, once closed, stays closed until the worker has been back", () => {
+  const local = { ...rules, rules: rules.rules.filter((r) => "source" in r.when) };
+  let v = evolve(empty(), decide(empty(), { type: "rules", args: [local] }, 0, environment).facts);
+  const act = (type: string, args: unknown[], now: number) => {
+    const d = decide(v, { type, args }, now, environment);
+    v = evolve(v, d.facts);
+    return d.value;
+  };
+  const offline = () => rows(v, "cards").filter((card) => card.key.startsWith("worker:w1:offline:"));
+  const dueNow = (now: number) => rows(v, "due").filter((due) => due.kind === "offline" && due.at <= now);
+  act("heartbeat", ["w1", []], 0);
+  act("ingest", ["app", { id: "x", type: "feedback.new" }], 0);
+  act("tick", [], 600001);
+  assert.equal(offline().length, 1);
+  act("answer", [offline()[0].id, { by: "本人" }], 600002);
+  assert.deepEqual(dueNow(600002), [], "nothing comes due at once to bring it back");
+  act("tick", [], 700000);
+  assert.equal(offline().length, 1, "told once for this absence");
+  act("heartbeat", ["w1", []], 800000);
+  act("tick", [], 800000 + 600001);
+  assert.equal(offline().length, 2, "back and gone again is a new absence");
+  assert.equal(offline().filter((card) => card.state === "open").length, 1);
+});
+
+test("the card about a worker that has never connected, once closed, stays closed too", () => {
+  const local = { ...rules, rules: rules.rules.filter((r) => "source" in r.when) };
+  let v = evolve(empty(), decide(empty(), { type: "rules", args: [local] }, 0, environment).facts);
+  const act = (type: string, args: unknown[], now: number) => {
+    const d = decide(v, { type, args }, now, environment);
+    v = evolve(v, d.facts);
+    return d.value;
+  };
+  const offline = () => rows(v, "cards").filter((card) => card.key === "worker:w1:offline:never");
+  act("ingest", ["app", { id: "x", type: "feedback.new" }], 0);
+  act("tick", [], 600001);
+  assert.equal(offline().length, 1);
+  act("answer", [offline()[0].id, { by: "本人" }], 600002);
+  act("tick", [], 700000);
+  assert.equal(offline().length, 1);
+  assert.equal(offline()[0].state, "closed");
+});
+
 test("a worker heartbeat closes its offline card with no later scheduled work", () => {
   const local = { ...rules, rules: rules.rules.filter((r) => "source" in r.when) };
   let v = evolve(empty(), decide(empty(), { type: "rules", args: [local] }, 0, environment).facts);

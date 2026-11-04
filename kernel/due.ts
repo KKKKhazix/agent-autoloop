@@ -45,8 +45,9 @@ export function deadlines(view: View, now: number) {
     const waiting = waitingOn(view, worker, now);
     if (!waiting.length) continue;
     const offlineKey = `worker:${worker}:offline:${seen ? seen.seen_at : "never"}`;
-    // The sweep acts strictly after each limit, hence the extra millisecond.
-    if (!rows(view, "cards", { key: offlineKey, state: "open" }).length) {
+    // Told once for each absence, however that card ends. The sweep acts strictly after each limit, hence the extra
+    // millisecond.
+    if (!rows(view, "cards", { key: offlineKey }).length) {
       add("offline", worker, Math.max(now, Date.parse(seen?.seen_at ?? waiting[0].created_at) + OFFLINE_AFTER + 1));
     }
     if (!seen || now - Date.parse(seen.seen_at) > WORKER_FRESH) continue;

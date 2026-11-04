@@ -249,7 +249,7 @@ function sweep(draft: Draft) {
       : `${worker} 已经 ${minutes} 分钟没连上中台，有 ${waiting.length} 件任务在排队或在跑`;
     const check = neverSeen ? "有没有开机联网" : "是不是关机、休眠或断网了";
     const key = `worker:${worker}:offline:${neverSeen ? "never" : iso(lastSeen)}`;
-    notify(draft, key, "接单程序没连上", `${situation}（请看一眼那台电脑${check}）。`);
+    notify(draft, key, "接单程序没连上", `${situation}（请看一眼那台电脑${check}）。`, { once: true });
   }
 }
 

@@ -176,9 +176,13 @@ export const cancel = (run: number, now = Date.now()) => execute("cancel", [run]
 export const cancels = (worker: string) => query.cancels(getView(), worker);
 export const sweep = (now = Date.now()) => execute("sweep", [], now);
 
+let toldOf: string | undefined;
+
 export function tick(now = Date.now()) {
   const { problem } = reloadRules();
-  if (problem) execute("rulesError", [problem], now);
+  // A file still gone is a problem at every tick, and an owner who closed the card has heard.
+  if (problem && problem !== toldOf) execute("rulesError", [problem], now);
+  toldOf = problem;
   execute("tick", [], now);
 }
 
