@@ -43,6 +43,8 @@ export default {
       } catch {
         continue;
       }
+      // Newer versions print every message as one array on a single line.
+      if (Array.isArray(result)) result = result.findLast((message) => message?.type === "result");
       if (result?.type !== "result") continue;
       const usage = result.usage
         ? {
