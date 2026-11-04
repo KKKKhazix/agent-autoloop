@@ -30,6 +30,13 @@ test("a name `key new` allows can be revoked, and removal says whether it was th
   assert.deepEqual(await (await request(path, owner, "DELETE")).json(), { ok: true, changed: false });
   assert.equal(hub.removeKey("source", "never-there"), false);
   assert.equal((await request("/v1/keys/source/%zz", owner, "DELETE")).status, 400);
+  const long = "a".repeat(201);
+  const longKey = hub.addKey("source", long);
+  assert.deepEqual(await (await request(`/v1/keys/source/${long}`, owner, "DELETE")).json(), {
+    ok: true,
+    changed: true,
+  });
+  assert.equal((await request("/v1/events", longKey, "POST")).status, 401);
 });
 
 test("only the owner removes keys and pending work is refused immediately", async () => {

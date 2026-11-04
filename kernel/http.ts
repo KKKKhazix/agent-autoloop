@@ -211,7 +211,7 @@ async function route(call: Call): Promise<Response> {
   const path = call.url.pathname;
   if (method === "GET" && path === "/healthz") return json({ ok: true, commit: services.commit });
   // A key's name is whatever `key new` was given; it only has to stay one path segment when encoded.
-  const key = /^\/v1\/keys\/(source|worker|channel|owner)\/([^/]{1,200})$/.exec(path);
+  const key = /^\/v1\/keys\/(source|worker|channel|owner)\/([^/]+)$/.exec(path);
   if (method === "DELETE" && key) {
     requireKey(call, "owner");
     let name: string;
