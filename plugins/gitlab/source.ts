@@ -14,16 +14,17 @@ export default function gitlab({ headers, body, secret }: Input) {
   if (kind === "ping") return [];
   const payload = JSON.parse(body);
   const object_kind = String(payload.object_kind ?? kind);
-  // The action lives on object_attributes, not on the top-level payload.
-  const action = String(payload.object_attributes?.action ?? payload.action ?? "");
+  // The action lives on object_attributes, e.g. merge_request.open from object_attributes.action = "open".
+  const action = String(payload.object_attributes?.action ?? "");
   const type = (action ? `${object_kind}.${action}` : object_kind).toLowerCase().replace(/[^a-z0-9_.-]/g, "-");
   const project = payload.project ?? payload.repository ?? {};
   const repo = String(project.full_name ?? project.path_with_namespace ?? project.name ?? "");
   const object_attributes = payload.object_attributes ?? payload.merge_request ?? payload.issue ?? {};
   const iid = object_attributes.iid ?? object_attributes.id ?? "";
-  // Use the Idempotency-Key header so retries keep the same id and are not dispatched twice.
+  // Idempotency-Key stays the same across retries; fall back to a stable payload-derived id,
+  // never a random id (which would make a retried webhook dispatch twice).
   const idempotencyKey = String(headers["idempotency-key"] ?? "");
-  const id = idempotencyKey || String(object_attributes.id ?? payload.object_id ?? crypto.randomUUID());
+  const id = idempotencyKey || String(object_attributes.id ?? payload.object_id ?? `${object_kind}:${iid}`);
   const subject = `${repo}#${iid}`.replace(/[^A-Za-z0-9#._:/@-]/g, "-").slice(0, 100);
   return [
     {
