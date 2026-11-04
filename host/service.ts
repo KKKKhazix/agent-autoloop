@@ -139,5 +139,8 @@ export function stopUp() {
 
 export function serviceRunning() {
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
+  // 系统级 unit（root 部署：/etc/systemd/system/*.service）也要认，不能只查 --user，
+  // 否则 doctor 会把跑得好好的服务误报成「没在跑」。
+  if (spawnSync("systemctl", ["is-active", "--quiet", label()], { stdio: "ignore" }).status === 0) return true;
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
 }
