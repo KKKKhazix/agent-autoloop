@@ -7,9 +7,11 @@
 // failed; a run over its time or told to stop goes on, or leaves its children behind; the hub is told it stopped before it
 // has; more than capacity at once are taken; a claim is thrown away before its job has arrived; a receipt that can't be read
 // redoes the work, isn't asked for again, is asked for without end, or is dropped without telling the owner; a session that
-// can't be gone on in fails the run instead of starting a new one, or keeps trying; a turn's end that doesn't exit holds its
+// can't be gone on in fails the run instead of starting a new one, or keeps trying; a turn that went on in its session and
+// then broke, said nothing, or vanished is run again in a new one, or loses that session; a turn's end that doesn't exit holds its
 // place for ever; an old turn's exit is taken for a new one's; the hub gone for ten minutes isn't told, told every minute,
 // taken as told when the telling failed, tried without end, or not told again after it came back and went away again.
+// Session-cumulative usage must become per-launch deltas, including after a worker restart.
 // A shell replacing itself with the final move must not lose its identity before the exit file is published.
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
@@ -27,6 +29,7 @@ process.env.AGENT_AUTOLOOP_SECRET_X = "must-not-leak";
 process.env.AGENT_AUTOLOOP_PUBLIC_URL = "https://hub.test";
 const { createWorker } = await import("../worker/worker.ts");
 const { HubError } = await import("../protocol/client.ts");
+const { saveUsage } = await import("../worker/usage.ts");
 
 // An adapter with a session: it answers with what the script printed, and takes `resume` so a test can see it was asked.
 mkdirSync(join(home, "plugins", "scripted"), { recursive: true });
@@ -38,9 +41,11 @@ export default {
   read(stdout, code, stderr) {
     const session = /session=(\\S+)/.exec(stdout)?.[1];
     const finished = stdout.includes("TURN-OVER");
-    if (code === null) return { session, finished };
-    if (code !== 0) return { session, error: stderr.trim() || "boom" };
-    return { text: stdout.replace(/session=\\S+\\n/, "").replace("TURN-OVER\\n", ""), session, finished, usage: { input: 1, output: 1 } };
+    const started = stdout.includes("TURN-BEGAN");
+    if (code === null) return { session, finished, started };
+    if (code !== 0) return { session, started, error: stderr.trim() || "boom" };
+    const text = stdout.replace(/session=\\S+\\n/, "").replace("TURN-OVER\\n", "").replace("TURN-BEGAN\\n", "");
+    return { text, session, finished, started, usage: { input: 1, output: 1 } };
   },
   link: (s) => "app://" + s,
 };`,
@@ -120,17 +125,36 @@ function fakeHub() {
   return hub;
 }
 
-/** Ticks until `done`, or fails after a while. */
-async function until(worker: { tick(): Promise<boolean> }, done: () => boolean, seconds = 15) {
-  const end = Date.now() + seconds * 1000;
+/**
+ * Ticks until `done`, or fails after a while. `passing` moves a held clock along as it waits, which a wait for a stop has
+ * to do: SIGTERM can miss a child its shell is forking at that moment, and then only the worker's SIGKILL after its grace
+ * period ends the run. A clock standing still never gets there.
+ */
+async function until(worker: { tick(): Promise<boolean> }, done: () => boolean, passing = () => {}) {
+  const end = Date.now() + 15_000;
   while (!done()) {
     if (Date.now() > end) assert.fail("timed out waiting");
     await worker.tick();
+    passing();
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 const worker = (hub: ReturnType<typeof fakeHub>, more: object = {}) =>
   createWorker({ hub: hub as any, name: "w1", wait: 0, ...more });
+/** Runs given together can finish in either order. */
+const resultOf = (hub: ReturnType<typeof fakeHub>, given: { run: number }) =>
+  hub.results.find((result) => result.run === given.run);
+/**
+ * A step that holds a script until the test opens the gate, so "still going" doesn't depend on how fast this machine is.
+ * It gives up after the 30 seconds a `sleep 30` would take: a test that fails leaves nothing running.
+ */
+function gate(name: string) {
+  const file = join(folder, `${name}.open`);
+  return {
+    hold: `i=0; until [ -e "${file}" ] || [ $i -ge 600 ]; do sleep 0.05; i=$((i + 1)); done`,
+    open: () => writeFileSync(file, ""),
+  };
+}
 
 test("a job runs in its rule's folder with the prompt and context file, and without the hub's secrets", async () => {
   const hub = fakeHub();
@@ -152,27 +176,25 @@ test("a job runs in its rule's folder with the prompt and context file, and with
 
 test("a bad exit code, or no last message, is a failure saying why", async () => {
   const hub = fakeHub();
-  hub.jobs.push(
-    job({ command: ["/bin/sh", "-c", "echo boom >&2; exit 3"] }),
-    job({ command: ["/bin/sh", "-c", "true"] }),
-  );
+  const bad = job({ command: ["/bin/sh", "-c", "echo boom >&2; exit 3"] });
+  const silent = job({ command: ["/bin/sh", "-c", "true"] });
+  hub.jobs.push(bad, silent);
   const w = worker(hub);
   await until(w, () => hub.results.length === 2);
-  assert.equal(hub.results[0].outcome, "failed");
-  assert.match(hub.results[0].error, /退出码 3：boom/);
-  assert.deepEqual([hub.results[1].outcome, hub.results[1].error], ["failed", "没留下结果"]);
+  assert.equal(resultOf(hub, bad).outcome, "failed");
+  assert.match(resultOf(hub, bad).error, /退出码 3：boom/);
+  assert.deepEqual([resultOf(hub, silent).outcome, resultOf(hub, silent).error], ["failed", "没留下结果"]);
 });
 
 test("a last message saying it couldn't, or that there was nothing to do, is what it says", async () => {
   const hub = fakeHub();
-  hub.jobs.push(
-    job({ command: ["/bin/sh", "-c", "echo 没跑成：连不上数据库"] }),
-    job({ command: ["/bin/sh", "-c", "echo 没事可做：已经恢复了"] }),
-  );
+  const couldnt = job({ command: ["/bin/sh", "-c", "echo 没跑成：连不上数据库"] });
+  const nothing = job({ command: ["/bin/sh", "-c", "echo 没事可做：已经恢复了"] });
+  hub.jobs.push(couldnt, nothing);
   const w = worker(hub);
   await until(w, () => hub.results.length === 2);
-  assert.deepEqual([hub.results[0].outcome, hub.results[0].error], ["failed", "连不上数据库"]);
-  assert.deepEqual([hub.results[1].outcome, hub.results[1].summary], ["nothing", "已经恢复了"]);
+  assert.deepEqual([resultOf(hub, couldnt).outcome, resultOf(hub, couldnt).error], ["failed", "连不上数据库"]);
+  assert.deepEqual([resultOf(hub, nothing).outcome, resultOf(hub, nothing).summary], ["nothing", "已经恢复了"]);
 });
 
 test("a result waits for the hub and goes once; one it refuses is dropped, and said so", async () => {
@@ -195,13 +217,15 @@ test("a result waits for the hub and goes once; one it refuses is dropped, and s
 
 test("a run still going after the worker restarts stays, and its result still comes", async () => {
   const hub = fakeHub();
-  hub.jobs.push(job({ command: ["/bin/sh", "-c", "sleep 1; echo 慢慢做完了"] }));
+  const { hold, open } = gate("restart");
+  hub.jobs.push(job({ command: ["/bin/sh", "-c", `${hold}; echo 慢慢做完了`] }));
   await worker(hub).tick();
   // A new worker, as after a restart: it has nothing in memory.
   const again = worker(hub);
   await again.tick();
   assert.equal(hub.results.length, 0, "still going isn't finished");
   assert.deepEqual(hub.claims.at(-1).running.length, 1, "it reports the run it found");
+  open();
   await until(again, () => hub.results.length === 1);
   assert.equal(hub.results[0].summary, "慢慢做完了");
 });
@@ -300,14 +324,19 @@ test("a run told to stop stops, with its children, and only then is it reported"
   const hub = fakeHub();
   const marker = join(folder, "child-alive");
   hub.jobs.push(job({ command: ["/bin/sh", "-c", `(sleep 30; touch ${marker}) & wait`] }));
-  const w = worker(hub);
+  let clock = Date.now();
+  const w = worker(hub, { now: () => clock });
   await w.tick();
   await w.tick();
   const id = w.entries()[0].run;
   hub.cancel = [id];
   await w.tick();
   assert.equal(hub.results.length, 0, "told to stop isn't stopped");
-  await until(w, () => hub.results.length === 1);
+  await until(
+    w,
+    () => hub.results.length === 1,
+    () => (clock += 1000),
+  );
   assert.deepEqual([hub.results[0].run, hub.results[0].outcome], [id, "cancelled"]);
   assert.ok(!existsSync(marker));
 });
@@ -358,16 +387,21 @@ test("a run over its time is stopped and comes back failed", async () => {
   const w = worker(hub, { now: () => clock });
   await w.tick();
   clock += 6 * 60_000;
-  await until(w, () => hub.results.length === 1);
+  await until(
+    w,
+    () => hub.results.length === 1,
+    () => (clock += 1000),
+  );
   assert.equal(hub.results[0].outcome, "failed");
   assert.match(hub.results[0].error, /超过 5 分钟/);
 });
 
 test("no more than capacity at once; a claim stays until its job has arrived", async () => {
   const hub = fakeHub();
+  const { hold, open } = gate("capacity");
   hub.jobs.push(
-    job({ command: ["/bin/sh", "-c", "sleep 0.5; echo 一"] }),
-    job({ command: ["/bin/sh", "-c", "sleep 0.5; echo 二"] }),
+    job({ command: ["/bin/sh", "-c", `${hold}; echo 一`] }),
+    job({ command: ["/bin/sh", "-c", `${hold}; echo 二`] }),
     job(),
   );
   const w = worker(hub, { capacity: 2 });
@@ -382,6 +416,7 @@ test("no more than capacity at once; a claim stays until its job has arrived", a
   await idle.tick();
   await idle.tick();
   assert.equal(empty.claims[0].claim, empty.claims[1].claim, "nothing arrived: the same claim again");
+  open();
   await until(w, () => hub.results.length === 3);
 });
 
@@ -441,7 +476,13 @@ for (const failure of ["exit", "timeout", "unreadable", "empty", "failed-message
     const w = worker(hub, { now: () => clock });
     await until(w, () => w.entries().some((e) => e.repairs > 0));
     if (failure === "timeout") clock += 61_000;
-    await until(w, () => hub.results.length === 1);
+    await until(
+      w,
+      () => hub.results.length === 1,
+      () => {
+        if (failure === "timeout") clock += 1000;
+      },
+    );
     assert.equal(readFileSync(marker, "utf8"), "once\n");
     assert.equal(hub.results[0].outcome, "done");
     assert.equal(hub.results[0].summary, "业务已经完成");
@@ -494,12 +535,53 @@ test("a session that can't be gone on in starts a new one, once", async () => {
   assert.deepEqual([failing.results[0].outcome, failing.results[0].error], ["failed", "nope"]);
 });
 
+test("a turn that went on in its session and then broke stays there, and its prompt isn't run again", async () => {
+  // A new session would finish happily, doing the work a second time: only the launch count and the result can tell.
+  const attempt = (name: string, broken: string) => {
+    const launches = join(folder, `${name}.launches`);
+    const script = `echo x >>"${launches}"; if [ -z "$1" ]; then printf 'session=new\\n又做了一遍\\n'; exit 0; fi; printf 'session=old\\nTURN-BEGAN\\n'; ${broken}`;
+    return { given: job({ use: "scripted", command: [script], session: "old" }), launches };
+  };
+  const expect = (hub: ReturnType<typeof fakeHub>, launches: string, error: string) => {
+    assert.deepEqual([hub.results[0].outcome, hub.results[0].error, hub.results[0].session], ["failed", error, "old"]);
+    assert.equal(readFileSync(launches, "utf8"), "x\n", "launched once");
+  };
+
+  const broke = fakeHub();
+  const crash = attempt("broke", 'echo "连接断了" >&2; exit 1');
+  broke.jobs.push(crash.given);
+  const b = worker(broke);
+  await until(b, () => broke.results.length === 1);
+  expect(broke, crash.launches, "连接断了");
+
+  const silent = fakeHub();
+  const quiet = attempt("silent", "exit 0");
+  silent.jobs.push(quiet.given);
+  const s = worker(silent);
+  await until(s, () => silent.results.length === 1);
+  expect(silent, quiet.launches, "没留下结果");
+
+  const vanished = fakeHub();
+  const { hold } = gate("vanished");
+  // The hub hears of the session as soon as it's launched, so that doesn't say the script has got as far as starting.
+  const going = join(folder, "vanished.going");
+  const lost = attempt("vanished", `touch "${going}"; ${hold}`);
+  vanished.jobs.push(lost.given);
+  const v = worker(vanished);
+  await until(v, () => existsSync(going));
+  process.kill(-v.entries()[0].pid!, "SIGKILL");
+  await until(v, () => vanished.results.length === 1);
+  expect(vanished, lost.launches, "没留下结果");
+});
+
 test("the session is told to the hub while it runs, with its link", async () => {
   const hub = fakeHub();
-  hub.jobs.push(job({ use: "scripted", command: ["printf 'session=s-9\\n'; sleep 0.5; printf '好了\\n'"] }));
+  const { hold, open } = gate("session");
+  hub.jobs.push(job({ use: "scripted", command: [`printf 'session=s-9\\n'; ${hold}; printf '好了\\n'`] }));
   const w = worker(hub);
+  await until(w, () => hub.starts.some((s) => s.session === "s-9" && s.link === "app://s-9"));
+  open();
   await until(w, () => hub.results.length === 1);
-  assert.ok(hub.starts.some((s) => s.session === "s-9" && s.link === "app://s-9"));
 });
 
 test("a turn that is over but doesn't exit is ended after a while, and its answer counts", async () => {
@@ -508,15 +590,15 @@ test("a turn that is over but doesn't exit is ended after a while, and its answe
   hub.jobs.push(job({ use: "scripted", command: ["printf 'session=s-h\\nTURN-OVER\\n挂住之前说的\\n'; sleep 30"] }));
   const w = worker(hub, { now: () => clock });
   await w.tick();
-  for (let i = 0; i < 10 && !w.entries()[0]?.finishedAt; i++) {
-    await w.tick();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  assert.ok(w.entries()[0].finishedAt, "it saw the turn was over");
+  await until(w, () => Boolean(w.entries()[0]?.finishedAt));
   await w.tick();
   assert.equal(hub.results.length, 0, "it gets a while to exit by itself");
   clock += 31_000;
-  await until(w, () => hub.results.length === 1);
+  await until(
+    w,
+    () => hub.results.length === 1,
+    () => (clock += 1000),
+  );
   assert.equal(hub.results[0].summary, "挂住之前说的");
 });
 
@@ -552,4 +634,84 @@ test("the hub gone for ten minutes is told once, tried a few times if telling fa
   clock += 11 * 60_000;
   for (let i = 0; i < 8; i++) await f.tick();
   assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 5);
+});
+
+// An adapter that says what its script prints.
+mkdirSync(join(home, "plugins", "printed"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "printed", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read: (stdout, code) => (code === null || !stdout.trim() ? {} : { text: "好了", ...JSON.parse(stdout) }),
+};`,
+);
+const printing = (session: string, resumed: boolean, reading: object) =>
+  job({
+    use: "printed",
+    ...(resumed && { session }),
+    command: [`echo '${JSON.stringify({ session, ...reading })}'`],
+  });
+
+test("session totals are counted once across resumed jobs and worker restarts", async () => {
+  const hub = fakeHub();
+  const total = (sessionUsage: object, resumed = true) => printing("totals", resumed, { sessionUsage });
+  hub.jobs.push(total({ input: 52968, output: 126, cached: 26240 }, false));
+  await until(worker(hub), () => hub.results.length === 1);
+  hub.jobs.push(total({ input: 108943, output: 207, cached: 80384 }));
+  await until(worker(hub), () => hub.results.length === 2);
+  assert.deepEqual(
+    hub.results.map((r) => r.usage),
+    [
+      { input: 52968, output: 126, cached: 26240 },
+      { input: 55975, output: 81, cached: 54144 },
+    ],
+  );
+  assert.equal(
+    hub.results.reduce((n, r) => n + r.usage.input + r.usage.output, 0),
+    109150,
+  );
+  // An upgrade or a different worker may have no baseline for an existing session.
+  rmSync(join(home, "worker", "usage"), { recursive: true });
+  hub.jobs.push(total({ input: 110000, output: 220, cached: 81000 }));
+  await until(worker(hub), () => hub.results.length === 3);
+  assert.equal(hub.results[2].usage, undefined);
+  hub.jobs.push(total({ input: 110100, output: 230, cached: 81050 }));
+  await until(worker(hub), () => hub.results.length === 4);
+  assert.deepEqual(hub.results[3].usage, { input: 100, output: 10, cached: 50 });
+});
+
+test("a price given for the session and tokens given for the launch each count once", async () => {
+  const hub = fakeHub();
+  const turn = (cached: number, cost: number, resumed = true) =>
+    printing("mixed", resumed, { usage: { input: 2, output: 3, cached }, sessionUsage: { cost } });
+  hub.jobs.push(turn(33335, 0.25, false));
+  await until(worker(hub), () => hub.results.length === 1);
+  hub.jobs.push(turn(33690, 0.75));
+  await until(worker(hub), () => hub.results.length === 2);
+  assert.deepEqual(
+    hub.results.map((r) => r.usage),
+    [
+      { input: 2, output: 3, cached: 33335, cost: 0.25 },
+      { input: 2, output: 3, cached: 33690, cost: 0.5 },
+    ],
+  );
+  rmSync(join(home, "worker", "usage"), { recursive: true });
+  hub.jobs.push(turn(34000, 1));
+  await until(worker(hub), () => hub.results.length === 3);
+  assert.deepEqual(hub.results[2].usage, { input: 2, output: 3, cached: 34000 }, "only the price can't be known");
+});
+
+test("a launch read again after a restart subtracts where it began, not where the session has got to", async () => {
+  const hub = fakeHub();
+  const { hold, open } = gate("usage-restart");
+  saveUsage("printed", "reread", { input: 100 });
+  const reading = JSON.stringify({ session: "reread", sessionUsage: { input: 150 } });
+  hub.jobs.push(job({ use: "printed", session: "reread", command: [`${hold}; echo '${reading}'`] }));
+  await worker(hub).tick();
+  // As after a worker that stopped once it had moved the session on, before the result was out.
+  saveUsage("printed", "reread", { input: 150 });
+  open();
+  await until(worker(hub), () => hub.results.length === 1);
+  assert.deepEqual(hub.results[0].usage, { input: 50 });
 });
