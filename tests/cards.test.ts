@@ -17,14 +17,16 @@
 // A card closed while its first message is on the way never gets that message updated.
 // Receipt FYIs must arrive closed without buttons, stay out of later open lists, and never wake work when clicked;
 // ordinary notices, questions, quiet rules, and the one-day FYI delivery window must keep their existing behavior.
+// The why timeline must show receipt FYIs without adding empty closures or repeating hub-generated end notices.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
 import { render } from "../plugins/feishu/channel.ts";
+import { formatWhy } from "../cli/why.ts";
 
 setup("cards");
 const { ingest } = await import("../host/runtime.ts");
-const { cancel, claimNext, execute, finish, heartbeat, started, sweep } = await import("../host/runtime.ts");
+const { cancel, claimNext, execute, finish, heartbeat, started, sweep, why } = await import("../host/runtime.ts");
 const { answer, resolve, nextCard, delivered, failed, tell, cardByToken, getView } = await import("../host/runtime.ts");
 const { AuthError, InputError, NotFound } = await import("../kernel/errors.ts");
 const { all, one, run } = await import("./storage.ts");
@@ -598,6 +600,32 @@ test("receipt FYIs arrive as grey closed cards; ordinary notices and questions s
     claim("w1", at(5))!.context.events.map((e) => e.type),
     ["card.answered"],
   );
+});
+
+test("why shows receipt FYIs while keeping hub end notices and empty closures hidden", () => {
+  clean();
+  ingest("ops", { id: "why-fyi", type: "alert.raised", subject: "probe" }, at(0));
+  const job = claim("w2", at(0))!;
+  finish(
+    job.run,
+    job.token,
+    {
+      outcome: "done",
+      summary: "本轮检查完成",
+      notice: [
+        { title: "仅告知的结果", text: "已经完成核实", fyi: true },
+        { title: "仍需处理的结果", text: "请检查日志" },
+      ],
+    },
+    at(1),
+  );
+  const output = formatWhy(job.run, why(job.run));
+  assert.match(output, /通知：仅告知的结果/);
+  assert.match(output, /已经完成核实/);
+  assert.match(output, /通知：仍需处理的结果/);
+  assert.match(output, /结束：本轮检查完成/);
+  assert.doesNotMatch(output, /通知：告警|结案：仅告知的结果/);
+  assert.equal(output.split("本轮检查完成").length - 1, 1);
 });
 
 test("a receipt FYI is deliverable for one day even though it starts closed", () => {
