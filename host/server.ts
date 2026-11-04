@@ -10,6 +10,7 @@ import { createHandler } from "../kernel/http.ts";
 
 /** Past this setTimeout fires at once. */
 const LONGEST_TIMER = 2147483647;
+const TICK_RETRY = 5_000;
 
 function logStream(after: number, signal: AbortSignal, key: string) {
   let cursor = after;
@@ -73,6 +74,19 @@ export function makeHandler(commit = "dev") {
   const wake = () => {
     for (const waiter of [...waiting]) waiter.done();
   };
+  const fire = () => {
+    try {
+      hub.tick();
+    } catch (error) {
+      // Another process holding the database too long, say. Nobody is there to catch it, and what it brought is still due.
+      console.error(error);
+      clearTimeout(timer);
+      if (!closed) timer = setTimeout(fire, TICK_RETRY);
+      return;
+    }
+    wake();
+    arm();
+  };
   const arm = () => {
     clearTimeout(timer);
     if (closed) return;
@@ -81,12 +95,7 @@ export function makeHandler(commit = "dev") {
     );
     const next = Math.min(due?.at ?? Infinity, ...[...waiting].map((waiter) => waiter.until));
     if (!Number.isFinite(next)) return;
-    const delay = Math.max(0, Math.min(LONGEST_TIMER, next - Date.now()));
-    timer = setTimeout(() => {
-      hub.tick();
-      wake();
-      arm();
-    }, delay);
+    timer = setTimeout(fire, Math.max(0, Math.min(LONGEST_TIMER, next - Date.now())));
   };
   const unlisten = hub.onChange((type, facts) => {
     // Being seen wakes nobody, unless it changed a card.
@@ -95,9 +104,7 @@ export function makeHandler(commit = "dev") {
     arm();
   });
   const watcher = watch(dirname(RULES_FILE), (_event, file) => {
-    if (file !== RULES_FILE.split("/").at(-1)) return;
-    hub.tick();
-    arm();
+    if (file === RULES_FILE.split("/").at(-1)) fire();
   });
   const handle = createHandler({
     commit,
@@ -127,8 +134,7 @@ export function makeHandler(commit = "dev") {
     stream: logStream,
     adapt: adaptWebhook,
   });
-  hub.tick();
-  arm();
+  fire();
   return {
     handle,
     close() {

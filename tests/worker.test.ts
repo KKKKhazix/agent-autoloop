@@ -15,9 +15,11 @@
 // A shell replacing itself with the final move must not lose its identity before the exit file is published.
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
+// A plugin that can't read what it printed ends the worker, counts a run still going as ended, or starts its prompt again
+// in a new session; trouble with one run, like a folder it can't write to, holds up the others or ends the worker.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setup } from "./helpers.ts";
@@ -47,6 +49,18 @@ export default {
     const text = stdout.replace(/session=\\S+\\n/, "").replace("TURN-OVER\\n", "").replace("TURN-BEGAN\\n", "");
     return { text, session, finished, started, usage: { input: 1, output: 1 } };
   },
+  link: (s) => "app://" + s,
+};`,
+);
+
+// An adapter that can't make sense of anything it's given.
+mkdirSync(join(home, "plugins", "unreadable"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "unreadable", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read() { throw new Error("no idea what this says"); },
   link: (s) => "app://" + s,
 };`,
 );
@@ -714,4 +728,54 @@ test("a launch read again after a restart subtracts where it began, not where th
   open();
   await until(worker(hub), () => hub.results.length === 1);
   assert.deepEqual(hub.results[0].usage, { input: 50 });
+});
+
+test("a plugin that can't read what it printed fails that run alone, once it has ended, in the session it was in", async () => {
+  const hub = fakeHub();
+  const lines: string[] = [];
+  const held = gate("unreadable");
+  const launches = join(folder, "unreadable-launches");
+  const stuck = job({ use: "unreadable", session: "the-old-one", command: [`echo x >> "${launches}"; ${held.hold}`] });
+  const other = job();
+  hub.jobs.push(stuck, other);
+  const w = worker(hub, { log: (line: string) => lines.push(line) });
+  await until(w, () => Boolean(resultOf(hub, other)));
+  assert.equal(resultOf(hub, stuck), undefined, "still going, so not ended");
+  held.open();
+  await until(w, () => Boolean(resultOf(hub, stuck)));
+  const result = resultOf(hub, stuck);
+  assert.equal(result.outcome, "failed");
+  assert.match(result.error, /读不懂/);
+  assert.equal(result.session, "the-old-one");
+  assert.equal(readFileSync(launches, "utf8"), "x\n", "its prompt isn't run again");
+  assert.equal(lines.filter((line) => line.includes("no idea what this says")).length, 1, "and it's said once");
+});
+
+test("trouble with one run waits for the next round and holds up no other", async () => {
+  const hub = fakeHub();
+  const lines: string[] = [];
+  const troubled = job();
+  hub.jobs.push(troubled);
+  const w = worker(hub, { log: (line: string) => lines.push(line) });
+  await w.tick();
+  const dir = join(home, "worker", "runs", `${troubled.run}-1`);
+  const end = Date.now() + 15_000;
+  while (!existsSync(join(dir, "exit-1"))) {
+    if (Date.now() > end) assert.fail("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  chmodSync(dir, 0o500);
+  try {
+    const other = job();
+    hub.jobs.push(other);
+    await until(w, () => Boolean(resultOf(hub, other)));
+    if (process.getuid!() !== 0) {
+      assert.equal(resultOf(hub, troubled), undefined);
+      assert.ok(lines.some((line) => line.includes(`run ${troubled.run}:`) && line.includes("EACCES")));
+    }
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  await until(w, () => Boolean(resultOf(hub, troubled)));
+  assert.equal(resultOf(hub, troubled).outcome, "done");
 });

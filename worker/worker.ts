@@ -183,6 +183,7 @@ export function createWorker({
   let told = false;
   let tries = 0;
   let blind = false;
+  const unreadable = new Set<number>();
   mkdirSync(RUNS, { recursive: true, mode: 0o700 });
 
   const entries = () =>
@@ -288,13 +289,21 @@ export function createWorker({
 
   function read(entry: Entry, adapter: Adapter, code: number | null): Reading {
     const { out, err } = files(entry);
-    return adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
+    try {
+      return adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
+    } catch (error) {
+      if (!unreadable.has(entry.run)) log(`run ${entry.run}: couldn't read its output: ${error}`);
+      unreadable.add(entry.run);
+      // It says nothing about how the run is going, so one still going goes on. Whether an ended one got started isn't
+      // known either, and starting it again in a new session could do its work twice: it stays in this one.
+      return code === null ? {} : { started: true, error: `读不懂这个 Agent 的输出：${(error as Error).message}` };
+    }
   }
 
   function discardReceipt(entry: Entry, adapter: Adapter, problem: string) {
     const original = { ...entry, turn: entry.turn - entry.repairs };
     const reading = read(original, adapter, 0);
-    const { result } = resultFrom(readMessage(reading.text!), {
+    const { result } = resultFrom(readMessage(reading.text ?? ""), {
       session: reading.session ?? (adapter.link ? entry.session : undefined),
       usage: entry.usage,
     });
@@ -475,10 +484,21 @@ export function createWorker({
     }
   }
 
+  /** Trouble with one run, a folder it can't write to say, is for the next round and holds up no other. */
+  async function eachEntry(step: (entry: Entry) => Promise<unknown>) {
+    for (const entry of entries()) {
+      try {
+        await step(entry);
+      } catch (error) {
+        log(`run ${entry.run}: ${error}`);
+      }
+    }
+  }
+
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
-    for (const entry of entries()) await check(entry);
-    for (const entry of entries()) await settle(entry);
+    await eachEntry(check);
+    await eachEntry(settle);
     const held = entries();
     let reachable = true;
     try {
