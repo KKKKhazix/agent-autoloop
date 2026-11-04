@@ -18,7 +18,10 @@ import { parseRules as checkRules, RulesError } from "../protocol/rules.ts";
 import type { Rejected } from "../protocol/validate.ts";
 
 mkdirSync(HOME, { recursive: true, mode: 0o700 });
-chmodSync(HOME, 0o700);
+try {
+  // Windows has no owner/group bits: this is a no-op there, and can fail before the folder is fully ours.
+  chmodSync(HOME, 0o700);
+} catch {}
 const masterKeyFile = join(HOME, "master.key");
 if (!existsSync(masterKeyFile)) {
   writeFileSync(masterKeyFile, randomBytes(32).toString("base64url"), { mode: 0o600, flag: "wx" });

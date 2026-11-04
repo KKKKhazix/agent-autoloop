@@ -16,8 +16,9 @@ export type Live = { sha: string; release: string };
 const SETTINGS_KEYS = ["repo", "internal", "admin_merge", "check", "ship", "review", "health"];
 const isWords = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((word) => typeof word === "string" && word.length > 0);
+/** A path that stays inside the project: no root, no `..` step, on either separator Windows accepts. */
 const isPaths = (value: unknown) =>
-  isWords(value) && value.every((path) => !path.startsWith("/") && !path.split("/").includes(".."));
+  isWords(value) && value.every((path) => !/^[\\/]/.test(path) && !/(^|[\\/])\.\.([\\/]|$)/.test(path));
 /** Settings may write a named group the way Python does; JavaScript only reads the other way. */
 const jsPattern = (pattern: string) => pattern.replace("(?P<sha>", "(?<sha>");
 

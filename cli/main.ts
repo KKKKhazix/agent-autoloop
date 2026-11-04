@@ -8,6 +8,7 @@ import { createInterface } from "node:readline/promises";
 import { hubClient } from "../protocol/client.ts";
 import { CONFIG_FILE, readConfig, writeConfig, type Config } from "../host/config.ts";
 import { HOME, RULES_FILE } from "../host/home.ts";
+import { findOnPath, WINDOWS } from "../host/platform.ts";
 import { installService, removeService, serviceRunning } from "../host/service.ts";
 import { versionLine } from "../host/version.ts";
 import { spendLine } from "./spend.ts";
@@ -108,14 +109,24 @@ function linkSkill() {
     const link = path.join(homedir(), agent, "skills", "agent-autoloop");
     if (lstatSync(link, { throwIfNoEntry: false })) continue;
     mkdirSync(path.dirname(link), { recursive: true });
-    symlinkSync(path.join(ROOT, "skills", "agent-autoloop"), link);
+    try {
+      // A directory symlink needs a privilege a person may not have on Windows; a junction needs none.
+      symlinkSync(path.join(ROOT, "skills", "agent-autoloop"), link, WINDOWS ? "junction" : undefined);
+    } catch {}
   }
 }
 
 /** What to type to run this program: its name if that's what a shell finds, otherwise where it is. */
 function howToRun() {
-  const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout.trim();
-  if (found && realpathSync(found) === realpathSync(PROGRAM)) return "agent-autoloop";
+  const found = findOnPath("agent-autoloop");
+  if (found) {
+    // On Windows the name works through a .cmd shim, which is this program under another file: the name is still right.
+    const shim = WINDOWS && /\.(cmd|bat|ps1)$/i.test(found) && readFileSync(found, "utf8").includes(PROGRAM);
+    if (shim) return "agent-autoloop";
+    try {
+      if (realpathSync(found) === realpathSync(PROGRAM)) return "agent-autoloop";
+    } catch {}
+  }
   return /\s/.test(PROGRAM) ? `'${PROGRAM}'` : PROGRAM;
 }
 

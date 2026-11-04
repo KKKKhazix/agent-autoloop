@@ -14,17 +14,28 @@
 
 **Agent Autoloop** 是一个极轻量的自动化中台。它把任务调度做成一个零外部依赖的**内核**，把事件来源、Agent、通知通道，甚至代码上线流水线全部拆成可随时插拔的**插件**。
 
-- **一台电脑、一条命令就能跑。** 装在你的 Mac 或 Linux 上，不用买云服务器，也不用开放公网端口。
+- **一台电脑、一条命令就能跑。** 装在你的 Mac、Linux 或 Windows 上，不用买云服务器，也不用开放公网端口。
 - **一行配置接新 Agent。** 不需要 SDK，也不需要改 Agent 源码，能接收提示词并打印最后一条回复的命令行工具都能接。
 - **没有后台界面。** 需要你拍板时把卡片推到飞书、钉钉、企微、Slack、Discord 或桌面通知；想看全局进展，敲一行命令。
 
 ## 上手
 
-支持 macOS 和 Linux。运行前需要装好 Node 24、Git、curl，以及任意一个你已经登录好的命令行 Agent，不需要 GitHub 账号。也可以直接把[安装说明](INSTALL.md)丢给你的 Agent，让它替你装好。
+支持 macOS、Linux 和 Windows。运行前需要装好 Node 24（Windows 上 22.18 或更新实测可用）、Git，以及任意一个你已经登录好的命令行 Agent，不需要 GitHub 账号。也可以直接把[安装说明](INSTALL.md)丢给你的 Agent，让它替你装好。
+
+macOS 和 Linux：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
 ```
+
+Windows（PowerShell）：
+
+```powershell
+git clone --depth 1 https://github.com/KKKKhazix/agent-autoloop.git "$env:TEMP\agent-autoloop"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\agent-autoloop\install.ps1"
+```
+
+装完之后命令是一样的：新开一个终端，运行 `agent-autoloop try`。Windows 上的不同只有这几处：开机自启用任务计划程序（登录时启动、失败一分钟重试），桌面通知用系统 Toast，停止一轮用 `taskkill /T` 结束整棵进程树——Agent 起的子进程也一起停。细节见 [WINDOWS.md](WINDOWS.md)。
 
 装好后用你本机的 Agent 真实走一遍“提问 → 退出等回复 → 拍板 → 接着干完”：
 

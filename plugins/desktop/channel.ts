@@ -3,11 +3,14 @@
 //   "channels": { "desktop": { "key": "…" } } in config.json
 //   "channels": { "desktop": { "name": "桌面通知" } } in rules.json
 import { execFile, spawnSync } from "node:child_process";
+import path from "node:path";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 
 const WORDS = "运行 agent-autoloop status 查看";
 const TITLE = "Agent 问你一个问题";
 const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"];
+/** Windows' stand-in for osascript: a script whose text never changes, with the title as an argument to it. */
+const TOAST = path.join(import.meta.dirname, "toast.ps1");
 
 /**
  * A card's title is whatever an Agent wrote, so it's only ever an argument, never part of a script. The `--` is what keeps
@@ -16,6 +19,12 @@ const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with 
 export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
   const body = `${title}\n${WORDS}`;
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
+  if (platform === "win32") {
+    return [
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", TOAST, "-Title", TITLE, "-Body", body],
+    ];
+  }
   return ["notify-send", ["--", TITLE, body]];
 }
 
@@ -23,6 +32,8 @@ function hasDesktop() {
   if (process.platform === "darwin") {
     return spawnSync("launchctl", ["print", `gui/${process.getuid!()}`], { stdio: "ignore" }).status === 0;
   }
+  // A toast is shown by the shell of the session this runs in, so a session is all it takes.
+  if (process.platform === "win32") return true;
   return process.platform === "linux" && Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 

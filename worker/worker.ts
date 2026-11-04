@@ -2,7 +2,7 @@
 // job. An agent runs detached, in its own process group, writing to files, so the worker can stop and come back and
 // find it still going, or finished. A job is saved before anything slow happens; a result is saved before it's handed
 // in and stays until the hub has taken it.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -18,10 +18,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { HubError, type Hub } from "../protocol/client.ts";
 import { HOME } from "../host/home.ts";
+import { agentAlive, expandHome, groupAlive as treeAlive, launchAgent, signalTree } from "../host/platform.ts";
 import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
@@ -103,35 +103,16 @@ const files = (entry: Entry) => ({
   exit: path.join(entry.dir, `exit-${entry.turn}`),
   command: path.join(entry.dir, `command-${entry.turn}.sh`),
 });
-const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attempt}:${entry.turn}`;
 
-function alive(entry: Entry) {
-  if (!entry.pid) return false;
-  try {
-    const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
-    return command.includes(marker(entry));
-  } catch {
-    return false;
-  }
-}
+/** On Windows a pid says nothing once it can belong to someone else, so the runner keeps this file fresh instead. */
+const heartbeat = (entry: Entry) => path.join(entry.dir, `alive-${entry.turn}`);
 
-function signal(entry: Entry, name: NodeJS.Signals) {
-  try {
-    if (entry.pid) process.kill(-entry.pid, name);
-  } catch {}
-}
+const alive = (entry: Entry) => agentAlive(entry.pid, heartbeat(entry), marker(entry));
 
-function groupAlive(entry: Entry) {
-  // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
-  return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
-    .trim()
-    .split("\n")
-    .some((line) => {
-      const [group, state] = line.trim().split(/\s+/);
-      return Number(group) === entry.pid && !state.startsWith("Z");
-    });
-}
+const signal = (entry: Entry, force: boolean) => signalTree(entry.pid, force);
+
+const groupAlive = (entry: Entry) => treeAlive(entry.pid);
 
 function snapshot(file: string) {
   if (!existsSync(file)) return "";
@@ -183,7 +164,7 @@ export function createWorker({
     delete entry.why;
     save(entry);
     const { rule, agent } = entry.job;
-    const cwd = rule.cwd.replace(/^~(?=\/)/, homedir());
+    const cwd = expandHome(rule.cwd);
     const turn: Turn = {
       prompt,
       session: entry.session,
@@ -199,35 +180,25 @@ export function createWorker({
     if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
     const argv = adapter.command(turn);
     const { out, err, exit, command } = files(entry);
-    // Login shells don't agree on how a command reads its arguments (fish has no $0 or $@), so the command waits in a
-    // file for /bin/sh. Its path travels by environment because the install path can hold any character.
-    writeFileSync(command, `unset AGENT_AUTOLOOP_COMMAND\nexec ${argv.map(quoted).join(" ")}\n`, { mode: 0o600 });
-    // Output and the exit code go through the shell, so they land in their files even if this program has gone by then.
-    const script = [
-      "out=$1",
-      "err=$2",
-      "result=$3",
-      "shift 3",
-      "umask 077",
-      '"$@" >"$out" 2>"$err"',
-      'echo $? >"$result.tmp"',
-      'mv "$result.tmp" "$result"',
-      // A final external command can replace the shell before publishing its exit file.
-      ":",
-    ].join("\n");
-    // The login shell gives it the PATH and sign-in its owner has in a terminal; launchd and systemd give neither.
-    const login = [process.env.SHELL ?? "/bin/sh", "-lc", 'exec /bin/sh "$AGENT_AUTOLOOP_COMMAND"'];
-    const child = spawn("/bin/sh", ["-c", script, marker(entry), out, err, exit, ...login], {
-      cwd,
-      env: { ...agentEnvironment(entry), AGENT_AUTOLOOP_COMMAND: command },
-      detached: true,
-      stdio: "ignore",
-    });
-    child.on("error", (error) => log(`run ${entry.run}: ${error}`));
-    child.unref();
-    entry.pid = child.pid;
+    // Output and the exit code go into their files, so they land there even if this program has gone by then. How that
+    // is done differs by machine: a shell on POSIX, worker/runner.mjs on Windows. See ../host/platform.ts.
+    entry.pid = launchAgent(
+      {
+        program: argv[0],
+        args: argv.slice(1),
+        cwd,
+        env: agentEnvironment(entry),
+        out,
+        err,
+        exit,
+        commandFile: command,
+        heartbeat: heartbeat(entry),
+        marker: marker(entry),
+      },
+      (line) => log(`run ${entry.run}: ${line}`),
+    );
     save(entry);
-    log(`run ${entry.run} (${rule.name}) turn ${entry.turn} started, pid ${child.pid}`);
+    log(`run ${entry.run} (${rule.name}) turn ${entry.turn} started, pid ${entry.pid}`);
   }
 
   function endWith(entry: Entry, result: Result) {
@@ -359,7 +330,7 @@ export function createWorker({
     const { exit } = files(entry);
     if (entry.stopping !== undefined) {
       if (groupAlive(entry)) {
-        if (now() - entry.stopping > STOP_GRACE) signal(entry, "SIGKILL");
+        if (now() - entry.stopping > STOP_GRACE) signal(entry, true);
         return;
       }
       return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
@@ -399,7 +370,7 @@ export function createWorker({
     entry.stopping = now();
     entry.why = why;
     save(entry);
-    signal(entry, "SIGTERM");
+    signal(entry, false);
     log(`run ${entry.run}: stopping (${why})`);
   }
 
