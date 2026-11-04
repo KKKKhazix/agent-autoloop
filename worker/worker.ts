@@ -2,7 +2,7 @@
 // job. An agent runs detached, in its own process group, writing to files, so the worker can stop and come back and
 // find it still going, or finished. A job is saved before anything slow happens; a result is saved before it's handed
 // in and stays until the hub has taken it.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -29,6 +29,38 @@ import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts"
 import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
 
 const RUNS = path.join(HOME, "worker", "runs");
+/**
+ * Windows has no /bin/sh, no ps, and no process groups: a Node script takes the shell's place — it starts the agent,
+ * points its output at the files and writes the exit code there, so a turn still outlives this process.
+ */
+const WINDOWS = process.platform === "win32";
+const RUNNER = path.join(HOME, "worker", "run-turn.mjs");
+const RUNNER_SOURCE = `import { spawn } from "node:child_process";
+import { closeSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+const [out, err, exit, plan] = process.argv.slice(2);
+const { argv, cwd } = JSON.parse(readFileSync(plan, "utf8"));
+const stdout = openSync(out, "w");
+const stderr = openSync(err, "w");
+let finished = false;
+function finish(code) {
+  if (finished) return;
+  finished = true;
+  try { closeSync(stdout); } catch {}
+  try { closeSync(stderr); } catch {}
+  writeFileSync(exit + ".tmp", String(code));
+  renameSync(exit + ".tmp", exit);
+}
+const child = spawn(argv[0], argv.slice(1), { cwd, stdio: ["ignore", stdout, stderr], windowsHide: true });
+child.on("error", (error) => {
+  try { writeFileSync(err, String(error), { flag: "a" }); } catch {}
+  finish(127);
+});
+child.on("exit", (code, signal) => finish(code ?? (signal ? 1 : 0)));
+`;
+function ensureRunner() {
+  mkdirSync(path.dirname(RUNNER), { recursive: true, mode: 0o700 });
+  if (!existsSync(RUNNER)) writeFileSync(RUNNER, RUNNER_SOURCE, { mode: 0o600 });
+}
 const NOTHING: Usage = { input: 0, output: 0, cached: 0, cost: 0 };
 const TIMEOUT_MINUTES = 180;
 /** A reader of the turn's end that doesn't exit is given this long. */
@@ -120,6 +152,14 @@ const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attemp
 function alive(entry: Entry): boolean | null {
   if (!entry.pid) return false;
   try {
+    // Windows keeps no command line here: a listing that still has the pid is as much as can be known.
+    if (WINDOWS) {
+      const line = execFileSync("tasklist", ["/FI", `PID eq ${entry.pid}`, "/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      return line.includes(`"${entry.pid}"`);
+    }
     const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
     return command.includes(marker(entry));
   } catch (error) {
@@ -132,13 +172,21 @@ function alive(entry: Entry): boolean | null {
 }
 
 function signal(entry: Entry, name: NodeJS.Signals) {
+  if (!entry.pid) return;
   try {
-    if (entry.pid) process.kill(-entry.pid, name);
+    // No process groups and no SIGTERM on Windows: take down the runner and the agent it started, in one.
+    if (WINDOWS) {
+      spawnSync("taskkill", ["/PID", String(entry.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      return;
+    }
+    process.kill(-entry.pid, name);
   } catch {}
 }
 
 /** Whether anything in the run's group is still going, null when we could not look. */
 function groupAlive(entry: Entry): boolean | null {
+  // Windows has no groups to look at: one process stands for the whole tree, which taskkill takes down together.
+  if (WINDOWS) return alive(entry);
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
   try {
     return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
@@ -221,6 +269,25 @@ export function createWorker({
     if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
     const argv = adapter.command(turn);
     const { out, err, exit, command } = files(entry);
+    if (WINDOWS) {
+      // The command line waits in JSON: nothing quotes it, so no argument can turn into code or split.
+      const plan = `${command}.json`;
+      writeFileSync(plan, JSON.stringify({ argv, cwd }), { mode: 0o600 });
+      ensureRunner();
+      const child = spawn(process.execPath, [RUNNER, out, err, exit, plan], {
+        cwd,
+        env: agentEnvironment(entry),
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      child.on("error", (error) => log(`run ${entry.run}: ${error}`));
+      child.unref();
+      entry.pid = child.pid;
+      save(entry);
+      log(`run ${entry.run} (${rule.name}) turn ${entry.turn} started, pid ${child.pid}`);
+      return;
+    }
     // Login shells don't agree on how a command reads its arguments (fish has no $0 or $@), so the command waits in a
     // file for /bin/sh. Its path travels by environment because the install path can hold any character.
     writeFileSync(command, `unset AGENT_AUTOLOOP_COMMAND\nexec ${argv.map(quoted).join(" ")}\n`, { mode: 0o600 });

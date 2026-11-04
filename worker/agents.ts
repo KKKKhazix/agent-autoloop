@@ -64,14 +64,27 @@ export function findProgram(name: string, elsewhere: () => string[] = () => []) 
   if (!found.has(name)) {
     const shell = process.env.SHELL ?? "/bin/sh";
     let onPath: string | null = null;
-    try {
-      const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
-        encoding: "utf8",
-        timeout: 15_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      onPath = printed.trim().split("\n").at(-1) || null;
-    } catch {}
+    if (process.platform === "win32") {
+      // There's no login shell to ask: `where` reads PATH and PATHEXT, so both codex.exe and codex.cmd answer.
+      try {
+        const printed = execFileSync("where", [name], {
+          encoding: "utf8",
+          timeout: 15_000,
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+        });
+        onPath = printed.trim().split(/\r?\n/).find(Boolean) ?? null;
+      } catch {}
+    } else {
+      try {
+        const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
+          encoding: "utf8",
+          timeout: 15_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        onPath = printed.trim().split("\n").at(-1) || null;
+      } catch {}
+    }
     found.set(name, onPath ?? elsewhere().find(existsSync) ?? null);
   }
   const program = found.get(name);

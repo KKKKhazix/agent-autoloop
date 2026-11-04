@@ -1,10 +1,30 @@
 // Codex: the user's own, installed and signed in by them. A run is a `codex exec` in the background; its thread is kept
 // on disk, so a retry or an answer can go on in it, and the link opens it in the app.
 import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
 
 const SANDBOX = { read: "read-only", edit: "workspace-write", full: "danger-full-access" };
+/** The app's own copy of the CLI, where the Windows install keeps it: …\OpenAI\Codex\bin\<hash>\codex.exe. */
+function inTheWindowsApp() {
+  const base = path.join(
+    process.env.LOCALAPPDATA ?? path.join(homedir(), "AppData", "Local"),
+    "OpenAI",
+    "Codex",
+    "bin",
+  );
+  try {
+    return readdirSync(base)
+      .map((folder) => path.join(base, folder, "codex.exe"))
+      .filter((file) => existsSync(file));
+  } catch {
+    return [];
+  }
+}
 const IN_THE_APP = [
+  ...(process.platform === "win32" ? inTheWindowsApp() : []),
   "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
   "/Applications/Codex.app/Contents/Resources/codex",
 ];

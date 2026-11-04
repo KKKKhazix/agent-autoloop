@@ -107,15 +107,28 @@ function linkSkill() {
     if (!existsSync(path.join(homedir(), agent))) continue;
     const link = path.join(homedir(), agent, "skills", "agent-autoloop");
     if (lstatSync(link, { throwIfNoEntry: false })) continue;
-    mkdirSync(path.dirname(link), { recursive: true });
-    symlinkSync(path.join(ROOT, "skills", "agent-autoloop"), link);
+    try {
+      mkdirSync(path.dirname(link), { recursive: true });
+      // Windows refuses a symbolic link unless the account may create one; a junction needs no such right.
+      const kind = process.platform === "win32" ? "junction" : undefined;
+      symlinkSync(path.join(ROOT, "skills", "agent-autoloop"), link, kind);
+    } catch {
+      // The skill only saves the user's Agents some reading: not linking it must not stop the install.
+    }
   }
 }
 
 /** What to type to run this program: its name if that's what a shell finds, otherwise where it is. */
 function howToRun() {
-  const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout.trim();
-  if (found && realpathSync(found) === realpathSync(PROGRAM)) return "agent-autoloop";
+  let found = "";
+  try {
+    found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout?.trim() ?? "";
+  } catch {}
+  if (found) {
+    try {
+      if (realpathSync(found) === realpathSync(PROGRAM)) return "agent-autoloop";
+    } catch {}
+  }
   return /\s/.test(PROGRAM) ? `'${PROGRAM}'` : PROGRAM;
 }
 
@@ -184,12 +197,15 @@ async function init(args: string[]) {
   };
   writeConfig(config);
   linkSkill();
-  if (!named["no-service"]) installService();
+  // Windows has no user service manager here: the hub is started by hand, and nothing pretends otherwise.
+  const manual = named["no-service"] || process.platform === "win32";
+  if (!manual) installService();
   const names = Object.values(agents).map((agent) => agent.name);
   const reach = ownRules ? "  通道：桌面通知\n" : "";
   const run = howToRun();
-  const next = named["no-service"]
-    ? `先运行 ${run} up 启动中台，再开一个终端运行 ${run} try 跑一遍完整流程。`
+  const next = manual
+    ? `Windows 上没有免登录的服务：让中台常驻，可以在「任务计划程序」里添加一条登录时运行 \`${run} up\` 的任务。\n` +
+      `现在先运行 ${run} up 启动中台，再开一个终端运行 ${run} try 跑一遍完整流程。`
     : `运行 ${run} try 跑一遍完整流程。`;
   console.log(`装好了。\n  Agent：${names.join("、")}\n${reach}  规则：${RULES_FILE}\n\n${next}`);
 }
@@ -368,6 +384,11 @@ async function doctor() {
     console.log(`${ok ? "●" : "○"} ${words}`);
     if (!ok) bad += 1;
   };
+  // Not a fault to fix on Windows: there's no service to install, so it's said as a fact rather than as a task.
+  const serviceWords = () =>
+    process.platform === "win32"
+      ? "Windows 上没有系统服务：中台在终端里用 agent-autoloop up 启动"
+      : "系统服务没在跑：agent-autoloop service install";
   say(Number(process.versions.node.split(".")[0]) >= 24, `Node ${process.versions.node}`);
   if (!existsSync(CONFIG_FILE)) return say(false, "还没装好：运行 agent-autoloop init");
   const config = readConfig();
@@ -380,7 +401,7 @@ async function doctor() {
       say(false, (error as Error).message);
     }
   }
-  say(serviceRunning(), serviceRunning() ? "系统服务在跑" : "系统服务没在跑：agent-autoloop service install");
+  say(serviceRunning(), serviceRunning() ? "系统服务在跑" : serviceWords());
   try {
     const health = await (await fetch(`${config.url}/healthz`, { signal: AbortSignal.timeout(5000) })).json();
     say(health.ok === true, `中台 ${config.url}（${String(health.commit).slice(0, 12)}）`);

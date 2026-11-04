@@ -61,6 +61,13 @@ function checkFields(issues: string[], where: string, value: unknown, spec: Fiel
 
 const nameOf = (entry: unknown) => (isObject(entry) && typeof entry.name === "string" ? entry.name : "");
 
+/**
+ * A rule's cwd is a directory, written either from home or from the root. macOS and Linux only have `/`; on Windows a
+ * directory is also `C:\…` or a share `\\server\…`, which is what path.join() makes of everything there.
+ */
+const isCwd = (value: unknown) =>
+  typeof value === "string" && (/^(~\/|\/)/.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value));
+
 function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string>, now: number) {
   const name = nameOf(rule);
   if (names.has(name)) issues.push(`规则名「${name}」重复了`);
@@ -71,7 +78,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["name", isText, NOT_EMPTY],
     ["when", isObject, "要是一个对象"],
     ["to", isKeyOf(rules.agents), `不是已登记的 Agent：${isObject(rule) ? rule.to : ""}`],
-    ["cwd", (value) => typeof value === "string" && /^(~\/|\/)/.test(value), "要是以 ~/ 或 / 开头的目录"],
+    ["cwd", isCwd, "要是以 ~/ 或 / 开头的目录（Windows 也接受 C:\\ 这样的盘符路径和 \\\\ 开头的共享路径）"],
     ["skill", isText, NOT_EMPTY, true],
     ["prompt", isText, NOT_EMPTY, true],
     ["group", isText, NOT_EMPTY, true],

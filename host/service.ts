@@ -1,7 +1,7 @@
 // Keeping it running: launchd on a Mac, systemd on Linux. Both start it at login and restart it if it stops.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "./home.ts";
@@ -77,6 +77,13 @@ const launchdHasIt = () =>
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 export function installService() {
+  // Windows has no user-level service manager to put this in: the hub is started with `agent-autoloop up`, or by a
+  // Task Scheduler entry of the user's own. Saying so beats writing a plist or a unit nobody there reads.
+  if (process.platform === "win32") {
+    throw new Error(
+      "Windows 上不装系统服务：用 agent-autoloop up 启动，或在「任务计划程序」里让它在登录时运行这条命令",
+    );
+  }
   mkdirSync(path.join(HOME, "logs"), { recursive: true, mode: 0o700 });
   if (process.platform === "darwin") {
     mkdirSync(path.dirname(plistFile()), { recursive: true });
@@ -95,6 +102,7 @@ export function installService() {
 }
 
 export function removeService() {
+  if (process.platform === "win32") return;
   const file = process.platform === "darwin" ? plistFile() : unitFile();
   if (!existsSync(file)) return;
   const service = readFileSync(file, "utf8");
@@ -112,11 +120,30 @@ export function removeService() {
   }
 }
 
+/** The hub writes this while it runs: Windows reuses process numbers, a heartbeat that stopped doesn't. */
+const heartbeatFile = () => path.join(HOME, "up.heartbeat");
+const HEARTBEAT_STALE = 30_000;
+
 /** The process that left its number in up.pid, if it still is that process: the number may be someone else's by now. */
 export function runningUp() {
   const file = path.join(HOME, "up.pid");
   if (!existsSync(file)) return null;
   const pid = readFileSync(file, "utf8").trim();
+  // Windows has no ps, and the listing has no command line. A stale heartbeat is what tells a hub that died from a
+  // number the system gave to something else after a restart — without it, `up` refuses to start and `stopUp` kills a
+  // stranger's process tree.
+  if (process.platform === "win32") {
+    try {
+      if (Date.now() - statSync(heartbeatFile()).mtimeMs > HEARTBEAT_STALE) return null;
+      const line = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      return line.includes(`"${pid}"`) && /node\.exe/i.test(line) ? Number(pid) : null;
+    } catch {
+      return null;
+    }
+  }
   let command = "";
   try {
     command = execFileSync("ps", ["-p", pid, "-o", "command="], {
@@ -138,6 +165,7 @@ export function stopUp() {
 }
 
 export function serviceRunning() {
+  if (process.platform === "win32") return false;
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
 }

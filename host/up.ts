@@ -19,9 +19,22 @@ function lock() {
   if (running !== null) throw new Error(`已经在跑了（进程 ${running}）`);
   const file = path.join(HOME, "up.pid");
   writeFileSync(file, String(process.pid));
+  // Windows reuses process numbers and has no ps to tell ours from a stranger's: the file this one keeps touching is
+  // what says the number is still this hub. Everywhere else the command line answers that question on its own.
+  const beat = process.platform === "win32" ? path.join(HOME, "up.heartbeat") : null;
+  const touch = () => {
+    try {
+      writeFileSync(beat!, String(process.pid));
+    } catch {}
+  };
+  const timer = beat ? setInterval(touch, 5000) : null;
+  timer?.unref();
+  if (beat) touch();
   return () => {
+    if (timer) clearInterval(timer);
     try {
       unlinkSync(file);
+      if (beat) unlinkSync(beat);
     } catch {}
   };
 }
