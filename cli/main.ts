@@ -74,7 +74,7 @@ const fail = (words: string): never => {
 };
 
 const client = (key: string, config = readConfig()) => hubClient(config.url, key);
-const ownerClient = (config = readConfig()) =>
+export const ownerClient = (config = readConfig()) =>
   client(config.owner ?? fail("这台电脑上没有本人的密钥（只接活的电脑看不了）"), config);
 
 /** The first rules of a new install: its agents and one rule to try the whole loop with. */
