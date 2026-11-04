@@ -11,6 +11,8 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 `agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（同一轮重试的已报用量相加，没上报的轮数会写出来）。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮，等整个进程组退出才报告已停。
 
+Codex 续接会话只统计本次增量；没有会话基线的首次续接显示用量未上报，之后建立基线。`worker/usage/` 是接单程序的会话检查点，删除后会丢失基线；旧回执不重算。同一会话不要同时交给其他程序使用，外部用量无法分离。
+
 这里没有网页。用户想要一个页面看全局，就替他写一个：读 `GET /v1/state`，密钥是 `config.json` 的 `owner`，请求见 `docs/protocol.md` 的「本人」一节。
 
 ## 改规则

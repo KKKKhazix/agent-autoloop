@@ -23,7 +23,14 @@ export type Turn = {
   contextFile: string;
   folder: string;
 };
-export type Reading = { text?: string; session?: string; usage?: Usage; error?: string; finished?: boolean };
+export type Reading = {
+  text?: string;
+  session?: string;
+  usage?: Usage;
+  usageScope?: "session";
+  error?: string;
+  finished?: boolean;
+};
 export type Adapter = {
   /** Its command line for this turn. */
   command(turn: Turn): string[];

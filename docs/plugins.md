@@ -35,6 +35,10 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 
 `turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。
 
+`usage` 默认是本次启动的增量。返回会话累计用量的插件必须同时返回 `usageScope: "session"` 和 `session`；内置 Codex 使用此口径，其他插件默认行为不变。接单程序在启动前将基线保存到本次执行记录，结束时求差，并在 `worker/usage/` 保存会话检查点，重启后不重复计入历史。缓存输入也求差；未上报的费用保持缺省。没有基线的续接、累计值回退或缺少会话编号时不猜用量，显示未上报；取得有效累计值后可为下一次续接建立基线。
+
+会话应由同一个接单程序串行使用；其他程序在同一会话里产生的用量无法从累计值中分离。换电脑或清理会话检查点后，首次续接不计用量。若 CLI 改为返回单次启动增量，插件应去掉 `usageScope`，不能仅凭数值大小猜测口径。旧回执不会自动重算。
+
 在规则里选择这个插件：
 
 ```json

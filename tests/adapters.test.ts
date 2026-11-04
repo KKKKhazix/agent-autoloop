@@ -136,6 +136,7 @@ test("Codex: only a finished turn's last message is its answer", () => {
     text: "好了",
     finished: true,
     usage: { input: 9, output: 1, cached: 3 },
+    usageScope: "session",
   });
   assert.deepEqual(
     codex.read(lines(started, said("中途")), null, ""),

@@ -27,6 +27,8 @@ import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
 
+import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
+
 const RUNS = path.join(HOME, "worker", "runs");
 const TIMEOUT_MINUTES = 180;
 /** A reader of the turn's end that doesn't exit is given this long. */
@@ -56,6 +58,7 @@ type Entry = {
   repairs: number;
   triedFresh: boolean;
   usage?: Usage;
+  usageBaseline?: Usage;
   pid?: number;
   launchedAt?: number;
   finishedAt?: number;
@@ -177,6 +180,7 @@ export function createWorker({
   function launch(entry: Entry, adapter: Adapter, prompt: string) {
     entry.turn += 1;
     entry.launchedAt = now();
+    entry.usageBaseline = entry.resume ? loadUsage(entry.job.agent.use, entry.resume) : undefined;
     delete entry.finishedAt;
     delete entry.pid;
     delete entry.stopping;
@@ -287,7 +291,20 @@ export function createWorker({
   function conclude(entry: Entry, adapter: Adapter, code: number | null) {
     // One ended because its turn was over but it wouldn't exit said what it had to say first.
     const seen = read(entry, adapter, entry.finishedAt ? 0 : code);
-    entry.usage = addUsage(entry.usage, seen.usage);
+    let usageThisLaunch = seen.usage;
+    if (seen.usageScope === "session") {
+      usageThisLaunch = undefined;
+      if (seen.session && seen.usage) {
+        // A fresh session starts at zero; an unknown resumed session does not.
+        const baseline =
+          !entry.resume || seen.session !== entry.resume
+            ? { input: 0, output: 0, cached: 0, cost: 0 }
+            : entry.usageBaseline;
+        usageThisLaunch = usageDelta(seen.usage, baseline);
+        saveUsage(entry.job.agent.use, seen.session, seen.usage);
+      }
+    }
+    entry.usage = addUsage(entry.usage, usageThisLaunch);
     const session = seen.session ?? (entry.turn > 0 && adapter.link ? entry.session : undefined);
     if (seen.session) entry.session = seen.session;
     const usage = entry.usage && { usage: entry.usage };

@@ -10,6 +10,7 @@
 // can't be gone on in fails the run instead of starting a new one, or keeps trying; a turn's end that doesn't exit holds its
 // place for ever; an old turn's exit is taken for a new one's; the hub gone for ten minutes isn't told, told every minute,
 // taken as told when the telling failed, tried without end, or not told again after it came back and went away again.
+// Session-cumulative usage must become per-launch deltas, including after a worker restart.
 // A shell replacing itself with the final move must not lose its identity before the exit file is published.
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
@@ -590,4 +591,63 @@ test("the hub gone for ten minutes is told once, tried a few times if telling fa
   clock += 11 * 60_000;
   for (let i = 0; i < 8; i++) await f.tick();
   assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 5);
+});
+
+test("session totals are counted once across resumed jobs and worker restarts", async () => {
+  mkdirSync(join(home, "plugins", "cumulative"), { recursive: true });
+  writeFileSync(
+    join(home, "plugins", "cumulative", "agent.ts"),
+    `
+    export default {
+      command: (t) => ["/bin/sh", "-c", t.command[0]],
+      read(stdout, code) {
+        if (code === null || !stdout.trim()) return {};
+        const usage = JSON.parse(stdout);
+        return { text: "好了", session: "same-session", usage, usageScope: "session" };
+      },
+    };
+  `,
+  );
+  const hub = fakeHub();
+  hub.jobs.push(job({ use: "cumulative", command: [`echo '{"input":52968,"output":126,"cached":26240}'`] }));
+  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 1);
+  hub.jobs.push(
+    job({
+      use: "cumulative",
+      session: "same-session",
+      command: [`echo '{"input":108943,"output":207,"cached":80384}'`],
+    }),
+  );
+  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 2);
+  assert.deepEqual(
+    hub.results.map((r) => r.usage),
+    [
+      { input: 52968, output: 126, cached: 26240 },
+      { input: 55975, output: 81, cached: 54144 },
+    ],
+  );
+  assert.equal(
+    hub.results.reduce((n, r) => n + r.usage.input + r.usage.output, 0),
+    109150,
+  );
+  // An upgrade or a different worker may have no baseline for an existing session.
+  rmSync(join(home, "worker", "usage"), { recursive: true });
+  hub.jobs.push(
+    job({
+      use: "cumulative",
+      session: "same-session",
+      command: [`echo '{"input":110000,"output":220,"cached":81000}'`],
+    }),
+  );
+  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 3);
+  assert.equal(hub.results[2].usage, undefined);
+  hub.jobs.push(
+    job({
+      use: "cumulative",
+      session: "same-session",
+      command: [`echo '{"input":110100,"output":230,"cached":81050}'`],
+    }),
+  );
+  await until(createWorker({ hub, name: "test" }), () => hub.results.length === 4);
+  assert.deepEqual(hub.results[3].usage, { input: 100, output: 10, cached: 50 });
 });
