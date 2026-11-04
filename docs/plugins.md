@@ -33,7 +33,7 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 | `link(session)` | 可选，会话链接；支持会话的插件可只重写错误回执 |
 | `check()` | 可选，能用返回 `null`，否则返回下一步怎么做 |
 
-`turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。`read` 抛错时，还在跑的接着跑，结束后这一轮算没跑成，留在原会话重派。
+`turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。`read` 抛错或什么也不返回时，还在跑的接着跑，结束后这一轮算没跑成，留在原会话重派。
 
 支持 `resume` 的插件，从 Agent 收下提示词起都要返回 `started: true`，包括运行中和出错之后。否则干到一半断了，也会被当成会话接不上，开新会话把业务重做一遍。
 

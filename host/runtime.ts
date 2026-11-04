@@ -143,8 +143,6 @@ export function reloadRules(file = RULES_FILE) {
     return { changed: true };
   } catch (error) {
     if (error instanceof RulesError) return { changed: false, problem: error.message };
-    // Not applied, so the file isn't dealt with: the next look must read it again.
-    loaded = { file: "", mtime: 0 };
     throw error;
   }
 }

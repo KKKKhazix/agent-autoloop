@@ -7,7 +7,17 @@
 // started again; losing the place the log goes makes the error about it go round for ever, with the hub no longer answering.
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -155,14 +165,23 @@ test("a channel plugin that returns at once doesn't stop the hub answering", asy
 });
 
 test("a worker that stops is started again, and the hub stays up", async () => {
-  const it = await install();
+  const it = await install({
+    "busy/agent.ts": `export default { command: () => ["sleep", "5"], read: () => ({}) };`,
+  });
+  edit(join(it.home, "rules.json"), (rules) => {
+    for (const agent of Object.values<any>(rules.agents)) {
+      agent.use = "busy";
+      delete agent.command;
+    }
+  });
   const up = it.up();
   await until(() => answers(it.port), "中台应答");
-  // Something in the way of its folder: the next round can't look at what it has in hand.
+  assert.equal(it.cli("emit", "try.start", "--subject", "#1").status, 0);
   const runs = join(it.home, "worker", "runs");
+  await until(() => existsSync(runs) && readdirSync(runs).length > 0, "这一轮开始");
+  // With a run in hand it comes round every second, and something in the way of its folder stops the next round.
   rmSync(runs, { recursive: true, force: true });
   writeFileSync(runs, "");
-  assert.equal(it.cli("emit", "try.start", "--subject", "#1").status, 0);
   await until(() => alive(up) === false || it.said().includes("[worker] stopped"), "日志说接单程序停了");
   assert.equal(alive(up), true, it.said());
   assert.equal(await answers(it.port), true);
@@ -211,10 +230,10 @@ test("a channel plugin's stray throw and unhandled rejection stay its own troubl
 /** A real hub whose database another process holds while its rules change, until the tick that brought them has failed. */
 async function heldWhileRulesChange(
   change: (rules: any) => void,
-  before: (it: Awaited<ReturnType<typeof install>>) => void,
+  { before = (_home: string) => {}, failures = 1 } = {},
 ) {
   const it = await install();
-  before(it);
+  before(it.home);
   const up = it.up();
   await until(() => answers(it.port), "中台应答");
   const db = new DatabaseSync(join(it.home, "hub.db"));
@@ -225,7 +244,8 @@ async function heldWhileRulesChange(
   change(rules);
   writeFileSync(`${file}.new`, JSON.stringify(rules, null, 2));
   renameSync(`${file}.new`, file);
-  await until(() => alive(up) === false || it.said().includes("database is locked"), "这一次到点失败");
+  const failed = () => it.said().split("Error: database is locked").length - 1;
+  await until(() => alive(up) === false || failed() >= failures, "这一次到点失败", 30_000);
   db.exec("ROLLBACK");
   const askFirst = () => {
     const row = db.prepare("SELECT data FROM projections WHERE collection='config' AND key='rules'").get()!;
@@ -245,30 +265,25 @@ async function heldWhileRulesChange(
 }
 
 test("the database held too long by another process fails a tick, not the hub, and the change still lands", async () => {
-  const { up, askFirst, landed } = await heldWhileRulesChange(
-    (rules) => (rules.askFirst = ["只问这一件"]),
-    () => {},
-  );
+  const { up, askFirst, landed } = await heldWhileRulesChange((rules) => (rules.askFirst = ["只问这一件"]));
   await until(() => alive(up) === false || askFirst()[0] === "只问这一件", "新规则生效");
   await landed();
 });
 
 test("whatever comes along while a failed tick waits to go again doesn't lose it", async () => {
-  // With no worker asking, the only other thing due is the card about it, ten minutes off.
-  const { it, up, askFirst, landed } = await heldWhileRulesChange(
-    (rules) => (rules.askFirst = ["只问这一件"]),
-    ({ home }) => edit(join(home, "config.json"), (config) => delete config.worker),
-  );
+  // With no worker asking, the only other thing due is the card about it, ten minutes off. The second failure is the one to
+  // wait for: a file watcher can report one change twice, and a tick waiting on the lock would go through when it's let go.
+  const { it, up, askFirst, landed } = await heldWhileRulesChange((rules) => (rules.askFirst = ["只问这一件"]), {
+    before: (home) => edit(join(home, "config.json"), (config) => delete config.worker),
+    failures: 2,
+  });
   assert.equal(it.cli("emit", "try.start", "--subject", "#1").status, 0);
   await until(() => alive(up) === false || askFirst()[0] === "只问这一件", "新规则生效");
   await landed();
 });
 
 test("rules written wrong while the database is held are told once it's free", async () => {
-  const { up, cards, landed } = await heldWhileRulesChange(
-    (rules) => (rules.rules[0].to = "nobody"),
-    () => {},
-  );
+  const { up, cards, landed } = await heldWhileRulesChange((rules) => (rules.rules[0].to = "nobody"));
   await until(() => alive(up) === false || cards().includes("rules.json 写错了，还在用旧规则"), "告诉本人规则写错了");
   await landed();
 });
