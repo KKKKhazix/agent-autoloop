@@ -137,7 +137,8 @@ function signal(entry: Entry, name: NodeJS.Signals) {
   } catch {}
 }
 
-function groupAlive(entry: Entry) {
+/** Whether anything in the run's group is still going, null when we could not look. */
+function groupAlive(entry: Entry): boolean | null {
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
   try {
     return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
@@ -148,8 +149,7 @@ function groupAlive(entry: Entry) {
         return Number(group) === entry.pid && !state.startsWith("Z");
       });
   } catch {
-    // We could not look the group up, so we cannot say it is gone.
-    return true;
+    return null;
   }
 }
 
@@ -182,6 +182,7 @@ export function createWorker({
   let unreachableSince: number | null = null;
   let told = false;
   let tries = 0;
+  let blind = false;
   mkdirSync(RUNS, { recursive: true, mode: 0o700 });
 
   const entries = () =>
@@ -380,9 +381,12 @@ export function createWorker({
     }
     const { exit } = files(entry);
     if (entry.stopping !== undefined) {
-      if (groupAlive(entry)) {
-        if (now() - entry.stopping > STOP_GRACE) signal(entry, "SIGKILL");
-        return;
+      const going = groupAlive(entry);
+      if (going !== false) {
+        const overdue = now() - entry.stopping > STOP_GRACE;
+        if (overdue) signal(entry, "SIGKILL");
+        // Unable to look, the kill is the last we can know of it; waiting to see it gone would hold the run forever.
+        if (going || !overdue) return;
       }
       return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
     }
@@ -392,11 +396,9 @@ export function createWorker({
     if (looking === false) {
       return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
     }
-    if (looking === null) {
-      // We could not look the process up, so we cannot say it is gone. Leave the run alone.
-      log(`run ${entry.run}: couldn't look up pid ${entry.pid}; leaving it alone`);
-      return;
-    }
+    // Unable to look, the run counts as still going, so its timeout and its finished turn still end it.
+    if (looking === null && !blind) log(`couldn't run ps; runs count as going until they end or time out`);
+    blind = looking === null;
     const seen = read(entry, adapter, null);
     const session = seen.session ?? (adapter.link ? (entry.resume ?? entry.session) : undefined);
     if (session && session !== entry.told) {
