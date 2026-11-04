@@ -67,6 +67,8 @@ export async function up() {
   const stray = log("up");
   process.on("uncaughtException", (error) => stray(`stray error: ${error?.stack ?? error}`));
   process.on("unhandledRejection", (error) => stray(`stray error: ${(error as Error)?.stack ?? error}`));
+  // Except losing where the log goes: writing that down fails the same way, for ever. It stops, and a service brings it back.
+  for (const output of [process.stdout, process.stderr]) output.on("error", () => process.exit(1));
   const stop = new AbortController();
   const jobs: Promise<unknown>[] = [];
   let close = () => {};

@@ -15,8 +15,10 @@
 // A shell replacing itself with the final move must not lose its identity before the exit file is published.
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
-// A plugin that can't read what it printed ends the worker, counts a run still going as ended, or starts its prompt again
-// in a new session; trouble with one run, like a folder it can't write to, holds up the others or ends the worker.
+// A plugin that can't read what it printed, or gives back nothing, ends the worker, holds the run for ever, counts a run still
+// going as ended, or starts its prompt again in a new session, whether the run ended or vanished; trouble with one run, like a
+// folder it can't write to, holds up the others, ends the worker or fills the log; a worker started again after trouble
+// needs the folder it lost.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -62,6 +64,17 @@ export default {
   command: (t) => ["/bin/sh", "-c", t.command[0]],
   read() { throw new Error("no idea what this says"); },
   link: (s) => "app://" + s,
+};`,
+);
+
+// One that gives back nothing at all.
+mkdirSync(join(home, "plugins", "silent"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "silent", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read() {},
 };`,
 );
 
@@ -751,6 +764,38 @@ test("a plugin that can't read what it printed fails that run alone, once it has
   assert.equal(lines.filter((line) => line.includes("no idea what this says")).length, 1, "and it's said once");
 });
 
+test("a plugin that can't read what it printed doesn't start a vanished run again either", async () => {
+  const hub = fakeHub();
+  const held = gate("unreadable-vanished");
+  const launches = join(folder, "unreadable-vanished-launches");
+  const going = join(folder, "unreadable-vanished-going");
+  const script = `echo x >> "${launches}"; touch "${going}"; ${held.hold}`;
+  hub.jobs.push(job({ use: "unreadable", session: "the-old-one", command: [script] }));
+  const w = worker(hub);
+  await until(w, () => existsSync(going));
+  process.kill(-w.entries()[0].pid!, "SIGKILL");
+  await until(w, () => hub.results.length === 1);
+  assert.deepEqual([hub.results[0].outcome, hub.results[0].session], ["failed", "the-old-one"]);
+  assert.match(hub.results[0].error, /读不懂/);
+  assert.equal(readFileSync(launches, "utf8"), "x\n", "its prompt isn't run again");
+});
+
+test("a plugin that gives back nothing fails that run and doesn't hold it", async () => {
+  const hub = fakeHub();
+  hub.jobs.push(job({ use: "silent", command: ["echo hi"] }));
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "failed");
+  assert.match(hub.results[0].error, /读不懂/);
+});
+
+test("a worker started again brings back a folder that's gone", async () => {
+  const w = worker(fakeHub());
+  rmSync(join(home, "worker", "runs"), { recursive: true, force: true });
+  await w.run(AbortSignal.abort());
+  assert.deepEqual(w.entries(), []);
+});
+
 test("trouble with one run waits for the next round and holds up no other", async () => {
   const hub = fakeHub();
   const lines: string[] = [];
@@ -771,7 +816,11 @@ test("trouble with one run waits for the next round and holds up no other", asyn
     await until(w, () => Boolean(resultOf(hub, other)));
     if (process.getuid!() !== 0) {
       assert.equal(resultOf(hub, troubled), undefined);
-      assert.ok(lines.some((line) => line.includes(`run ${troubled.run}:`) && line.includes("EACCES")));
+      const troubles = () => lines.filter((line) => line.includes(`run ${troubled.run}:`) && line.includes("EACCES"));
+      assert.equal(troubles().length, 1);
+      await w.tick();
+      await w.tick();
+      assert.equal(troubles().length, 1, "said once, however long it lasts");
     }
   } finally {
     chmodSync(dir, 0o700);

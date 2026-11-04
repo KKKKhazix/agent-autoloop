@@ -70,6 +70,7 @@ async function adaptWebhook(source: string, headers: Headers, body: string) {
 export function makeHandler(commit = "dev") {
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
+  let retryAt: number | undefined;
   const waiting = new Set<{ until: number; done: () => void }>();
   const wake = () => {
     for (const waiter of [...waiting]) waiter.done();
@@ -77,12 +78,11 @@ export function makeHandler(commit = "dev") {
   const fire = () => {
     try {
       hub.tick();
+      retryAt = undefined;
     } catch (error) {
       // Another process holding the database too long, say. Nobody is there to catch it, and what it brought is still due.
       console.error(error);
-      clearTimeout(timer);
-      if (!closed) timer = setTimeout(fire, TICK_RETRY);
-      return;
+      retryAt = Date.now() + TICK_RETRY;
     }
     wake();
     arm();
@@ -93,7 +93,8 @@ export function makeHandler(commit = "dev") {
     const due = hub.one<{ at: number }>(
       "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'",
     );
-    const next = Math.min(due?.at ?? Infinity, ...[...waiting].map((waiter) => waiter.until));
+    // Whatever the failed tick left is overdue, so it would go at once; and nothing else coming along may lose the retry.
+    const next = retryAt ?? Math.min(due?.at ?? Infinity, ...[...waiting].map((waiter) => waiter.until));
     if (!Number.isFinite(next)) return;
     timer = setTimeout(fire, Math.max(0, Math.min(LONGEST_TIMER, next - Date.now())));
   };

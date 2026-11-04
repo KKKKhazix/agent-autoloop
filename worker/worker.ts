@@ -183,7 +183,12 @@ export function createWorker({
   let told = false;
   let tries = 0;
   let blind = false;
-  const unreadable = new Set<number>();
+  const said = new Set<string>();
+  /** Trouble that lasts comes round every second, and once in the log will do. */
+  const sayOnce = (line: string) => {
+    if (!said.has(line)) log(line);
+    said.add(line);
+  };
   mkdirSync(RUNS, { recursive: true, mode: 0o700 });
 
   const entries = () =>
@@ -290,13 +295,14 @@ export function createWorker({
   function read(entry: Entry, adapter: Adapter, code: number | null): Reading {
     const { out, err } = files(entry);
     try {
-      return adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
+      const reading = adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
+      if (!reading) throw new Error("它什么也没给");
+      return reading;
     } catch (error) {
-      if (!unreadable.has(entry.run)) log(`run ${entry.run}: couldn't read its output: ${error}`);
-      unreadable.add(entry.run);
-      // It says nothing about how the run is going, so one still going goes on. Whether an ended one got started isn't
-      // known either, and starting it again in a new session could do its work twice: it stays in this one.
-      return code === null ? {} : { started: true, error: `读不懂这个 Agent 的输出：${(error as Error).message}` };
+      sayOnce(`run ${entry.run}: couldn't read its output: ${error}`);
+      // One still going goes on, since this says nothing about how it's doing. Whether one that has ended got started isn't
+      // known, and starting it again in a new session could do its work twice: it stays in this one.
+      return { started: true, error: `读不懂这个 Agent 的输出：${(error as Error).message ?? error}` };
     }
   }
 
@@ -490,7 +496,7 @@ export function createWorker({
       try {
         await step(entry);
       } catch (error) {
-        log(`run ${entry.run}: ${error}`);
+        sayOnce(`run ${entry.run}: ${error}`);
       }
     }
   }
@@ -535,6 +541,8 @@ export function createWorker({
 
   async function run(signalled: AbortSignal) {
     log(`worker ${name} started`);
+    // Started again after trouble, it may be what went: nothing else would bring it back, and every round needs it.
+    mkdirSync(RUNS, { recursive: true, mode: 0o700 });
     tidy();
     while (!signalled.aborted) {
       if (!(await tick())) await new Promise((resolve) => setTimeout(resolve, PAUSE));
