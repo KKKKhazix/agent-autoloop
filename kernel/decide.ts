@@ -39,10 +39,12 @@ const RESEND_AT = [0, 1, 3, 7, 15, 25, 35, 45, 55];
 const RESEND_WINDOW = 57 * MINUTE;
 /** How long a chain of events causing events can get before it stops being dispatched. */
 const MAX_HOPS = 8;
+/** How long an unanswered question holds the next one: long enough to answer, short enough not to stall the channel. */
+const ASK_HOLD = 30 * MINUTE;
 /** Failures in a row after which a run stops being retried: each try spends the owner's real tokens. */
 const MAX_ATTEMPTS = 10;
 const NOT_TRYING = { tries: 0, first_try_at: null, not_before: null };
-const NOT_DELIVERED: Row = { version: 0, ref: null, ...NOT_TRYING, error: null, given_up: 0 };
+const NOT_DELIVERED: Row = { version: 0, ref: null, sent_at: null, ...NOT_TRYING, error: null, given_up: 0 };
 
 const nulls = (...names: string[]) => Object.fromEntries(names.map((name) => [name, null]));
 const CARD_BASICS = { text: "", options: "[]", recommend: null, about: "", state: "open", fyi: 0, quiet: 0 };
@@ -457,9 +459,18 @@ function answer(draft: Draft, id: number, given: Row) {
 
 function nextCard(draft: Draft, channel: string) {
   const { now } = draft;
+  // One decision at a time: a question that is out and unanswered keeps the next question back, so the phone never
+  // shows two sets of buttons at once. A notice, and the update of a question already out, still goes through.
+  let asked: Row | null = null;
   for (const card of draft.view.deliveryCandidates(channel, now)) {
     const key = `${card.id}:${channel}`;
     const delivery = draft.view.get("deliveries", key) ?? NOT_DELIVERED;
+    if (card.kind === "ask" && card.state === "open" && delivery.ref !== null && !delivery.given_up) {
+      const since = delivery.sent_at ? Date.parse(delivery.sent_at) : now;
+      if (now - since < ASK_HOLD) asked = card;
+    }
+    // Held back before it is ever sent, so waiting costs the question no retry of its own.
+    if (asked && card.kind === "ask" && card.id !== asked.id && delivery.ref === null) continue;
     const recentNote = card.fyi && Date.parse(card.created_at) >= now - 24 * 60 * MINUTE;
     const worthSending = card.state === "open" || delivery.ref !== null || recentNote;
     const resting = delivery.not_before && Date.parse(delivery.not_before) > now;
@@ -591,7 +602,14 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     }
     const delivery = draft.view.get("deliveries", `${id}:${channel}`) ?? NOT_DELIVERED;
     const sent = { version: Math.max(delivery.version, version), ref: delivery.ref ?? ref };
-    put(draft, "deliveries", `${id}:${channel}`, { card_id: id, channel, ...sent, ...NOT_TRYING, error: null });
+    put(draft, "deliveries", `${id}:${channel}`, {
+      card_id: id,
+      channel,
+      ...sent,
+      ...NOT_TRYING,
+      error: null,
+      sent_at: draft.at,
+    });
   },
   failed(draft, channel, id, version, error) {
     const card = draft.view.get("cards", id);

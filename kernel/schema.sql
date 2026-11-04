@@ -82,6 +82,7 @@ CREATE TABLE deliveries (
   channel TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 0,
   ref TEXT,
+  sent_at TEXT,
   tries INTEGER NOT NULL DEFAULT 0,
   first_try_at TEXT,
   not_before TEXT,

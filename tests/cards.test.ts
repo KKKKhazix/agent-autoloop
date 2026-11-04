@@ -15,6 +15,9 @@
 // in meanwhile loses the session of the answer in it, or has it wiped by what had none. A run with events from two
 // sources is given, or closes, cards that have no source. A channel that takes a card and never reports gets it for ever.
 // A card closed while its first message is on the way never gets that message updated.
+// Asking one thing at a time: a question that is out and unanswered holds every other question back and costs it no retry,
+// a report or a failure of the held one doesn't count against it, a notice still gets through, and half an hour of silence
+// lets the next question out so a forgotten one doesn't stall the channel.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -504,6 +507,45 @@ test("a card solved before it was sent doesn't bother the owner; a closed one al
     [update.id, update.state, update.ref, update.options, update.result],
     [sent, "closed", "om_2", ["删", "留着"], "问题自己好了"],
   );
+});
+
+test("an unanswered question holds the next one back without spending its retries", () => {
+  clean();
+  const first = asked(1, at(0)).id;
+  const second = asked(2, at(1)).id;
+  const sent = nextCard("chat", at(1))!;
+  assert.equal(sent.id, first, "the question that has waited longest goes first");
+  delivered("chat", first, sent.version, "om_1", at(1));
+  // One question is out with the owner: the next one waits instead of stacking a second set of buttons.
+  for (const minute of [2, 5, 10, 20, 29]) assert.equal(nextCard("chat", at(minute)), null, `held at ${minute}`);
+  assert.equal(card(second).state, "open");
+  assert.equal(
+    all("SELECT tries FROM deliveries WHERE card_id = ? AND channel = 'chat'", [second]).length,
+    0,
+    "waiting behind an unanswered question isn't a delivery attempt",
+  );
+  // Answered, the message that was answered hears its own answer first, then the next question goes out at once.
+  answer(first, { choice: 0, by: "me", channel: "chat", ref: "om_1" }, at(29));
+  const done = nextCard("chat", at(29))!;
+  assert.deepEqual([done.id, done.state], [first, "decided"]);
+  delivered("chat", first, done.version, "om_1", at(29));
+  assert.equal(nextCard("chat", at(30))?.id, second);
+});
+
+test("a question nobody answers doesn't stall the channel for ever, and a notice still gets through", () => {
+  clean();
+  const first = asked(1, at(0)).id;
+  const second = asked(2, at(1)).id;
+  const sent = nextCard("chat", at(1))!;
+  delivered("chat", first, sent.version, "om_1", at(1));
+  const seen = nextCard("plain", at(2))!;
+  assert.equal(seen.id, first, "another channel keeps its own queue");
+  const notice = tell("source:app:k2", "应用", "巡检正常", at(1)).card;
+  const said = nextCard("chat", at(2))!;
+  assert.equal(said.id, notice, "what only needs knowing isn't queued behind a decision");
+  delivered("chat", notice, said.version, "om_2", at(2));
+  assert.equal(nextCard("chat", at(29)), null);
+  assert.equal(nextCard("chat", at(31))?.id, second, "half an hour of silence lets the next question out");
 });
 
 test("a notice has one button that closes it; something only to know has none and isn't left open", () => {

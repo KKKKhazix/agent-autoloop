@@ -107,22 +107,27 @@ export async function conformance(base: string, config: Probe, request: typeof f
   assert.equal(replay.duplicate, true);
   assert.deepEqual(replay.rejected, receipt.rejected);
   await call(`/v1/runs/${job.run}/result`, job.token, { outcome: "nothing" }, 409);
-  const cards = [];
-  for (;;) {
-    const { card } = await call("/v1/cards/next?wait=0", keys.channel);
-    if (!card) break;
-    assert.deepEqual(checkSchema("card", card), []);
-    cards.push(card);
-    await call(`/v1/cards/${card.id}/delivered`, keys.channel, { version: card.version, ref: `probe-${card.id}` });
-  }
-  const [card, other] = cards.filter(({ kind, title }) => kind === "ask" && title.endsWith(tag));
-  assert.ok(card && other);
+  // One question at a time: a hub may hold the next question back until this one is answered, so keep asking and
+  // skip the updates of the question already in hand.
+  const takeAsk = async (mine: number) => {
+    for (;;) {
+      const { card } = await call("/v1/cards/next?wait=0", keys.channel);
+      if (!card) return null;
+      assert.deepEqual(checkSchema("card", card), []);
+      await call(`/v1/cards/${card.id}/delivered`, keys.channel, { version: card.version, ref: `probe-${card.id}` });
+      if (card.kind === "ask" && card.state === "open" && card.id !== mine) return card;
+    }
+  };
+  const card = await takeAsk(0);
+  assert.ok(card?.title.endsWith(tag));
   const answer = { choice: 0, by: config.answerer, ref: `probe-${card.id}` };
   await call(`/v1/cards/${card.id}/answer`, keys.channel, { ...answer, by: "not-allowed" }, 401);
   await call(`/v1/cards/${card.id}/answer`, keys.channel, { ...answer, ref: "wrong" }, 401);
   await call(`/v1/cards/${card.id}/answer`, keys.channel, { ...answer, choice: 99 }, 400);
   assert.equal((await call(`/v1/cards/${card.id}/answer`, keys.channel, answer)).changed, true);
   assert.equal((await call(`/v1/cards/${card.id}/answer`, keys.channel, { ...answer, choice: 1 })).changed, false);
+  const other = await takeAsk(card.id);
+  assert.ok(other?.title.endsWith(tag));
   await call(`/v1/cards/${other.id}/resolve`, keys.owner, { reason: " " }, 400);
   assert.equal((await call(`/v1/cards/${other.id}/resolve`, keys.owner, { reason: "已核实" })).changed, true);
   assert.equal((await call(`/v1/cards/${other.id}/answer`, keys.owner, { choice: 0 })).changed, false);
