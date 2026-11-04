@@ -60,6 +60,7 @@ const edits: [string, string, string, string][] = [
   ["offline-hides-new-work", "due.ts", "waiting.every((run) => run.created_at <= card.closed_at)", "true"],
   ["offline-closed-comes-back", "due.ts", "waiting.every((run) => run.created_at <= card.closed_at)", "false"],
   ["link-expiry", "http.ts", "call.now - Date.parse(card.created_at) > LINK_LIFETIME", "false"],
+  ["links-in-use", "http.ts", "if (!card || !linksInUse)", "if (!card)"],
   ["projection-drop", "evolve.ts", "if (row === null)", 'if (row === null || table === "cards")'],
   ["log-order", "store.ts", "ORDER BY seq", "ORDER BY seq DESC"],
   ["stale-commit", "store.ts", "if (latest !== view.seq)", "if (false)"],
