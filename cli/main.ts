@@ -11,6 +11,7 @@ import { HOME, RULES_FILE } from "../host/home.ts";
 import { installService, removeService, serviceRunning } from "../host/service.ts";
 import { versionLine } from "../host/version.ts";
 import { spendLine } from "./spend.ts";
+import { newAskCard, newFailure, snapshot } from "./try.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROGRAM = path.join(ROOT, "bin", "agent-autoloop.ts");
@@ -233,6 +234,10 @@ async function tryIt() {
   if (!config.source) return fail("这台电脑上没有来源的密钥。");
   const owner = ownerClient(config);
   const stamp = Date.now();
+  // 之前跑过的 run 会一直留在 queued + attempts>0，不排掉就会一进来就报上一次的旧错。
+  const before = await owner.state().catch(() => ({ runs: [], cards: [] }));
+  const seenRuns = snapshot(before.runs);
+  const seenCards = snapshot(before.cards);
   await client(config.source.key, config)
     .event({ id: `try-${stamp}`, type: "try.start", subject: `#${stamp}` })
     .catch((error) => fail(`连不上中台（${error.message}）：先 agent-autoloop up 或 agent-autoloop service install`));
@@ -241,15 +246,10 @@ async function tryIt() {
   for (let i = 0; i < 300; i++) {
     await sleep(1000);
     const state = await owner.state();
-    const failed = state.runs.find(
-      (run: { rule: string; state: string; attempts: number; error: string }) =>
-        run.rule === "试一下" && run.state === "queued" && run.attempts > 0,
-    );
+    const failed = newFailure(state.runs, seenRuns);
     if (failed) return fail(`Agent 没跑成：${failed.error}\n运行 agent-autoloop doctor 看看。`);
     if (asked === null) {
-      const card: Card | undefined = state.cards.find(
-        (open: Card) => open.kind === "ask" && open.title.startsWith("试跑"),
-      );
+      const card: Card | null = newAskCard<Card>(state.cards, seenCards);
       if (!card) continue;
       asked = card.id;
       console.log("\nAgent 结束了这一轮，问了你一个问题。它现在不占进程、不花 Token。");
