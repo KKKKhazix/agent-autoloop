@@ -67,5 +67,21 @@ export function findProgram(name: string, elsewhere: () => string[] = () => []) 
   return program;
 }
 
+/** How to launch a program: the agent's own command line if rules.json or AGENT_AUTOLOOP_<NAME> carries one, otherwise
+ * wherever it's installed. A bare first word may be a shell function or alias, which only the rc of an interactive
+ * shell defines, so it runs through one; the words after the -c string become its "$0" and "$@", which the command line
+ * passes on to the adapter's arguments that follow. */
+export function launchProgram(turn: Pick<Turn, "command">, name: string, elsewhere: () => string[] = () => []) {
+  const override = turn.command?.length
+    ? turn.command
+    : (process.env[`AGENT_AUTOLOOP_${name.toUpperCase()}`] ?? "").trim().split(/\s+/).filter(Boolean);
+  if (override.length) {
+    return override[0].includes("/")
+      ? override
+      : [process.env.SHELL ?? "/bin/sh", "-ic", `${override.join(" ")} "$0" "$@"`];
+  }
+  return [findProgram(name, elsewhere)];
+}
+
 /** The end of some output, for saying why something failed. */
 export const tail = (text: string, length = 300) => text.trim().slice(-length);
