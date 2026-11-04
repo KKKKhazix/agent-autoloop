@@ -50,17 +50,18 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.match(said({ ...base, state: "decided", answer: "归档" }), /你选了「归档」/);
   assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /不用决定了：问题自己好了/);
   assert.match(said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }), /已处理/);
-  // 通告打开时除了「已处理」，还给一个可以写处理说明的表单。
   const noticeOpen = JSON.stringify(render({ ...base, kind: "notice", options: [] }).body.elements);
   assert.ok(noticeOpen.includes('"tag":"form"'), "a notice can take a line of your own");
   assert.ok(noticeOpen.includes("handling_note_submit_5"), "the submit button carries the card's number");
   assert.ok(noticeOpen.includes('"name":"note"'), "the form's field has a name, so its words come back");
-  // 结案后那句说明要留在卡面上。
+  assert.ok(
+    noticeOpen.includes('"form_action_type":"submit"'),
+    "the way a Feishu 2.0 card marks a form's submit button",
+  );
   assert.match(
     said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理", answer: "清了 3GB" }),
     /处理说明：清了 3GB/,
   );
-  // 说明没写的时候，通告的卡面跟以前一样。
   assert.ok(!said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }).includes("处理说明"));
 });
 
@@ -215,7 +216,7 @@ esac
 test("feishu: a form submit carries the handling note, and the button's name finds its card", async () => {
   const log = join(dir, "lark-note.log");
   const lark = join(dir, "lark-cli-note");
-  // 表单提交：action_value 是空的，卡片编号只写在按钮名里，说明在 form_value 里。
+  // A form submit has an empty action_value: the card's number is in the button's name, the note in form_value.
   writeFileSync(
     lark,
     `#!/bin/sh
@@ -258,7 +259,7 @@ esac
       ["answer", 7, { choice: 0, by: "ou_me", ref: "om_7", text: "已回他，下周发视频" }],
       ["answer", 7, { choice: 0, by: "ou_me", ref: "om_7" }],
     ],
-    "提交说明和只点已处理都要算数，后者不多送空字段",
+    "a submitted note and a plain click both count, the click with no empty text",
   );
 });
 

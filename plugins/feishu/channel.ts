@@ -7,7 +7,7 @@ import { execFile, spawn } from "node:child_process";
 import readline from "node:readline";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 
-/** 回传值在飞书那边是 JSON 字符串，可能是空的；解析不了就当没带。 */
+/** Feishu sends these values as JSON in a string, which may be empty. */
 function safeJson(text: unknown): any {
   if (typeof text !== "string" || !text) return null;
   try {
@@ -40,12 +40,10 @@ export function render(card: Card) {
     elements: [{ tag: "div", text: { tag: "plain_text", content: label } }],
   });
   const afterwards = outcome ? [{ tag: "markdown", content: `**${outcome}**` }] : [];
-  // 结案后把处理说明附在卡面上，别让它只留在数据库里。
   const noteSaid =
     card.kind === "notice" && card.answer
       ? [{ tag: "div", text: { tag: "plain_text", content: `处理说明：${card.answer}` } }]
       : [];
-  // 通告可以顺手写一句怎么处理的：说明选填，提交即结案。
   const noteForm =
     card.kind === "notice"
       ? [
@@ -67,7 +65,7 @@ export function render(card: Card) {
               {
                 tag: "button",
                 name: `handling_note_submit_${card.id}`,
-                action_type: "form_submit",
+                form_action_type: "submit",
                 type: "primary",
                 text: { tag: "plain_text", content: "记录并结案" },
               },
@@ -150,12 +148,11 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
     const event = JSON.parse(line);
     const form = safeJson(event.form_value);
     const value = safeJson(event.action_value);
-    // 表单提交的按钮自己带着卡片编号（handling_note_submit_<id>），
-    // 普通点击则把编号放在 action_value 里。两种都要认。
+    // A form's submit button can't carry a value, so its name holds the card's number.
     const named = /^handling_note_submit_(\d+)$/.exec(String(event.action_name ?? ""));
     const cardId = Number.isInteger(value?.card) ? value.card : named ? Number(named[1]) : null;
     if (!Number.isInteger(cardId)) return;
-    // 提交说明等于结案，通告这一档只有"已处理"一个选择。
+    // A notice's only option is that it's been handled, so submitting the form picks it.
     const choice = Number.isInteger(value?.choice) ? value.choice : form ? 0 : null;
     if (choice === null) return;
     const note = typeof form?.note === "string" ? form.note : undefined;
@@ -164,7 +161,6 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
       by: event.operator_id,
       ref: event.message_id,
     };
-    // 只有真带了说明才写这个字段：普通的"已处理"点击不该多送一个空值过去。
     if (note !== undefined) given.text = note;
     const answer = await hub.answer(cardId, given);
     const how = form ? "note submitted" : "answered";

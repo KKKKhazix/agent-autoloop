@@ -45,7 +45,7 @@ export function cardPage(card: ReturnType<typeof cardView>) {
       return `<button name="choice" value="${index}"${best}>${escaped(option)}</button>`;
     };
     // Its own form: Enter in the box mustn't press the first option.
-    // 通告也要能留一句话：说明选填，填了就随结案一起记下。
+    // A notice can take a line on how it was handled: optional, and kept with the closing.
     const notice = card.kind === "notice";
     const box = notice
       ? `<input name="text" placeholder="我实际怎么处理的（可不填）" aria-label="处理说明">`

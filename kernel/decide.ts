@@ -116,7 +116,7 @@ const hopsOf = (draft: Draft, run: Row) => Math.max(0, ...eventsOf(draft.view, r
 
 function closeCard(draft: Draft, card: Row, result: string, by: string | null = null, note: string | null = null) {
   const closed = { state: "closed", closed_at: draft.at, version: card.version + 1 };
-  // 结案时若带了处理说明，一并存进 answer：这张通告是谁、怎么处理的，事后能查。
+  // A note says how a notice was handled, for looking back at later.
   put(draft, "cards", card.id, { ...closed, result, by: by ?? card.by, ...(note ? { answer: note } : {}) });
 }
 
@@ -409,10 +409,9 @@ function answer(draft: Draft, id: number, given: Row) {
     throw new InputError(`消息编号最多 ${ANSWER_REF} 字`);
   }
   if (card.kind === "notice") {
-    // 通告默认只需"知道了"，但允许顺带写下怎么处理的。说明是可选的：
-    // 不填就等于原来的"已处理"，填了就把这句话作为处理记录留下。
     if (given.text !== undefined && typeof given.text !== "string") throw new InputError("处理说明要是文字");
-    const note = given.text?.trim().slice(0, 1000) || null;
+    const note = given.text?.trim() || null;
+    if (note !== null && [...note].length > ANSWER_TEXT) throw new InputError(`处理说明最多 ${ANSWER_TEXT} 字`);
     closeCard(draft, card, "已处理", given.by ?? null, note);
     return { changed: true, state: "closed" };
   }
