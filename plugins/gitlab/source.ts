@@ -14,16 +14,20 @@ export default function gitlab({ headers, body, secret }: Input) {
   if (kind === "ping") return [];
   const payload = JSON.parse(body);
   const object_kind = String(payload.object_kind ?? kind);
-  const action = String(payload.action ?? "");
+  // The action lives on object_attributes, not on the top-level payload.
+  const action = String(payload.object_attributes?.action ?? payload.action ?? "");
   const type = (action ? `${object_kind}.${action}` : object_kind).toLowerCase().replace(/[^a-z0-9_.-]/g, "-");
   const project = payload.project ?? payload.repository ?? {};
   const repo = String(project.full_name ?? project.path_with_namespace ?? project.name ?? "");
   const object_attributes = payload.object_attributes ?? payload.merge_request ?? payload.issue ?? {};
   const iid = object_attributes.iid ?? object_attributes.id ?? "";
+  // Use the Idempotency-Key header so retries keep the same id and are not dispatched twice.
+  const idempotencyKey = String(headers["idempotency-key"] ?? "");
+  const id = idempotencyKey || String(object_attributes.id ?? payload.object_id ?? crypto.randomUUID());
   const subject = `${repo}#${iid}`.replace(/[^A-Za-z0-9#._:/@-]/g, "-").slice(0, 100);
   return [
     {
-      id: String(payload.object_id ?? payload.merge_request_iid ?? payload.issue_iid ?? crypto.randomUUID()),
+      id,
       type,
       subject,
       summary: String(object_attributes.title ?? payload.commits?.[0]?.message ?? "").slice(0, 200),
