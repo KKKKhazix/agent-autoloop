@@ -91,7 +91,8 @@ export function mutate() {
       file,
       change: (text: string) => {
         assert.ok(text.includes(before), name);
-        return text.replace(before, after);
+        // Everywhere: a guard that's written twice, as the store's transaction is, stands if only one is taken away.
+        return text.replaceAll(before, after);
       },
     }));
     const survived: string[] = [];
