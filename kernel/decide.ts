@@ -2,7 +2,7 @@
 // to give. Time and secrets come in as arguments, so the same input on the same view always decides the same.
 import { credential, digest, type Environment } from "./credentials.ts";
 import { latestBefore, nextRun, parseCron } from "./cron.ts";
-import { deadlines, MINUTE, OFFLINE_AFTER, RUN_LEASE, WORKER_FRESH } from "./due.ts";
+import { deadlines, MINUTE, OFFLINE_AFTER, RUN_LEASE, SEEN_EVERY, WORKER_FRESH } from "./due.ts";
 import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
 import { iso, rows, type Change, type Fact, type Row, type Table, type View } from "./evolve.ts";
 import {
@@ -18,7 +18,18 @@ import {
   workers,
 } from "./query.ts";
 import { cronOf, eventRule, SCHEDULE, typeMatches, type Rule, type Rules } from "./rules.ts";
-import { addUsage, parseEvent, parseResult, type Later, type Rejected, type Result } from "../protocol/validate.ts";
+import {
+  addUsage,
+  ANSWER_BY,
+  ANSWER_REF,
+  ANSWER_TEXT,
+  DELIVERY_REF,
+  parseEvent,
+  parseResult,
+  type Later,
+  type Rejected,
+  type Result,
+} from "../protocol/validate.ts";
 
 export type Input = { type: string; args: any[] };
 
@@ -115,6 +126,12 @@ function closeOpen(draft: Draft, matches: (key: string) => boolean, result: stri
 
 const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
+
+/** Whether a new stamp would tell nothing this one doesn't. One in the future means a clock was set back: it gets redone. */
+function justSeen({ now }: Draft, row?: Row) {
+  const age = now - Date.parse(row?.seen_at);
+  return age >= 0 && age < SEEN_EVERY;
+}
 
 function createCard(draft: Draft, spec: Row) {
   const cards = rows(draft.view, "cards", { key: spec.key, ...(!spec.once && { state: "open" }) }, 1, true);
@@ -257,6 +274,17 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   return jobOf(draft.view, draft.view.get("runs", run.id)!, draft.env);
 }
 
+/** Ends a run nothing will pick up again, and says so. */
+function stopRun(draft: Draft, run: Row, why: string, summary: string, words: string) {
+  put(draft, "runs", run.id, { ...run, state: "cancelled", finished_at: draft.at, summary });
+  notify(draft, `run:${run.id}:${why}`, run.rule, words, threadOf(run));
+}
+
+const ruleGone = (run: Row): [string, string] => [
+  `规则「${run.rule}」不在了，不再派发`,
+  `规则「${run.rule}」不在了（删掉或改名了），排着的这一轮不再派发。还要做的话重新触发这件事。`,
+];
+
 /** A run that didn't get through waits to try again, and takes along whatever came in for the same thing meanwhile. */
 function retryLater(draft: Draft, run: Row, result: Result) {
   const { id } = run;
@@ -269,17 +297,20 @@ function retryLater(draft: Draft, run: Row, result: Result) {
     for (const _ of result[what] ?? []) rejected.push({ what, reason: "没跑成的一轮只能发通知" });
   }
   for (const notice of result.notice ?? []) cardFromReceipt(draft, run, "notice", notice);
+  const failure = { attempts, error, ...unclaimed };
+  if (!ruleNamed(draft, run.rule)) {
+    stopRun(draft, { ...run, ...failure }, "rule-gone", ...ruleGone(run));
+    return rejected;
+  }
   if (attempts >= MAX_ATTEMPTS) {
     // Runs queued for this thread stay apart: they came in since, and get their own count and their own go.
     const summary = `连续 ${MAX_ATTEMPTS} 次没跑成，不再自动重试`;
-    const finished = { state: "cancelled", finished_at: draft.at, summary };
-    put(draft, "runs", id, { ...finished, attempts, error, ...unclaimed });
     closeOpen(draft, (key) => key === `run:${id}:failing`, summary);
     const words = `连续 ${MAX_ATTEMPTS} 次自动处理没跑完（卡在：${error}），不再自动重试。解决后重新触发这件事，它会从头开始。`;
-    notify(draft, `run:${id}:stopped`, run.rule, words, threadOf(run));
+    stopRun(draft, { ...run, ...failure }, "stopped", summary, words);
     return rejected;
   }
-  put(draft, "runs", id, { state: "queued", attempts, not_before: iso(notBefore), error, ...unclaimed });
+  put(draft, "runs", id, { state: "queued", not_before: iso(notBefore), ...failure });
   const sameThread = (other: Row) => other.id !== id && other.rule === run.rule && other.lane === run.lane;
   for (const other of rows(draft.view, "runs", { rule: run.rule, lane: run.lane, state: "queued" }).filter(
     sameThread,
@@ -390,12 +421,19 @@ function answer(draft: Draft, id: number, given: Row) {
     if (!delivery?.ref || delivery.ref !== given.ref) throw new AuthError("不是发出去的那条消息");
   }
   if (card.state !== "open") return { changed: false, state: card.state };
+  if (given.by !== undefined && (typeof given.by !== "string" || [...given.by].length > ANSWER_BY)) {
+    throw new InputError(`回答人最多 ${ANSWER_BY} 字`);
+  }
+  if (given.ref !== undefined && (typeof given.ref !== "string" || [...given.ref].length > ANSWER_REF)) {
+    throw new InputError(`消息编号最多 ${ANSWER_REF} 字`);
+  }
   if (card.kind === "notice") {
     closeCard(draft, card, "已处理", given.by ?? null);
     return { changed: true, state: "closed" };
   }
   if (given.text !== undefined && typeof given.text !== "string") throw new InputError("回答要是文字");
   const text = given.text?.trim() || null;
+  if (text !== null && [...text].length > ANSWER_TEXT) throw new InputError(`回答最多 ${ANSWER_TEXT} 字`);
   const optionCount = JSON.parse(card.options).length;
   const inRange = Number.isInteger(given.choice) && given.choice >= 0 && given.choice < optionCount;
   if (given.choice === undefined ? !text : !inRange) throw new InputError("没有这个选项");
@@ -467,7 +505,11 @@ function tick(draft: Draft) {
 const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   rules(draft, rules) {
     put(draft, "config", "rules", { value: rules, version: draft.seq });
-    for (const run of rows(draft.view, "runs", { state: "queued" })) assignQueued(draft, run);
+    const named = new Set(rules.rules.map((rule: Rule) => rule.name));
+    for (const run of rows(draft.view, "runs", { state: "queued" })) {
+      if (named.has(run.rule)) assignQueued(draft, run);
+      else stopRun(draft, run, "rule-gone", ...ruleGone(run));
+    }
     closeOpen(draft, (key) => key.startsWith("rules:"), "改好了");
   },
   rulesError: (draft, problem) => notify(draft, `rules:${digest(problem)}`, "rules.json 写错了，还在用旧规则", problem),
@@ -494,17 +536,18 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     return { ...told, duplicate: false };
   },
   heartbeat(draft, worker, running) {
-    put(draft, "seen", `worker:${worker}`, { kind: "worker", name: worker, seen_at: draft.at });
     closeOffline(draft, worker);
-    for (const id of running) {
-      const run = draft.view.get("runs", id);
-      if (run?.state === "claimed" && workerOf(draft.view, run) === worker) {
-        put(draft, "runs", id, { seen_at: draft.at });
-      }
-    }
+    const held = (run?: Row) => run?.state === "claimed" && workerOf(draft.view, run) === worker;
+    const inHand = running.map((id: number) => draft.view.get("runs", id)).filter(held);
+    // All stamped together, so however many runs a worker has on, it's one fact each time.
+    if ([draft.view.get("seen", `worker:${worker}`), ...inHand].every((row) => justSeen(draft, row))) return;
+    put(draft, "seen", `worker:${worker}`, { kind: "worker", name: worker, seen_at: draft.at });
+    for (const run of inHand) put(draft, "runs", run.id, { seen_at: draft.at });
   },
-  channelSeen: (draft, name) =>
-    void put(draft, "seen", `channel:${name}`, { kind: "channel", name, seen_at: draft.at }),
+  channelSeen(draft, name) {
+    if (justSeen(draft, draft.view.get("seen", `channel:${name}`))) return;
+    put(draft, "seen", `channel:${name}`, { kind: "channel", name, seen_at: draft.at });
+  },
   claimNext,
   started(draft, id, token, given) {
     const { session, link } = given ?? {};
@@ -535,6 +578,9 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   nextCard,
   delivered(draft, channel, id, version, ref) {
     if (!draft.view.get("cards", id)) throw new NotFound("没有这张卡片");
+    if (ref !== null && (typeof ref !== "string" || [...ref].length > DELIVERY_REF)) {
+      throw new InputError(`消息编号最多 ${DELIVERY_REF} 字`);
+    }
     const delivery = draft.view.get("deliveries", `${id}:${channel}`) ?? NOT_DELIVERED;
     const sent = { version: Math.max(delivery.version, version), ref: delivery.ref ?? ref };
     put(draft, "deliveries", `${id}:${channel}`, { card_id: id, channel, ...sent, ...NOT_TRYING, error: null });
