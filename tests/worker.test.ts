@@ -561,10 +561,12 @@ test("a turn that went on in its session and then broke stays there, and its pro
 
   const vanished = fakeHub();
   const { hold } = gate("vanished");
-  const lost = attempt("vanished", hold);
+  // The hub hears of the session as soon as it's launched, so that doesn't say the script has got as far as starting.
+  const going = join(folder, "vanished.going");
+  const lost = attempt("vanished", `touch "${going}"; ${hold}`);
   vanished.jobs.push(lost.given);
   const v = worker(vanished);
-  await until(v, () => vanished.starts.some((start) => start.session === "old"));
+  await until(v, () => existsSync(going));
   process.kill(-v.entries()[0].pid!, "SIGKILL");
   await until(v, () => vanished.results.length === 1);
   expect(vanished, lost.launches, "没留下结果");
