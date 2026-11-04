@@ -116,13 +116,18 @@ const files = (entry: Entry) => ({
 const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attempt}:${entry.turn}`;
 
-function alive(entry: Entry) {
+/** Whether the run's process is still going: false when it is gone, null when we could not look. */
+function alive(entry: Entry): boolean | null {
   if (!entry.pid) return false;
   try {
     const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
     return command.includes(marker(entry));
-  } catch {
-    return false;
+  } catch (error) {
+    // A process that is gone makes ps exit with status 1; anything else (EPERM, EACCES, a spawn
+    // failure) means we could not look, which is not the same as it being gone.
+    const status = (error as { status?: number | null }).status;
+    if (status === 1) return false;
+    return null;
   }
 }
 
@@ -134,13 +139,18 @@ function signal(entry: Entry, name: NodeJS.Signals) {
 
 function groupAlive(entry: Entry) {
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
-  return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
-    .trim()
-    .split("\n")
-    .some((line) => {
-      const [group, state] = line.trim().split(/\s+/);
-      return Number(group) === entry.pid && !state.startsWith("Z");
-    });
+  try {
+    return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
+      .trim()
+      .split("\n")
+      .some((line) => {
+        const [group, state] = line.trim().split(/\s+/);
+        return Number(group) === entry.pid && !state.startsWith("Z");
+      });
+  } catch {
+    // We could not look the group up, so we cannot say it is gone.
+    return true;
+  }
 }
 
 function snapshot(file: string) {
@@ -378,8 +388,14 @@ export function createWorker({
     }
     if (existsSync(exit)) return conclude(entry, adapter, Number(readFileSync(exit, "utf8").trim()));
     // The shell can publish its exit between the first file check and ps returning.
-    if (!alive(entry)) {
+    const looking = alive(entry);
+    if (looking === false) {
       return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
+    }
+    if (looking === null) {
+      // We could not look the process up, so we cannot say it is gone. Leave the run alone.
+      log(`run ${entry.run}: couldn't look up pid ${entry.pid}; leaving it alone`);
+      return;
     }
     const seen = read(entry, adapter, null);
     const session = seen.session ?? (adapter.link ? (entry.resume ?? entry.session) : undefined);
