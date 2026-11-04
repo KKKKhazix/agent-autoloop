@@ -15,9 +15,12 @@
 // in meanwhile loses the session of the answer in it, or has it wiped by what had none. A run with events from two
 // sources is given, or closes, cards that have no source. A channel that takes a card and never reports gets it for ever.
 // A card closed while its first message is on the way never gets that message updated.
+// Receipt FYIs must arrive closed without buttons, stay out of later open lists, and never wake work when clicked;
+// ordinary notices, questions, quiet rules, and the one-day FYI delivery window must keep their existing behavior.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
+import { render } from "../plugins/feishu/channel.ts";
 
 setup("cards");
 const { ingest } = await import("../host/runtime.ts");
@@ -524,6 +527,117 @@ test("a notice has one button that closes it; something only to know has none an
   const given = nextCard("chat", at(2))!;
   assert.deepEqual([given.id, given.state, given.options], [fyi, "closed", []]);
 });
+
+test("receipt FYIs arrive as grey closed cards; ordinary notices and questions still need handling", () => {
+  clean();
+  ingest("app", note(1), at(0));
+  const job = claim("w1", at(0))!;
+  finish(
+    job.run,
+    job.token,
+    {
+      outcome: "done",
+      ask: [question],
+      notice: [
+        { title: "已设好", text: "每天九点检查", fyi: true },
+        { title: "要开权限", text: "请开通权限" },
+        { title: "要查告警", text: "请查看日志", fyi: false },
+      ],
+    },
+    at(1),
+  );
+  const shown = Array.from({ length: 4 }, () => nextCard("chat", at(1))!);
+  assert.deepEqual(
+    shown.map((c) => [c.title, c.state, c.options]),
+    [
+      [question.title, "open", question.options],
+      ["已设好", "closed", []],
+      ["要开权限", "open", ["已处理"]],
+      ["要查告警", "open", ["已处理"]],
+    ],
+  );
+  for (const c of shown) delivered("chat", c.id, c.version, `om_${c.id}`, at(1));
+  const fyi = shown[1];
+  const grey = render(fyi);
+  assert.equal(grey.header.template, "grey");
+  assert.doesNotMatch(JSON.stringify(grey), /callback|已处理/);
+  for (const c of [shown[0], shown[2], shown[3]]) {
+    assert.equal(render(c).header.template, "blue");
+    assert.match(JSON.stringify(render(c)), /callback/);
+  }
+  assert.deepEqual(answer(fyi.id, { choice: 0, by: "me", channel: "chat", ref: `om_${fyi.id}` }, at(2)), {
+    changed: false,
+    state: "closed",
+  });
+  assert.equal(claim("w1", at(2)), null, "a closed FYI cannot wake another round");
+  ingest("app", note(1, "followup"), at(3));
+  const next = claim("w1", at(3))!;
+  assert.deepEqual(
+    next.context.events.map((e) => e.type),
+    ["feedback.followup"],
+  );
+  assert.deepEqual(next.context.answers, []);
+  assert.deepEqual(
+    next.context.open.map((c) => c.title),
+    [question.title, "要开权限", "要查告警"],
+  );
+  finish(
+    next.run,
+    next.token,
+    {
+      outcome: "done",
+      resolve: [{ card: shown[2].id, reason: "权限已开通" }],
+    },
+    at(4),
+  );
+  const resolved = nextCard("chat", at(4))!;
+  assert.deepEqual([resolved.id, resolved.state, resolved.options], [shown[2].id, "closed", []]);
+  assert.equal(answer(shown[3].id, { choice: 0, by: "me" }, at(4)).changed, true);
+  assert.equal(answer(shown[0].id, { choice: 1, by: "me" }, at(5)).changed, true);
+  assert.deepEqual(
+    claim("w1", at(5))!.context.events.map((e) => e.type),
+    ["card.answered"],
+  );
+});
+
+test("a receipt FYI is deliverable for one day even though it starts closed", () => {
+  clean();
+  ingest("app", note(1), at(0));
+  const job = claim("w1", at(0))!;
+  finish(
+    job.run,
+    job.token,
+    {
+      outcome: "done",
+      notice: [{ title: "已上线", text: "可以使用了", fyi: true }],
+    },
+    at(0),
+  );
+  assert.equal(nextCard("chat", at(24 * 60))?.state, "closed");
+  assert.equal(nextCard("plain", at(24 * 60 + 1)), null);
+});
+
+for (const fyi of [undefined, false, true]) {
+  test(`tell never keeps receipt notices quiet with fyi=${fyi} while questions still arrive`, () => {
+    clean();
+    ingest("ops", { id: "alert", type: "alert.raised", subject: "probe" }, at(0));
+    const job = claim("w1", at(0))!;
+    finish(
+      job.run,
+      job.token,
+      {
+        outcome: "done",
+        ask: [question],
+        notice: [{ title: "记下了", text: "留作记录", ...(fyi !== undefined && { fyi }) }],
+      },
+      at(0),
+    );
+    const shown = nextCard("chat", at(1))!;
+    assert.deepEqual([shown.kind, shown.state, shown.options], ["ask", "open", question.options]);
+    delivered("chat", shown.id, shown.version, "om_ask", at(1));
+    assert.equal(nextCard("chat", at(2)), null, "quiet notices never reach the channel");
+  });
+}
 
 test("what only needed saying is told once per key; given up, it can be told again", () => {
   clean();
