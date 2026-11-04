@@ -12,6 +12,7 @@ import { installService, removeService, serviceRunning } from "../host/service.t
 import { versionLine } from "../host/version.ts";
 import { spendLine } from "./spend.ts";
 import { attemptsOf, newFailure, waitingRetry } from "./try.ts";
+import { exportStats } from "./export.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROGRAM = path.join(ROOT, "bin", "agent-autoloop.ts");
@@ -30,6 +31,8 @@ const HELP = `Agent 自动化中台
   agent-autoloop resolve <卡片> <结果>   这件事不用决定了，写一句结果
   agent-autoloop doctor                  查哪里没配好
   agent-autoloop check                   检查 rules.json
+  agent-autoloop export [--format csv|json] [--out file]
+                                    تصدير الإحصائيات (جولات، توكنات، تكلفة) إلى CSV أو JSON
   agent-autoloop emit <类型> [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
                                     发一条事件
   agent-autoloop tell <编号> [--task 定时任务名]
@@ -553,6 +556,7 @@ const commands: Record<string, () => unknown> = {
   resolve: () => resolve(args),
   doctor,
   check,
+  export: () => exportStats(args),
   key: () => key(args),
   emit: () => emit(args),
   tell: () => tell(args),
