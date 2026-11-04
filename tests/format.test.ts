@@ -1,7 +1,7 @@
-// When a start has to rebuild the projection from the log. Failure cases: a change to code that only reads, or to anything
-// else that doesn't decide what's stored, makes the next upgrade wait for a rebuild; a change that does decide it (how facts
-// are stored, what's indexed, how card links are derived, the master key) leaves the old projection in use; a change to the
-// read-only views doesn't show until something else brings a rebuild.
+// When a start has to rebuild the projection from the log. Failure cases: a change to code outside the files that decide
+// what's stored makes the next upgrade wait for a rebuild; a change that does decide it (how facts are stored, what's indexed,
+// through a helper or a constant too, how card links are derived, the master key) leaves the old projection in use; a change
+// to the read-only views doesn't show until something else brings a rebuild.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -66,7 +66,6 @@ test("what doesn't decide what's stored can change without a rebuild", () => {
   for (const [file, before, after] of [
     ["host/runtime.ts", "export const ruleNamed", "// a comment\nexport const ruleNamed"],
     ["host/runtime.ts", "const { problem } = reloadRules();", 'const { problem } = reloadRules(); void "other work";'],
-    ["kernel/evolve.ts", "const id = String(key),", 'void "reads differently";\n    const id = String(key),'],
     ["kernel/decide.ts", "const MAX_ATTEMPTS = 10;", "const MAX_ATTEMPTS = 11;"],
     ["kernel/schema.sql", "  usage TEXT\n", "  usage TEXT,\n  extra TEXT\n"],
   ] as const) {
@@ -81,7 +80,22 @@ test("what decides what's stored brings a rebuild", () => {
     ["kernel/evolve.ts", 'due: [["at"]],', 'due: [["at", "kind"]],'],
     ["kernel/evolve.ts", 'if (table === "run_events")', 'if (table === "run_events" && row)'],
     ["kernel/credentials.ts", 'createHmac("sha256", env.secret)', 'createHmac("sha512", env.secret)'],
-    ["host/runtime.ts", "digest(credential(environment", 'digest("other" + credential(environment'],
+    [
+      "kernel/evolve.ts",
+      "const field = (name: string) => `json_extract(data,'$.${name}')`;",
+      "const field = (name: string) => `(data->>'$.${name}')`;",
+    ],
+    [
+      "kernel/evolve.ts",
+      '["events", "runs", "cards", "timers"]',
+      '["events", "runs", "cards", "timers", "deliveries"]',
+    ],
+    [
+      "kernel/credentials.ts",
+      'digest(credential(env, "card", id, at))',
+      'digest("other" + credential(env, "card", id, at))',
+    ],
+    ["host/runtime.ts", "WHERE collection='cards'\"", "WHERE collection='cards' AND 1\""],
   ] as const) {
     assert.notEqual(formatWith(file, before, after), usual, `${file}: ${after}`);
   }
