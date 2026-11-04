@@ -50,6 +50,18 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.match(said({ ...base, state: "decided", answer: "归档" }), /你选了「归档」/);
   assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /不用决定了：问题自己好了/);
   assert.match(said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }), /已处理/);
+  // 通告打开时除了「已处理」，还给一个可以写处理说明的表单。
+  const noticeOpen = JSON.stringify(render({ ...base, kind: "notice", options: [] }).body.elements);
+  assert.ok(noticeOpen.includes('"tag":"form"'), "a notice can take a line of your own");
+  assert.ok(noticeOpen.includes("handling_note_submit_5"), "the submit button carries the card's number");
+  assert.ok(noticeOpen.includes('"name":"note"'), "the form's field has a name, so its words come back");
+  // 结案后那句说明要留在卡面上。
+  assert.match(
+    said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理", answer: "清了 3GB" }),
+    /处理说明：清了 3GB/,
+  );
+  // 说明没写的时候，通告的卡面跟以前一样。
+  assert.ok(!said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }).includes("处理说明"));
 });
 
 test("feishu CLI calls leave the HTTP loop available", async () => {
@@ -197,6 +209,56 @@ esac
   assert.deepEqual(
     calls.filter((c) => c[0] === "answer"),
     [["answer", 5, { choice: 1, by: "ou_me", ref: "om_5" }]],
+  );
+});
+
+test("feishu: a form submit carries the handling note, and the button's name finds its card", async () => {
+  const log = join(dir, "lark-note.log");
+  const lark = join(dir, "lark-cli-note");
+  // 表单提交：action_value 是空的，卡片编号只写在按钮名里，说明在 form_value 里。
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+echo "$*" >> "${log}"
+case "$*" in
+  *"event consume"*)
+    echo '{"action_name":"handling_note_submit_7","action_tag":"button","action_value":"","form_value":"{\\"note\\":\\"已回他，下周发视频\\"}","operator_id":"ou_me","message_id":"om_7"}'
+    echo '{"action_name":"handling_note_submit_7","action_value":"{\\"card\\":7,\\"choice\\":0}","operator_id":"ou_me","message_id":"om_7"}'
+    exec sleep 30 ;;
+  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_7"}}' ;;
+esac
+`,
+  );
+  chmodSync(lark, 0o755);
+  const stop = new AbortController();
+  const cards: (Card | null)[] = [{ ...base, id: 7, kind: "notice", options: [], ref: "om_7" }];
+  const calls: unknown[][] = [];
+  const hub = {
+    async nextCard() {
+      if (cards.length) return { card: cards.shift()! };
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      stop.abort();
+      return { card: null };
+    },
+    async delivered() {
+      return {};
+    },
+    async failed() {
+      return {};
+    },
+    async answer(...args: unknown[]) {
+      calls.push(["answer", ...args]);
+      return { changed: true };
+    },
+  };
+  await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  assert.deepEqual(
+    calls.filter((c) => c[0] === "answer"),
+    [
+      ["answer", 7, { choice: 0, by: "ou_me", ref: "om_7", text: "已回他，下周发视频" }],
+      ["answer", 7, { choice: 0, by: "ou_me", ref: "om_7" }],
+    ],
+    "提交说明和只点已处理都要算数，后者不多送空字段",
   );
 });
 

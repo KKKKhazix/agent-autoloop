@@ -101,9 +101,10 @@ function assignQueued(draft: Draft, run: Row) {
 const threadOf = (run: Row) => ({ rule: run.rule, lane: run.lane, grp: run.grp });
 const hopsOf = (draft: Draft, run: Row) => Math.max(0, ...eventsOf(draft.view, run.id).map((event) => event.hops ?? 0));
 
-function closeCard(draft: Draft, card: Row, result: string, by: string | null = null) {
+function closeCard(draft: Draft, card: Row, result: string, by: string | null = null, note: string | null = null) {
   const closed = { state: "closed", closed_at: draft.at, version: card.version + 1 };
-  put(draft, "cards", card.id, { ...closed, result, by: by ?? card.by });
+  // 结案时若带了处理说明，一并存进 answer：这张通告是谁、怎么处理的，事后能查。
+  put(draft, "cards", card.id, { ...closed, result, by: by ?? card.by, ...(note ? { answer: note } : {}) });
 }
 
 function closeOpen(draft: Draft, matches: (key: string) => boolean, result: string) {
@@ -379,7 +380,11 @@ function answer(draft: Draft, id: number, given: Row) {
   }
   if (card.state !== "open") return { changed: false, state: card.state };
   if (card.kind === "notice") {
-    closeCard(draft, card, "已处理", given.by ?? null);
+    // 通告默认只需"知道了"，但允许顺带写下怎么处理的。说明是可选的：
+    // 不填就等于原来的"已处理"，填了就把这句话作为处理记录留下。
+    if (given.text !== undefined && typeof given.text !== "string") throw new InputError("处理说明要是文字");
+    const note = given.text?.trim().slice(0, 1000) || null;
+    closeCard(draft, card, "已处理", given.by ?? null, note);
     return { changed: true, state: "closed" };
   }
   if (given.text !== undefined && typeof given.text !== "string") throw new InputError("回答要是文字");
