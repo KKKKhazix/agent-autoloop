@@ -88,7 +88,10 @@ export async function waitLive(merged: string, config: Settings, io: DeliveryIO)
 }
 
 async function clearLabels(number: number, pr: any, io: DeliveryIO) {
-  for (const label of ["deliver", "deliver-attended", "deliver-review"]) {
+  // A retry goes by what's left on. A merged PR only goes on to its release while it has `deliver`; an open one with `deliver`
+  // alone is a full delivery, so a review-only one must lose `deliver-review` last or the retry merges it.
+  const order = pr.merged_at ? ["deliver-review", "deliver"] : ["deliver", "deliver-review"];
+  for (const label of ["deliver-attended", ...order]) {
     if (!labels(pr).has(label)) continue;
     try {
       await io.api(`issues/${number}/labels/${label}`, undefined, "DELETE");

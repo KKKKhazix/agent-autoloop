@@ -12,7 +12,8 @@
 // is not followed; right after ready the newest run is still a draft one and stands for the full check; a matrix job never
 // matches the required name, so a passed check waits forever; a PR retargeted during checks is merged into the other branch; a
 // delivery withdrawn during checks leaves its status pending for good; a status write failing right after findings closes the
-// commit to further reviews with nobody told what they found.
+// commit to further reviews with nobody told what they found; labels that only partly come off leave a merged PR stuck as failed
+// with no marker for the retry to go by, or leave a review-only PR looking like a full delivery that the retry then merges.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deliver, fullCheck, waitLive, disableAuto, type DeliveryIO } from "../plugins/delivery/delivery.ts";
@@ -420,6 +421,44 @@ test("label removal reads back a lost response and does not report a false deliv
     return before(...args);
   };
   await assert.rejects(() => deliver("example/app", 1, second.io), /permission denied/);
+});
+/** Labels really come off here, except that one of them fails the first time. */
+function labelFailsOnce(io: DeliveryIO, state: any, failing: string) {
+  const { api } = io;
+  let failed = false;
+  io.api = async (path, body, method) => {
+    const label = /^issues\/1\/labels\/(.+)$/.exec(path)?.[1];
+    if (!label) return api(path, body, method);
+    if (label === failing && !failed) {
+      failed = true;
+      throw new Error("HTTP 502");
+    }
+    state.pr.labels = state.pr.labels.filter((item: any) => item.name !== label);
+    return {};
+  };
+}
+test("a merged PR whose labels only partly came off finishes on the retry", async () => {
+  for (const failing of ["deliver-attended", "deliver-review", "deliver"]) {
+    const { io, state } = fixture();
+    state.pr.labels.push({ name: "deliver-attended" }, { name: "deliver-review" });
+    Object.assign(state.pr, { state: "closed", merged_at: "before", merge_commit_sha: "merged" });
+    labelFailsOnce(io, state, failing);
+    await assert.rejects(() => deliver("example/app", 1, io), /HTTP 502/);
+    assert.equal((await deliver("example/app", 1, io)).merged, "merged");
+    assert.equal(latest(state, "delivery").state, "success");
+    assert.deepEqual(state.pr.labels, []);
+  }
+});
+test("a review-only PR whose labels only partly came off is never merged by the retry", async () => {
+  for (const failing of ["deliver-attended", "deliver-review", "deliver"]) {
+    const { io, state } = fixture();
+    state.pr.labels.push({ name: "deliver-attended" }, { name: "deliver-review" });
+    labelFailsOnce(io, state, failing);
+    await assert.rejects(() => deliver("example/app", 1, io), /HTTP 502/);
+    await deliver("example/app", 1, io);
+    assert.equal(state.merges, 0);
+    assert.ok(!state.statuses.some((s: any) => s.context === "my-review"));
+  }
 });
 test("a different client merging during checks is followed without a second merge call", async () => {
   const { io, state } = fixture();
