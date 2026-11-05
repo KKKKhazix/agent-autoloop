@@ -1,5 +1,6 @@
 // Failure modes: explain prints a rule's private prompt; a dry run writes to the hub instead of previewing; the
-// preview ignores another rule for the same event; a bad subcommand is accepted silently.
+// preview ignores another rule for the same event; a bad subcommand is accepted silently; a dry run with another source's key
+// previews this machine's source instead.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -50,4 +51,5 @@ test("the commands read the local rules file and refuse an unknown subcommand", 
   assert.match(preview, /预演/);
   assert.match(preview, /意见 → a1/);
   await assert.rejects(cli("rules", "nope"), /用法/);
+  await assert.rejects(cli("emit", "feedback.new", "--dry-run", "--key", "another-source"), /--key/);
 });

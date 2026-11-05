@@ -501,6 +501,8 @@ async function emit(args: string[]) {
     ...(text(named.link) && { link: text(named.link) }),
   };
   if (named["dry-run"] !== undefined) {
+    // The hub tells a source by its key, and only the key's own source is known here.
+    if (text(named.key)) return fail("--dry-run 按这台电脑的来源预演，不能和 --key 一起用");
     if (!config.source) return fail("这台电脑上没有来源的密钥：--dry-run 需要知道来源名");
     const { previewEvent } = await import("./explain.ts");
     console.log("预演（按本机 rules.json，不连接中台、不写日志）：");
