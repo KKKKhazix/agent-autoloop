@@ -1,120 +1,187 @@
-// Failure modes: a backup taken from a database in use is inconsistent; a restore leaves the old WAL beside the new
-// database; a broken master.key is restored; a failed restore loses what it replaced; restoring runs with the hub up.
+// Failure modes: a backup or its check fails on a real hub's database, whose indexes call functions only the hub has; a backup
+// taken while the hub runs misses what's in the WAL; a restore leaves the old WAL beside the new database, or drops what's only
+// in the WAL of the folder it reads; a broken master.key or database is restored; a failed restore loses what it replaced, its
+// WAL included; restoring runs with the hub up; a restore runs without being confirmed.
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
-import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { setup } from "./helpers.ts";
+import { after, test } from "node:test";
+import { promisify } from "node:util";
+import { at, setup } from "./helpers.ts";
 
 const home = setup("backup");
-// Imported after setup: the module reads AGENT_AUTOLOOP_HOME when it loads, for the "is the hub running?" check.
+const hub = await import("../host/runtime.ts");
 const { backup, restore } = await import("../cli/backup.ts");
-const dbFile = join(home, "hub.db");
-const keyFile = join(home, "master.key");
-const key = "k".repeat(43);
-const mode = (file: string) => statSync(file).mode & 0o777;
-const cli = async (...args: string[]) =>
-  (
-    await promisify(execFile)(
-      process.execPath,
-      ["--disable-warning=ExperimentalWarning", join(import.meta.dirname, "../bin/agent-autoloop.ts"), ...args],
-      { env: { ...process.env } },
-    )
-  ).stdout;
 
-function makeHome() {
-  const db = new DatabaseSync(dbFile);
-  db.exec(
-    "CREATE TABLE IF NOT EXISTS facts(seq INTEGER PRIMARY KEY, fact TEXT NOT NULL); DELETE FROM facts; INSERT INTO facts VALUES (1, 'one');",
-  );
-  db.close();
-  writeFileSync(keyFile, `${key}\n`, { mode: 0o600 });
-  writeFileSync(join(home, "config.json"), '{"url":"http://127.0.0.1:1"}', { mode: 0o600 });
-  writeFileSync(join(home, "rules.json"), '{"sources":{},"agents":{},"rules":[]}');
+const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-backup-"));
+after(() => {
+  hub.db.close();
+  rmSync(scratch, { recursive: true, force: true });
+});
+let folders = 0;
+const folder = () => {
+  const made = join(scratch, `folder-${++folders}`);
+  mkdirSync(made);
+  return made;
+};
+const nobodyUp = () => null;
+const mode = (file: string) => statSync(file).mode & 0o777;
+const rows = (file: string) => {
+  const db = new DatabaseSync(file);
+  try {
+    return db.prepare("SELECT COUNT(*) AS n FROM facts").get()!.n;
+  } finally {
+    db.close();
+  }
+};
+const key = "k".repeat(43);
+
+/** A database with one row in its file and another only in its WAL, as a hub that was killed leaves it. */
+function withWal(into: string) {
+  const live = new DatabaseSync(join(scratch, `live-${++folders}.db`));
+  live.exec("PRAGMA journal_mode=WAL; CREATE TABLE facts(seq INTEGER PRIMARY KEY); INSERT INTO facts VALUES (1);");
+  live.exec("PRAGMA wal_checkpoint(TRUNCATE); INSERT INTO facts VALUES (2);");
+  const name = live.location()!;
+  copyFileSync(name, join(into, "hub.db"));
+  copyFileSync(`${name}-wal`, join(into, "hub.db-wal"));
+  live.close();
+  writeFileSync(join(into, "master.key"), `${key}\n`, { mode: 0o600 });
 }
 
-test("a backup holds a consistent database and the files that make this machine", () => {
-  makeHome();
-  const target = join(home, "snap-one");
-  const { files } = backup(home, target);
-  assert.deepEqual(files.sort(), ["config.json", "hub.db", "master.key", "rules.json"].sort());
+test("a real hub's data, backed up while it runs, comes back whole under its own key", async () => {
+  hub.ingest("app", { id: "1", type: "feedback.new", subject: "#1" }, at(0));
+  const target = join(folder(), "snapshot");
+  const { files } = await backup(home, target);
+  assert.ok(files.includes("hub.db") && files.includes("master.key"), files.join());
   assert.equal(mode(join(target, "hub.db")), 0o600);
   assert.equal(mode(join(target, "master.key")), 0o600);
-  const backupDb = new DatabaseSync(join(target, "hub.db"));
-  try {
-    assert.equal(backupDb.prepare("SELECT fact FROM facts WHERE seq=1").get()!.fact, "one");
-  } finally {
-    backupDb.close();
-  }
+  const { n } = hub.one<{ n: number }>("SELECT COUNT(*) AS n FROM facts")!;
+  assert.ok(n > 0);
+  assert.equal(rows(join(target, "hub.db")), n);
+  await assert.rejects(backup(home, target), /不是空的/);
+
+  const other = folder();
+  await restore(other, target, nobodyUp);
+  assert.equal(readFileSync(join(other, "master.key"), "utf8"), readFileSync(join(home, "master.key"), "utf8"));
+  // Started on the restored files, as the hub would be: it opens, and it knows what the first one knew.
+  const started = spawnSync(
+    process.execPath,
+    [
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `const hub = await import(${JSON.stringify(join(import.meta.dirname, "../host/runtime.ts"))});
+       console.log(JSON.stringify(hub.stateOf().runs.map((run) => run.id)));`,
+    ],
+    { env: { ...process.env, AGENT_AUTOLOOP_HOME: other }, encoding: "utf8" },
+  );
+  assert.equal(started.status, 0, started.stderr);
+  assert.deepEqual(
+    JSON.parse(started.stdout),
+    hub.stateOf().runs.map((run: { id: number }) => run.id),
+  );
+});
+
+test("a restore keeps what it replaced, and the old WAL doesn't stay beside the new database", async () => {
+  const source = folder();
+  withWal(source);
+  const target = folder();
+  withWal(target);
+  writeFileSync(join(target, "config.json"), "{}");
+  const backedUp = join(folder(), "snapshot");
+  await backup(source, backedUp);
+  rmSync(join(target, "master.key"));
+  writeFileSync(join(target, "master.key"), `${"z".repeat(43)}\n`);
+  const { safety } = await restore(target, backedUp, nobodyUp);
+  assert.ok(!existsSync(join(target, "hub.db-wal")));
+  assert.equal(rows(join(target, "hub.db")), 2);
   assert.equal(readFileSync(join(target, "master.key"), "utf8").trim(), key);
-  assert.throws(() => backup(home, target), /不是空的/);
+  assert.equal(mode(join(target, "hub.db")), 0o600);
+  assert.equal(readFileSync(join(target, "config.json"), "utf8"), "{}", "what the backup doesn't have stays");
+  assert.equal(rows(join(safety, "hub.db")), 2, "what it replaced is kept, WAL and all");
 });
 
-test("a restore puts the backup back and keeps what it replaced", () => {
-  makeHome();
-  const target = join(home, "snap-two");
-  backup(home, target);
-  const live = new DatabaseSync(dbFile);
-  live.exec("DELETE FROM facts");
-  live.close();
-  writeFileSync(keyFile, `${"z".repeat(43)}\n`, { mode: 0o600 });
-  // A WAL that belonged to the file being replaced must not be applied to the restored one.
-  writeFileSync(join(home, "hub.db-wal"), "stale");
-  const { safety } = restore(home, target);
-  assert.ok(existsSync(safety));
-  assert.ok(!existsSync(join(home, "hub.db-wal")));
-  const restored = new DatabaseSync(dbFile);
-  try {
-    assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM facts").get()!.n, 1);
-  } finally {
-    restored.close();
-  }
-  assert.equal(readFileSync(keyFile, "utf8").trim(), key);
-  assert.ok(existsSync(join(safety, "hub.db")), "what it replaced is kept");
+test("a folder with a WAL beside its database restores what's only in the WAL", async () => {
+  const source = folder();
+  withWal(source);
+  const target = folder();
+  await restore(target, source, nobodyUp);
+  assert.equal(rows(join(target, "hub.db")), 2);
 });
 
-test("a restore refuses a backup whose key or database is broken", () => {
-  makeHome();
-  const bad = join(home, "bad-backup");
-  mkdirSync(bad);
-  copyFileSync(dbFile, join(bad, "hub.db"));
-  writeFileSync(join(bad, "master.key"), "short");
-  assert.throws(() => restore(home, bad), /master\.key 坏了/);
+test("a restore that fails halfway puts everything back, the WAL with its database", async () => {
+  const target = folder();
+  withWal(target);
+  writeFileSync(join(target, "config.json"), "mine");
+  const source = folder();
+  withWal(source);
+  mkdirSync(join(source, "config.json"));
+  await assert.rejects(restore(target, source, nobodyUp));
+  assert.ok(existsSync(join(target, "hub.db-wal")));
+  assert.equal(rows(join(target, "hub.db")), 2);
+  assert.equal(readFileSync(join(target, "config.json"), "utf8"), "mine");
+  assert.deepEqual(
+    readdirSync(target).filter((name) => name.startsWith("restore-before-")),
+    [],
+  );
 });
 
-test("restoring refuses while the hub is up", () => {
-  makeHome();
-  const target = join(home, "snap-run");
-  backup(home, target);
-  // `ps` is not available in every test sandbox, so the check goes through the same seam the CLI does.
-  assert.throws(() => restore(home, target, () => 12345), /中台还在跑/);
-  assert.ok(existsSync(join(home, "hub.db")));
+test("a restore refuses a backup whose key or database is broken, and a hub that's up", async () => {
+  const brokenKey = folder();
+  withWal(brokenKey);
+  writeFileSync(join(brokenKey, "master.key"), "short");
+  const target = folder();
+  await assert.rejects(restore(target, brokenKey, nobodyUp), /master\.key 坏了/);
+
+  const brokenDatabase = folder();
+  writeFileSync(join(brokenDatabase, "hub.db"), "this isn't a database, not even close to one".repeat(100));
+  writeFileSync(join(brokenDatabase, "master.key"), key);
+  await assert.rejects(restore(target, brokenDatabase, nobodyUp), /读不出来/);
+
+  const good = folder();
+  withWal(good);
+  await assert.rejects(
+    restore(target, good, () => 12345),
+    /中台还在跑/,
+  );
+  assert.deepEqual(readdirSync(target), [], "nothing was touched");
 });
 
-test("the command writes a backup where it is told, and refuses a folder that isn't empty", async () => {
-  makeHome();
-  const target = join(home, "cli-snap");
-  assert.match(await cli("backup", target), /备份好了/);
+test("the commands write where they're told and ask before replacing anything", async () => {
+  const machine = folder();
+  await restore(machine, await backupOfHub(), nobodyUp);
+  const cli = (...args: string[]) =>
+    promisify(execFile)(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", join(import.meta.dirname, "../bin/agent-autoloop.ts"), ...args],
+      { env: { ...process.env, AGENT_AUTOLOOP_HOME: machine } },
+    );
+  const target = join(folder(), "snapshot");
+  assert.match((await cli("backup", target)).stdout, /备份好了/);
   assert.ok(existsSync(join(target, "hub.db")));
   await assert.rejects(cli("backup", target), /不是空的/);
+  await assert.rejects(cli("backup", "--wat"), /不认识的参数/);
+
+  await assert.rejects(cli("restore", target), /--yes/);
+  await assert.rejects(cli("restore"), /用法/);
+  assert.match((await cli("restore", target, "--yes")).stdout, /恢复好了/);
 });
 
-test("restore takes --yes before or after the folder", async () => {
-  makeHome();
-  const target = join(home, "cli-restore");
-  await cli("backup", target);
-  const live = new DatabaseSync(dbFile);
-  live.exec("DELETE FROM facts");
-  live.close();
-  // `--yes` first: the folder is its value, not a position after the flag.
-  assert.match(await cli("restore", "--yes", target), /恢复好了/);
-  const restored = new DatabaseSync(dbFile);
-  try {
-    assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM facts").get()!.n, 1);
-  } finally {
-    restored.close();
-  }
-});
+async function backupOfHub() {
+  const target = join(folder(), "snapshot");
+  await backup(home, target);
+  return target;
+}
