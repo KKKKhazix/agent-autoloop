@@ -23,6 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { upIdentity } from "../host/service.ts";
 
 const repo = join(import.meta.dirname, "..");
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-autoloop-uninstall-")));
@@ -168,24 +169,68 @@ test("at a terminal only confirming removes the program, and every answer preser
   }
 });
 
-test("a hub started by hand is stopped too; a process that only has the old number isn't", async () => {
-  const it = install();
-  const asIfUp = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "agent-autoloop", "up"], {
+const asIfUp = () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "agent-autoloop", "up"], {
     stdio: "ignore",
   });
-  children.push(asIfUp);
-  writeFileSync(join(it.hub, "up.pid"), String(asIfUp.pid));
-  const stopped = new Promise((resolve) => asIfUp.on("exit", resolve));
+  children.push(child);
+  return child;
+};
+
+const pidOf = (child: ChildProcess) => {
+  assert.notEqual(child.pid, undefined);
+  return child.pid!;
+};
+
+test("a hub started by hand is stopped only while its saved identity still matches", async () => {
+  const it = install();
+  const running = asIfUp();
+  writeFileSync(join(it.hub, "up.pid"), JSON.stringify(upIdentity(pidOf(running))));
+  const stopped = new Promise((resolve) => running.on("exit", resolve));
   assert.equal(it.run(["uninstall", "--yes"]).status, 0);
   await stopped;
 
+  const reused = install();
+  const replacement = asIfUp();
+  const identity = upIdentity(pidOf(replacement));
+  writeFileSync(join(reused.hub, "up.pid"), JSON.stringify({ ...identity, started: "not this process" }));
+  assert.equal(reused.run(["uninstall", "--yes"]).status, 0);
+  assert.equal(replacement.exitCode, null);
+  assert.equal(replacement.signalCode, null);
+});
+
+test("a matching PID without a complete identity is never sent a signal", () => {
   const other = install();
   const someoneElse = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
   children.push(someoneElse);
-  writeFileSync(join(other.hub, "up.pid"), String(someoneElse.pid));
+  writeFileSync(join(other.hub, "up.pid"), JSON.stringify(upIdentity(pidOf(someoneElse))));
   assert.equal(other.run(["uninstall", "--yes"]).status, 0);
   assert.equal(someoneElse.exitCode, null);
   assert.equal(someoneElse.signalCode, null);
+
+  const legacy = install();
+  const oldUp = asIfUp();
+  writeFileSync(join(legacy.hub, "up.pid"), String(pidOf(oldUp)));
+  const checked = spawnSync(
+    process.execPath,
+    [
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `const { runningUp } = await import(${JSON.stringify(join(legacy.app, "host", "service.ts"))});
+       console.log(runningUp());`,
+    ],
+    { env: legacy.env, encoding: "utf8" },
+  );
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(checked.stdout.trim(), String(oldUp.pid));
+  assert.equal(legacy.run(["uninstall", "--yes"]).status, 0);
+  assert.equal(oldUp.exitCode, null);
+  assert.equal(oldUp.signalCode, null);
+
+  const broken = install();
+  writeFileSync(join(broken.hub, "up.pid"), "{not json");
+  assert.equal(broken.run(["uninstall", "--yes"]).status, 0);
 });
 
 test("AGENT_AUTOLOOP_HOME can name anything: a folder this program didn't make, or the user's home, isn't deleted", () => {
