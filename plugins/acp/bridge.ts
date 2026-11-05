@@ -68,7 +68,17 @@ export async function bridge(turn: Turn) {
   child.on("exit", (code) => fail(new Error(`ACP 在交回结果前退出：${code}`)));
   child.stdin.on("error", fail);
 
+  const toolCalls = new Map<string, object>();
+  /** All that's been said of a tool call. A message may give only its id; a field left out or null changes nothing. */
+  const toolCall = (said: any) => {
+    const fields = Object.entries(said ?? {}).filter(([, value]) => value !== null && value !== undefined);
+    const known = { ...toolCalls.get(said?.toolCallId), ...Object.fromEntries(fields) };
+    if (said?.toolCallId) toolCalls.set(said.toolCallId, known);
+    return known;
+  };
+
   const onUpdate = (update: any) => {
+    if (["tool_call", "tool_call_update"].includes(update.sessionUpdate)) toolCall(update);
     if (update.sessionUpdate === "agent_message_chunk" && update.content?.type === "text") {
       if (boundary || (update.messageId && update.messageId !== message)) text = "";
       message = update.messageId;
@@ -85,7 +95,7 @@ export async function bridge(turn: Turn) {
     } else if (incoming.method && incoming.id !== undefined) {
       const { id, method, params } = incoming;
       if (method === "session/request_permission" && params?.sessionId === session) {
-        send({ id, result: { outcome: permission(turn, params) } });
+        send({ id, result: { outcome: permission(turn, { ...params, toolCall: toolCall(params.toolCall) }) } });
       } else send({ id, error: { code: -32601, message: "不支持这个方法" } });
     } else if (pending.has(incoming.id)) {
       const request = pending.get(incoming.id)!;

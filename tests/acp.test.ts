@@ -7,7 +7,8 @@
 // session or can't go on in any isn't let go to a new one; an agent that only has session/resume is told session/load.
 // A U+2028 or U+2029 in anything the agent says, which JSON leaves as it is, cuts the line and ends the turn.
 // With edit access, a link in the folder that goes nowhere, or through such a link, passes for a new file inside it, and
-// writing through it lands outside.
+// writing through it lands outside. A permission request that gives only the tool call's id is judged as if it had no kind;
+// what an earlier message said of the call hides what this one says, or a field left empty wipes what was known.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "node:fs";
@@ -245,6 +246,110 @@ test("ACP doesn't take a link that goes nowhere for a new file in the folder", (
   assert.equal(edit(join(work, "new-folder", "new-file.txt")), "once", "in a new folder too");
   assert.equal(edit(join(work, "dangling"), "full"), "once", "full doesn't look at paths");
 });
+test("ACP judges a permission on all that's been said of the tool call, the request's own fields first", async () => {
+  const inside = join(home, "inside.txt");
+  const outside = join(tmpdir(), "outside.txt");
+  const call = (toolCallId: string, fields: object) => ({ sessionUpdate: "tool_call", toolCallId, title: "工具", ...fields });
+  const change = (toolCallId: string, fields: object) => ({ sessionUpdate: "tool_call_update", toolCallId, ...fields });
+  const location = (path: string) => ({ locations: [{ path }] });
+  for (const [why, access, updates, request, expected] of [
+    ["only the id", "read", [call("t", { kind: "read" })], { toolCallId: "t" }, "allow"],
+    ["kind from a search", "read", [call("t", { kind: "search" })], { toolCallId: "t" }, "allow"],
+    ["execute stays execute", "read", [call("t", { kind: "execute" })], { toolCallId: "t" }, "reject"],
+    ["another call's kind", "read", [call("t", { kind: "read" })], { toolCallId: "other" }, "reject"],
+    ["edit inside", "edit", [call("t", { kind: "edit", ...location(inside) })], { toolCallId: "t" }, "allow"],
+    ["edit outside", "edit", [call("t", { kind: "edit", ...location(outside) })], { toolCallId: "t" }, "reject"],
+    [
+      "kind and place in two messages",
+      "edit",
+      [call("t", { kind: "edit" }), change("t", location(inside))],
+      { toolCallId: "t" },
+      "allow",
+    ],
+    [
+      "an update moves it out",
+      "edit",
+      [call("t", { kind: "edit", ...location(inside) }), change("t", location(outside))],
+      { toolCallId: "t" },
+      "reject",
+    ],
+    [
+      "an update changes the kind",
+      "read",
+      [call("t", { kind: "read" }), change("t", { kind: "execute" })],
+      { toolCallId: "t" },
+      "reject",
+    ],
+    [
+      "the request's own kind first",
+      "read",
+      [call("t", { kind: "read" })],
+      { toolCallId: "t", kind: "execute" },
+      "reject",
+    ],
+    [
+      "the request's own place first",
+      "edit",
+      [call("t", { kind: "edit", ...location(inside) })],
+      { toolCallId: "t", ...location(outside) },
+      "reject",
+    ],
+    [
+      "empty fields change nothing",
+      "edit",
+      [call("t", { kind: "edit", ...location(inside) }), change("t", { kind: null, locations: null })],
+      { toolCallId: "t", kind: null, locations: null },
+      "allow",
+    ],
+    ["nothing known", "read", [], { toolCallId: "t" }, "reject"],
+  ] as const) {
+    const result = await launch(
+      `permission-${why.replaceAll(/\W/g, "-")}`,
+      `on['session/prompt'] = async (m) => {
+        for (const change of ${JSON.stringify(updates)}) update(change);
+        const { outcome } = await ask(${JSON.stringify(request)});
+        say(outcome.optionId);
+        send({ id: m.id, result: { stopReason: 'end_turn' } });
+      };`,
+      null,
+      undefined,
+      access,
+    );
+    assert.equal(result.code, 0, result.err);
+    assert.equal(acp.read(result.out, result.code, result.err).text, expected, why);
+  }
+});
+
+test("ACP remembers what a permission request itself said of the tool call", async () => {
+  const result = await launch(
+    "permission-twice",
+    `on['session/prompt'] = async (m) => {
+      const first = await ask({ toolCallId: 't', kind: 'read' });
+      const second = await ask({ toolCallId: 't' });
+      say(first.outcome.optionId + ' ' + second.outcome.optionId);
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+    };`,
+  );
+  assert.equal(acp.read(result.out, result.code, result.err).text, "allow allow");
+});
+
+test("ACP doesn't count tool calls from the history it's loading as this turn's", async () => {
+  const result = await launch(
+    "permission-history",
+    `on['session/load'] = (m) => {
+      update({ sessionUpdate: 'tool_call', toolCallId: 'old', title: '旧的', kind: 'read' });
+      send({ id: m.id, result: {} });
+    };
+    on['session/prompt'] = async (m) => {
+      const { outcome } = await ask({ toolCallId: 'old' });
+      say(outcome.optionId);
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+    };`,
+    "agent-session",
+  );
+  assert.equal(acp.read(result.out, result.code, result.err).text, "reject");
+});
+
 test("ACP refuses incompatible versions and premature process exit", async () => {
   const original = await import("node:fs").then((fs) => fs.readFileSync(fake, "utf8"));
   try {
