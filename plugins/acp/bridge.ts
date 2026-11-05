@@ -1,7 +1,7 @@
 // A turn run over the Agent Client Protocol: a process of its own that talks to the ACP agent on stdio and prints what
 // the worker's adapter reads, one JSON object per line.
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { eachLine } from "../../host/lines.ts";
 import { versionName } from "../../host/version.ts";
@@ -10,16 +10,33 @@ import type { Turn } from "../../worker/agents.ts";
 /** The agent answered with an error, as opposed to going away or saying nothing. */
 class Refused extends Error {}
 
-function resolved(file: string): string {
+const isLink = (file: string) => {
+  try {
+    return lstatSync(file).isSymbolicLink();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Where a path really is, though it may not be there yet; null if it goes through a link with nothing at the end of it.
+ * Writing through one creates what it points at, so it can't count as a new file where the link is.
+ */
+function resolved(file: string): string | null {
   if (existsSync(file)) return realpathSync(file);
-  return resolve(resolved(dirname(file)), basename(file));
+  const folder = resolved(dirname(file));
+  if (folder === null) return null;
+  const path = resolve(folder, basename(file));
+  return isLink(path) ? null : path;
 }
 
 export function permission(turn: Pick<Turn, "access" | "cwd">, params: any) {
   const tool = params.toolCall ?? {};
   const inside = (location: any) => {
     if (typeof location.path !== "string" || !isAbsolute(location.path)) return false;
-    const path = relative(realpathSync(turn.cwd), resolved(location.path));
+    const target = resolved(location.path);
+    if (target === null) return false;
+    const path = relative(realpathSync(turn.cwd), target);
     return path !== ".." && !path.startsWith("../") && !isAbsolute(path);
   };
   const editsInside =

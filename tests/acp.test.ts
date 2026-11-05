@@ -6,6 +6,8 @@
 // off) is taken for a session that can't be gone on in, so the work is done again in a new one; an agent that refuses the
 // session or can't go on in any isn't let go to a new one; an agent that only has session/resume is told session/load.
 // A U+2028 or U+2029 in anything the agent says, which JSON leaves as it is, cuts the line and ends the turn.
+// With edit access, a link in the folder that goes nowhere, or through such a link, passes for a new file inside it, and
+// writing through it lands outside.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "node:fs";
@@ -201,6 +203,47 @@ test("ACP chooses only a one-time permission and respects structured kinds and r
   );
   assert.equal(ask("edit", { kind: "other" }).optionId, "no");
   assert.equal(ask("full", { kind: "other" }).optionId, "once");
+});
+
+test("ACP doesn't take a link that goes nowhere for a new file in the folder", () => {
+  const options = [
+    { optionId: "once", kind: "allow_once" },
+    { optionId: "no", kind: "reject_once" },
+  ];
+  const work = join(home, "links");
+  const outside = join(home, "outside");
+  mkdirSync(work);
+  mkdirSync(outside);
+  const edit = (path: string, access = "edit") =>
+    permission({ access, cwd: work } as any, { options, toolCall: { kind: "edit", locations: [{ path }] } }).optionId;
+  symlinkSync(join(outside, "not-there"), join(work, "dangling"));
+  symlinkSync(join(outside, "no-such-dir"), join(work, "dangling-dir"));
+  symlinkSync(join(work, "dangling"), join(work, "link-to-dangling"));
+  symlinkSync(join(work, "link-to-dangling"), join(work, "link-to-link"));
+  symlinkSync("../outside/relative", join(work, "relative-dangling"));
+  symlinkSync(join(work, "loop-b"), join(work, "loop-a"));
+  symlinkSync(join(work, "loop-a"), join(work, "loop-b"));
+  mkdirSync(join(work, "real"));
+  symlinkSync(join(outside, "not-there"), join(work, "real", "deep"));
+  for (const path of [
+    "dangling",
+    "dangling-dir/new.txt",
+    "dangling-dir/new/deeper.txt",
+    "link-to-dangling",
+    "link-to-link",
+    "relative-dangling",
+    "loop-a",
+    "loop-a/new.txt",
+    "real/deep",
+    "new-folder/../dangling",
+  ]) {
+    assert.equal(edit(join(work, path)), "no", path);
+    assert.equal(edit(`${work}/${path}`), "no", `${path}, not normalised`);
+  }
+  assert.equal(edit(`${work}/dangling/../inside.txt`), "no", "the path goes through it");
+  assert.equal(edit(join(work, "real", "new-file.txt")), "once", "a new file is still fine");
+  assert.equal(edit(join(work, "new-folder", "new-file.txt")), "once", "in a new folder too");
+  assert.equal(edit(join(work, "dangling"), "full"), "once", "full doesn't look at paths");
 });
 test("ACP refuses incompatible versions and premature process exit", async () => {
   const original = await import("node:fs").then((fs) => fs.readFileSync(fake, "utf8"));
