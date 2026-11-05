@@ -6,6 +6,7 @@ import { homedir, hostname } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { hubClient } from "../protocol/client.ts";
+import { parseRules } from "../protocol/rules.ts";
 import { CONFIG_FILE, readConfig, writeConfig, type Config } from "../host/config.ts";
 import { HOME, RULES_FILE } from "../host/home.ts";
 import { installService, removeService, restartService, serviceRunning, systemUnit } from "../host/service.ts";
@@ -30,7 +31,7 @@ const HELP = `Agent 自动化中台
                                     回答一张卡片；通知不用写序号
   agent-autoloop resolve <卡片> <结果>   这件事不用决定了，写一句结果
   agent-autoloop doctor                  查哪里没配好
-  agent-autoloop check                   检查 rules.json
+  agent-autoloop check [文件]            检查规则文件，不碰中台；不写文件就查 rules.json
   agent-autoloop rules explain           按本机 rules.json 说明生效的规则、Agent、通道和下次定时
   agent-autoloop emit <类型> [--dry-run] [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
                                     发一条事件；--dry-run 只预演会派给谁，不连接中台
@@ -471,9 +472,8 @@ async function doctor() {
   if (!existsSync(CONFIG_FILE)) return say(false, "还没装好：运行 agent-autoloop init");
   const config = readConfig();
   if (config.hub) {
-    const { parseRules } = await importRules();
     try {
-      const { channels } = parseRules(readFileSync(RULES_FILE, "utf8"));
+      const { channels } = checkRulesFile(RULES_FILE);
       say(true, `规则 ${RULES_FILE}`);
       for (const [id, channel] of Object.entries(channels)) {
         // Nobody answers from a desktop notification, and a link goes only to whoever it's sent to.
@@ -525,20 +525,21 @@ async function doctor() {
   if (bad) process.exit(1);
 }
 
-/** The rules module reads the rules file as it loads; the checks here need to survive a bad one. */
-async function importRules() {
+/** Only reads the file: checking a draft must not open the hub's database or load the draft into it. */
+function checkRulesFile(file: string) {
+  let json: string;
   try {
-    return await import("../host/runtime.ts");
+    json = readFileSync(file, "utf8");
   } catch (error) {
-    fail((error as Error).message);
-    throw error;
+    throw new Error(`读不到 ${file}：${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`);
   }
+  return parseRules(json, Date.now(), Intl.DateTimeFormat().resolvedOptions().timeZone);
 }
 
-async function check() {
-  const { parseRules } = await importRules();
-  parseRules(readFileSync(RULES_FILE, "utf8"));
-  console.log("规则没问题。");
+function check(args: string[]) {
+  const file = path.resolve(args[0] ?? RULES_FILE);
+  checkRulesFile(file);
+  console.log(`规则没问题：${file}`);
 }
 
 async function key(args: string[]) {
@@ -736,7 +737,7 @@ const commands: Record<string, () => unknown> = {
   answer: () => answer(args),
   resolve: () => resolve(args),
   doctor,
-  check,
+  check: () => check(args),
   rules: () => rulesCommand(args),
   key: () => key(args),
   emit: () => emit(args),
