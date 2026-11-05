@@ -13,6 +13,8 @@ export class RulesError extends Error {
 }
 
 const ACCESS = ["read", "edit", "full"];
+/** The plugins that only start what `command` says, so they can't run without it. */
+const RUN_A_COMMAND = ["command", "acp"];
 const TELLS = ["always", "needed", "never"];
 const ID = /^[a-z][a-z0-9-]*$/;
 const TYPE_PATTERN = /^(\*|[a-z][a-z0-9_.-]{0,63}(\.\*)?)$/;
@@ -155,7 +157,7 @@ export function parseRules(json: string, now: number, timezone: string): Rules {
       ["model", isText, NOT_EMPTY, true],
       ["effort", isText, NOT_EMPTY, true],
       ["access", (value) => ACCESS.includes(value as string), `只能是 ${ACCESS.join("、")}`, true],
-      ["command", isSomeWords, "要是命令行的列表", !isObject(agent) || agent.use !== "command"],
+      ["command", isSomeWords, "要是命令行的列表", !isObject(agent) || !RUN_A_COMMAND.includes(agent.use as string)],
       ["timeout", isCount, "要是正整数（分钟）", true],
     ]);
     if (isObject(agent)) agent.access ??= "edit";
