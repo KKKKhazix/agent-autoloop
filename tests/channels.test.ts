@@ -3,7 +3,8 @@
 // isn't reported; a click that isn't a card's is taken; a card's options don't show while it's open or still show after;
 // the listener dying isn't started again, or a listener that can't start takes the whole hub down. A GitHub webhook with
 // a bad signature, or with none, is taken; what isn't an identifier reaches the subject; a ping makes an event;
-// replacement tokens in card text rewrite a webhook template.
+// replacement tokens in card text rewrite a webhook template. A settled card Feishu won't let the bot change stays at the
+// version before the answer; an open one is sent again with buttons that don't count.
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
@@ -357,12 +358,11 @@ test("GitHub: signed or not taken, and what it says becomes a plain event", () =
   );
 });
 
-test("feishu: a card that can't be patched is sent again, not lost", async () => {
-  // Failure this guards: the bot didn't send the message being updated, so Feishu refuses the patch and the update is
-  // dropped once the tries run out. The reader is then stuck looking at the version before the answer. Sending the
-  // newer words as a new message costs a second card, which is the cheaper of the two.
+/** A Feishu channel handed these cards, with a lark-cli that refuses every update: what it ran, and what it told the hub. */
+async function refusedUpdates(given: Card[]) {
   const log = join(dir, "lark-patch.log");
   const lark = join(dir, "lark-patch");
+  rmSync(log, { force: true });
   writeFileSync(
     lark,
     `#!/bin/sh
@@ -376,7 +376,7 @@ esac
   );
   chmodSync(lark, 0o755);
   const stop = new AbortController();
-  const cards: (Card | null)[] = [{ ...base, version: 2, ref: "om_old", state: "decided", choice: 1 }];
+  const cards: Card[] = [...given];
   const calls: unknown[][] = [];
   const hub = {
     async nextCard() {
@@ -388,8 +388,8 @@ esac
       calls.push(["delivered", ...args]);
       return {};
     },
-    async failed(...args: unknown[]) {
-      calls.push(["failed", ...args]);
+    async failed(id: number, version: number) {
+      calls.push(["failed", id, version]);
       return {};
     },
     async answer(...args: unknown[]) {
@@ -398,16 +398,32 @@ esac
     },
   };
   await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
-  const lines = readFileSync(log, "utf8").trim().split("\n");
+  return { lines: readFileSync(log, "utf8").trim().split("\n"), calls };
+}
+
+test("feishu: a settled card that can't be updated is sent again, once for each version", async () => {
+  // Failure this guards: the bot didn't send the message being updated, so Feishu refuses and the update is dropped once the
+  // tries run out. The reader is then stuck looking at the version before the answer.
+  const { lines, calls } = await refusedUpdates([{ ...base, version: 2, ref: "om_old", state: "decided", choice: 1 }]);
   assert.ok(
     lines.some((l) => l.includes("messages patch --message-id om_old")),
     "the message that was sent is tried first",
   );
   const sends = lines.filter((l) => l.includes("+messages-send"));
-  assert.equal(sends.length, 1, "a refused patch falls back to a new message");
-  assert.ok(
-    sends[0].includes("--idempotency-key agent-autoloop-card-5-v2"),
-    "the second message is this card's, at this version",
-  );
-  assert.deepEqual(calls, [["delivered", 5, 2, "om_new"]], "later updates change the message that exists now");
+  assert.equal(sends.length, 1, "a refused update falls back to a new message");
+  assert.ok(sends[0].includes("--idempotency-key agent-autoloop-card-5-v2 "), "the second message is this version's");
+  assert.deepEqual(calls, [["delivered", 5, 2, "om_old"]], "the hub goes on knowing the message it first heard of");
+});
+
+test("feishu: an open card that can't be updated isn't sent again, and a first message is keyed by the card alone", async () => {
+  // Failure this guards: the hub only counts answers on the first message, so buttons on a second one would do nothing; a
+  // first message keyed by its version comes twice when a report is lost and the card has moved on.
+  const open = await refusedUpdates([{ ...base, version: 2, ref: "om_old" }]);
+  assert.equal(open.lines.filter((l) => l.includes("+messages-send")).length, 0);
+  assert.deepEqual(open.calls, [["failed", 5, 2]], "it's tried again later");
+
+  const first = await refusedUpdates([{ ...base, version: 3, ref: null }]);
+  const [send] = first.lines.filter((l) => l.includes("+messages-send"));
+  assert.ok(send.includes("--idempotency-key agent-autoloop-card-5 "), send);
+  assert.deepEqual(first.calls, [["delivered", 5, 3, "om_new"]]);
 });

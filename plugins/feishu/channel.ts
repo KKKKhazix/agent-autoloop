@@ -111,12 +111,10 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   const updateMessage = (ref: string, content: string) =>
     lark(["im", "messages", "patch", "--message-id", ref, "--as", "bot", "--data", "-"], JSON.stringify({ content }));
 
-  /** Sends the card's words as a new message, or hands back the one an earlier try already made. */
-  async function sendMessage(card: Card, content: string) {
+  /** Sends the card's words as a new message, or hands back the one an earlier try with this key already made. */
+  async function sendMessage(key: string, content: string) {
     const target = ["--user-id", owner, "--as", "bot", "--msg-type", "interactive"];
-    // The key is the card and its version: a report that got lost must not make a second message, but a version that
-    // had to be sent afresh is a different message from the one before it.
-    const once = ["--idempotency-key", `agent-autoloop-card-${card.id}-v${card.version}`];
+    const once = ["--idempotency-key", key];
     return (await lark(["im", "+messages-send", ...target, ...once, "--content", "-"], content)).data
       .message_id as string;
   }
@@ -139,12 +137,16 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
           try {
             await updateMessage(ref, content);
           } catch (error) {
-            // The bot may not be the sender of the message it is told to change, and Feishu refuses that outright. A
-            // second card is worse than one, a card frozen at the version before the answer is worse than both.
+            // The bot may not be the sender of the message it is told to change, and Feishu refuses that outright. An open
+            // card stays as it is: the hub only counts answers on the message it first heard of, whose buttons still work.
+            if (card.state === "open") throw error;
+            // A settled one has no buttons: a second card is worse than one, a card frozen at the version before the answer
+            // is worse than both. The key has the version so that a retry of this one makes no third.
             log(`card ${card.id}: couldn't update ${ref} (${error}); sending it again`);
-            ref = await sendMessage(card, content);
+            await sendMessage(`agent-autoloop-card-${card.id}-v${card.version}`, content);
           }
-        } else ref = await sendMessage(card, content);
+          // The key is the card alone, not its version: a report that got lost must not make a second message.
+        } else ref = await sendMessage(`agent-autoloop-card-${card.id}`, content);
         await hub.delivered(card.id, card.version, ref);
       } catch (error) {
         log(`card ${card.id} not sent: ${error}`);
