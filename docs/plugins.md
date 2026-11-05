@@ -30,14 +30,14 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 |---|---|
 | `command(turn)` | 返回命令参数数组；参数不作为 shell 代码执行 |
 | `read(stdout, code, stderr)` | 返回 `text`、`session`、`usage`、`sessionUsage`、`error`、`finished`、`started`；运行中 `code` 为 `null` |
-| `link(session)` | 可选，会话链接；支持会话的插件可只重写错误回执 |
+| `link(session)` | 可选，打开这个会话的链接。回执写错时，`read` 返回了 `session` 的插件都只重写回执，和有没有链接无关 |
 | `check()` | 可选，能用返回 `null`，否则返回下一步怎么做 |
 
 `turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。`read` 抛错或什么也不返回时，还在跑的接着跑，结束后这一轮算没跑成，留在原会话重派。
 
 支持 `resume` 的插件，从 Agent 收下提示词起都要返回 `started: true`，包括运行中和出错之后。否则干到一半断了，也会被当成会话接不上，开新会话把业务重做一遍。
 
-`usage` 是这次启动用掉的量。有的 CLI 只给整个会话累计到现在的数（Codex 的 Token、Claude Code 的费用），这几项放进 `sessionUsage`，同时要返回 `session`。接单程序启动前记下这个会话上次的累计值，结束后相减，和 `usage` 合起来上报；这些记录放在 `worker/usage/`，接单程序中途重启也不会多算。
+`usage` 是这次启动用掉的量。有的 CLI 只给整个会话累计到现在的数（Codex 的 Token、Claude Code 的费用），这几项放进 `sessionUsage`，同时要返回 `session`。接单程序启动前记下这个会话上次的累计值，结束后相减，和 `usage` 合起来上报；这些记录放在 `~/.agent-autoloop/worker/usage/`，接单程序中途重启也不会多算。
 
 没有记录的续接（换了电脑、升级前就有的会话、超过 90 天没用的会话）或累计值变小时，这几项这次不报，不猜；下一次续接恢复正常。其他程序在同一个会话里用掉的量分不出来，比如本人打开链接接着聊，会算进下一次续接。CLI 改成只报单次时，插件要把这几项改回 `usage`，不要靠数字大小去猜。
 
@@ -47,7 +47,7 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 { "name": "Hello", "worker": "my-computer", "use": "hello-agent", "access": "read" }
 ```
 
-只需要打印最后一条消息时，用内置 `command` 加参数数组即可，不必写插件。
+只需要打印最后一条消息时，用内置 `command` 加参数数组即可，不必写插件。参数里可以用 `{prompt}`、`{model}`、`{effort}`、`{cwd}`、`{context}`；运行时还有环境变量 `AGENT_AUTOLOOP_CONTEXT`（资料文件）和 `AGENT_AUTOLOOP_RUN`（第几轮）。
 
 ### 浏览器接入
 
@@ -96,7 +96,7 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 { "shop": { "name": "商店", "adapter": "hello-source" } }
 ```
 
-请求地址是 `/v1/in/shop`；秘密放在 `secrets.env` 的 `AGENT_AUTOLOOP_SECRET_SHOP`，不写进规则。事件必须有稳定的 `id` 和合法的 `type`，可带 `subject`、`summary`、`detail`、`link`，上限见[协议](protocol.md#来源把世界变成事件)。
+请求地址是 `/v1/in/shop`；秘密放在 `secrets.env` 的 `AGENT_AUTOLOOP_SECRET_SHOP`（来源名转大写，`-` 换成 `_`；改完重启中台），不写进规则。事件必须有稳定的 `id` 和合法的 `type`，可带 `subject`、`summary`、`detail`、`link`，上限见[协议](protocol.md#来源把世界变成事件)。
 
 来源能直接发标准 JSON 时不必写插件，用来源密钥调用 `POST /v1/events` 即可。
 
