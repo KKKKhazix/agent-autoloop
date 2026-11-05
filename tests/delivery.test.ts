@@ -5,7 +5,9 @@
 // switching to review-only while checks run still merges the PR; a PR behind main ends the run after requesting a
 // sync and waits out the hub's growing retry delay while main keeps moving; commits GitHub synced beyond the main that was
 // read are reviewed as the branch's own; a delivery withdrawn while main moves on still syncs and reviews again; settings read
-// before main moved decide what a round against the newer main does, so a health check added there is skipped.
+// before main moved decide what a round against the newer main does, so a health check added there is skipped; another event
+// on a commit with findings reviews it again, and a review that misses them this time merges it; findings leave an earlier
+// attestation of the commit standing.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deliver, fullCheck, waitLive, disableAuto, type DeliveryIO } from "../plugins/delivery/delivery.ts";
@@ -60,6 +62,9 @@ function fixture() {
           return {};
         }
       }
+      const combined = /^commits\/(.+)\/status/.exec(path);
+      if (combined)
+        return { statuses: state.statuses.filter((s: any) => s.path === `statuses/${combined[1]}`).reverse() };
       if (path === "pulls/1") return structuredClone(state.pr);
       if (path === "git/ref/heads/main") return { object: { sha: state.main } };
       if (path.startsWith("contents/ops/delivery.json"))
@@ -241,6 +246,77 @@ test("findings and review-only mode stop before merge", async () => {
   second.state.pr.labels.push({ name: "deliver-review" });
   assert.equal((await deliver("example/app", 1, second.io)).reviewOnly, true);
   assert.equal(second.state.merges, 0);
+});
+const latest = (state: any, context: string) => state.statuses.filter((s: any) => s.context === context).at(-1);
+const problem = [{ title: "数据会丢", text: "先修复" }];
+test("another event on a commit with findings ends the run: no second review, no new status", async () => {
+  const { io, state } = fixture();
+  io.review = async () => {
+    state.reviewed++;
+    return problem;
+  };
+  await deliver("example/app", 1, io);
+  const written = state.statuses.length;
+  io.review = async () => {
+    state.reviewed++;
+    return [];
+  };
+  const again = await deliver("example/app", 1, io);
+  assert.equal(state.reviewed, 1);
+  assert.equal(state.merges, 0);
+  assert.equal(again.findings, undefined);
+  assert.equal(state.statuses.length, written);
+  assert.equal(latest(state, "delivery").state, "failure");
+});
+test("a new commit after findings is reviewed and delivered", async () => {
+  const { io, state } = fixture();
+  io.review = async () => problem;
+  await deliver("example/app", 1, io);
+  const { api } = io;
+  io.api = async (path, body, method) =>
+    path.startsWith("actions/workflows/check.yml")
+      ? { workflow_runs: [{ ...run(1, "fixed"), event: "pull_request" }] }
+      : api(path, body, method);
+  io.contains = async () => true;
+  io.review = async () => {
+    state.reviewed++;
+    return [];
+  };
+  state.pr.head.sha = "fixed";
+  assert.equal((await deliver("example/app", 1, io)).merged, "merged");
+  assert.equal(state.reviewed, 1);
+});
+test("only findings stop the run: another failure on the commit does not", async () => {
+  const { io, state } = fixture();
+  state.statuses.push({
+    path: "statuses/head",
+    context: "delivery",
+    state: "failure",
+    description: "完整检查没有通过",
+  });
+  assert.equal((await deliver("example/app", 1, io)).merged, "merged");
+  assert.equal(state.reviewed, 1);
+});
+test("a commit with findings that someone merged by hand still goes on to Ship", async () => {
+  const { io, state } = fixture();
+  io.review = async () => {
+    state.reviewed++;
+    return problem;
+  };
+  await deliver("example/app", 1, io);
+  Object.assign(state.pr, { state: "closed", merged_at: "other", merge_commit_sha: "merged" });
+  assert.equal((await deliver("example/app", 1, io)).merged, "merged");
+  assert.equal(state.reviewed, 1);
+  assert.equal(latest(state, "delivery").state, "success");
+});
+test("findings replace an earlier attestation of the same commit", async () => {
+  const { io, state } = fixture();
+  state.statuses.push({ path: "statuses/head", context: "my-review", state: "success", description: "通过" });
+  io.review = async () => problem;
+  await deliver("example/app", 1, io);
+  assert.equal(latest(state, "my-review").state, "failure");
+  assert.equal(latest(state, "delivery").state, "failure");
+  assert.equal(state.merges, 0);
 });
 test("review-only added during checks stops before the merge attestation", async () => {
   const { io, state } = fixture();
