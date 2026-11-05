@@ -19,13 +19,14 @@
 // going as ended, or starts its prompt again in a new session, whether the run ended or vanished; or hands in a session made
 // up here in place of the one it read while the run was going, which a retry can't go on in; trouble with one run, like a
 // folder it can't write to, holds up the others, ends the worker or fills the log; a worker started again after trouble
-// needs the folder it lost.
+// needs the folder it lost. Over ACP, a retry in a session a turn already started in that breaks before the prompt redoes the
+// work in a new one, and one the agent refuses or can't go on in doesn't get a new one.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { setup } from "./helpers.ts";
+import { acpAgent, setup } from "./helpers.ts";
 
 const home = setup("worker");
 const folder = join(home, "project");
@@ -930,4 +931,64 @@ test("trouble with one run waits for the next round and holds up no other", asyn
   }
   await until(w, () => Boolean(resultOf(hub, troubled)));
   assert.equal(resultOf(hub, troubled).outcome, "done");
+});
+
+/** A stand-in ACP agent the real bridge runs. Each launch adds a line to a file, for counting and for what it does next. */
+function acp(name: string, script: string) {
+  const launches = join(folder, `${name}.launches`);
+  const program = acpAgent(
+    folder,
+    name,
+    `appendFileSync(${JSON.stringify(launches)}, 'x\\n');
+const launch = readFileSync(${JSON.stringify(launches)}, 'utf8').trim().split('\\n').length;
+${script}`,
+  );
+  return {
+    command: [process.execPath, program],
+    launches: () => readFileSync(launches, "utf8").trim().split("\n").length,
+  };
+}
+
+test("over ACP, a retry that breaks before its prompt stays in the session its work may have been done in", async () => {
+  for (const [name, script] of [
+    ["exits-first", "if (launch === 1) process.exit(3);"],
+    [
+      "initialize-fails-first",
+      "if (launch === 1) on.initialize = (m) => send({ id: m.id, error: { code: -32603, message: '初始化坏了' } });",
+    ],
+  ] as const) {
+    const hub = fakeHub();
+    const agent = acp(name, script);
+    hub.jobs.push(job({ use: "acp", session: "S1", command: agent.command }));
+    const w = worker(hub);
+    await until(w, () => hub.results.length === 1);
+    assert.equal(hub.results[0].outcome, "failed", name);
+    assert.equal(hub.results[0].session, "S1", name);
+    assert.equal(agent.launches(), 1, `${name}: a new session would do the work again`);
+  }
+});
+
+test("over ACP, a session the agent refuses or can't go on in gets a new one, once", async () => {
+  for (const [name, script] of [
+    [
+      "refuses-load",
+      "on['session/load'] = (m) => send({ id: m.id, error: { code: -32002, message: '没有这个会话' } });",
+    ],
+    [
+      "cannot-resume",
+      "if (launch === 1) on.initialize = (m) => send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });",
+    ],
+  ] as const) {
+    const hub = fakeHub();
+    const agent = acp(name, script);
+    hub.jobs.push(job({ use: "acp", session: "S1", command: agent.command }));
+    const w = worker(hub);
+    await until(w, () => hub.results.length === 1);
+    assert.deepEqual(
+      [hub.results[0].outcome, hub.results[0].summary, hub.results[0].session],
+      ["done", "做完了", "agent-session"],
+      name,
+    );
+    assert.equal(agent.launches(), 2, name);
+  }
 });

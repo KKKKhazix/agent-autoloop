@@ -17,6 +17,8 @@ export default {
         /* A partial final line is read again after the next poll. */
       }
     }
+    // Taken back by the bridge when the agent refused the session it was to go on in.
+    if (!reading.started) delete reading.started;
     if (code !== null && (code !== 0 || !reading.finished)) {
       return { session: reading.session, started: reading.started, error: tail(stderr) || "ACP 没有完成这一轮" };
     }

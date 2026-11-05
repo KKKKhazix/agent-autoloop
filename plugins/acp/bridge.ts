@@ -7,6 +7,9 @@ import { createInterface } from "node:readline";
 import { versionName } from "../../host/version.ts";
 import type { Turn } from "../../worker/agents.ts";
 
+/** The agent answered with an error, as opposed to going away or saying nothing. */
+class Refused extends Error {}
+
 function resolved(file: string): string {
   if (existsSync(file)) return realpathSync(file);
   return resolve(resolved(dirname(file)), basename(file));
@@ -28,6 +31,9 @@ export function permission(turn: Pick<Turn, "access" | "cwd">, params: any) {
 
 export async function bridge(turn: Turn) {
   if (!turn.command?.length) throw new Error("ACP 要在 command 写启动命令");
+  // The last go may have done its work in this session, so whatever breaks now says nothing about whether a new session
+  // would do it again. Only the agent's own no takes this back; see goOn.
+  if (turn.resume) console.log(JSON.stringify({ session: turn.resume, started: true }));
   const child = spawn(turn.command[0], turn.command.slice(1), { cwd: turn.cwd, stdio: ["pipe", "pipe", "inherit"] });
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
   let next = 0;
@@ -67,7 +73,7 @@ export async function bridge(turn: Turn) {
     } else if (pending.has(incoming.id)) {
       const request = pending.get(incoming.id)!;
       pending.delete(incoming.id);
-      if (incoming.error) request.reject(new Error(incoming.error.message));
+      if (incoming.error) request.reject(new Refused(incoming.error.message));
       else request.resolve(incoming.result);
     }
   };
@@ -86,6 +92,16 @@ export async function bridge(turn: Turn) {
       pending.set(id, { resolve, reject });
       send({ id, method, params });
     });
+  const goOn = async (can: any) => {
+    const method = can?.loadSession ? "session/load" : can?.sessionCapabilities?.resume ? "session/resume" : null;
+    try {
+      if (!method) throw new Refused("这个 ACP Agent 不支持恢复会话");
+      await rpc(method, { sessionId: session, cwd: turn.cwd, mcpServers: [] });
+    } catch (error) {
+      if (error instanceof Refused) console.log(JSON.stringify({ started: false }));
+      throw error;
+    }
+  };
   const stop = () => child.kill("SIGTERM");
   process.on("SIGTERM", stop);
   try {
@@ -93,9 +109,8 @@ export async function bridge(turn: Turn) {
     const init = await rpc("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo });
     if (init.protocolVersion !== 1) throw new Error(`不支持 ACP 版本 ${init.protocolVersion}`);
     if (turn.resume) {
-      if (!init.agentCapabilities?.loadSession) throw new Error("这个 ACP Agent 不支持恢复会话");
       session = turn.resume;
-      await rpc("session/load", { sessionId: session, cwd: turn.cwd, mcpServers: [] });
+      await goOn(init.agentCapabilities);
     } else session = (await rpc("session/new", { cwd: turn.cwd, mcpServers: [] })).sessionId;
     if (typeof session !== "string" || !session) throw new Error("ACP 没有返回会话编号");
     // Before the prompt goes: the agent can start on it at once, and this has to be there if the bridge is killed then.
