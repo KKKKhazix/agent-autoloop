@@ -49,7 +49,7 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 
 只需要打印最后一条消息时，用内置 `command` 加参数数组即可，不必写插件。
 
-DeepSeek Harness 有内置 `dsh` 插件，规则里写 `use: "dsh"`：它以 `dsh headless --json` 跑一轮，从 `session` 事件拿会话编号，用 `--session-id` 续接，把 `step_end` 的用量汇总为 Token；`access` 映射成 `DSH_PERMISSION_MODE`。没有可打开的桌面会话链接。
+DeepSeek Harness 有内置 `dsh` 插件，规则里写 `use: "dsh"`：它以 `dsh headless --json` 跑一轮，从 `session` 事件拿会话编号，用 `--session-id` 续接，把 `step_end` 的用量汇总为 Token，`final` 事件才算跑完；`access` 每次都映射成 `--permission-mode`，要人批准的调用用 `--approval-policy never` 直接拒绝。没有可打开的桌面会话链接。
 
 ### 浏览器接入
 
@@ -110,9 +110,9 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 |---|---|---|---|
 | Codex | `read-only`：能跑 shell，不能写文件，命令默认不能联网 | `workspace-write`：能跑 shell、写工作目录和临时目录，命令默认不能联网 | `danger-full-access`：能写文件、跑 shell、联网，无审批 |
 | Claude Code | `plan`：能读文件和运行只读命令；其他命令取决于自动审批及本机规则 | `acceptEdits`：再允许目录内文件编辑和常见文件操作；任意 shell 或联网仍需放行 | `bypassPermissions`：跳过工具审批，没有额外系统隔离 |
-| DeepSeek Harness | `read-only` | `workspace-write` | `danger-full-access` |
+| DeepSeek Harness | `read-only` | `workspace-write`：命令和文件改动限于工作目录和临时目录，读文件和联网不受限 | `danger-full-access`：不受限制 |
 
-Codex 的三个档位已用插件命令实跑；DeepSeek Harness 的这三档通过 `DSH_PERMISSION_MODE` 交给 DSH 自己执行，能力以 [DSH 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cli-help.md#dsh-headless)为准；Claude Code 依据[官方权限说明](https://code.claude.com/docs/en/permission-modes)整理，没有调用模型实跑。Codex 的命令网络限制与托管搜索、MCP 不是同一个边界，详见[官方沙箱说明](https://learn.chatgpt.com/docs/agent-approvals-security)。用户的 CLI 配置可能改变上述能力；`read` 也不代表读不到本机密钥。
+Codex 的三个档位已用插件命令实跑；DeepSeek Harness 和 Claude Code 分别依据 [DSH 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)和[官方权限说明](https://code.claude.com/docs/en/permission-modes)整理，没有调用模型实跑。Codex 的命令网络限制与托管搜索、MCP 不是同一个边界，详见[官方沙箱说明](https://learn.chatgpt.com/docs/agent-approvals-security)。用户的 CLI 配置可能改变上述能力；`read` 也不代表读不到本机密钥。
 
 场景模板据此选权限：早报用 `edit` 写本地文件，issue 用 `edit` 改代码并让固定脚本联网取正文，告警用 `read` 看代码和事件附带的调用栈。反馈处理和飞书摘要用 `edit`，网站排查用 `read`；固定巡检与飞书读取脚本负责联网，摘要 Agent 只读完整快照。`command` 和固定脚本以本机账号运行，不受 `access` 约束。
 

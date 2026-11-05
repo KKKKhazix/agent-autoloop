@@ -1,7 +1,9 @@
-// What's different about DSH. Failure cases: a level of access maps to the wrong permission mode, a resumed turn starts a
-// new session, a turn that's still going is taken for an answer or a failure, a turn that ended in an error or without an
-// answer is taken for a result, the token counts of a run's several steps are dropped, and a program that's missing or
-// broken doesn't say what to do. The program is looked up through the login shell, so this points the shell and HOME at
+// What's different about DSH. Failure cases: a level of access maps to the wrong permission preset, or a resumed turn keeps
+// the one its session was saved with; a call that needs approval waits for someone who isn't there; a resumed turn starts a
+// new session; a run that's still going, or whose turn has ended while its background work finishes, is taken for an answer
+// or a failure, and stopped; a run that ended in an error or without an answer is taken for a result; the token counts of a
+// run's several steps are dropped; a program that's missing or broken doesn't say what to do. The events are the shapes in
+// DSH's own packages/bundle/headless/src/json-stream.ts. The program is looked up through the login shell, so this points the shell and HOME at
 // this test's own instead of whatever this machine has installed.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -50,29 +52,39 @@ const turn = {
   folder: "/run",
 };
 
-test("DSH: access is the permission mode, and a resumed turn goes on in its session", () => {
+test("DSH: access is the permission preset every time, nothing waits for approval, and a resumed turn goes on in its session", () => {
+  const policy = ["--approval-policy", "never"];
   const argv = dsh.command(turn);
-  assert.equal(argv[0], "/usr/bin/env");
-  assert.equal(argv[1], "DSH_PERMISSION_MODE=workspace-write");
-  assert.equal(argv[2], program);
-  assert.deepEqual(argv.slice(3, 5), ["headless", "--json"]);
-  assert.deepEqual(argv.slice(5), ["做这件事"], "a new session takes no id: dsh makes its own and reports it");
-  for (const [access, mode] of [
+  assert.deepEqual(argv.slice(0, 3), [program, "headless", "--json"]);
+  assert.deepEqual(
+    argv.slice(3),
+    ["--permission-mode", "workspace-write", ...policy, "做这件事"],
+    "a new session takes no id: dsh makes its own and reports it",
+  );
+  for (const [access, preset] of [
     ["read", "read-only"],
     ["edit", "workspace-write"],
     ["full", "danger-full-access"],
   ] as const) {
-    assert.equal(dsh.command({ ...turn, access })[1], `DSH_PERMISSION_MODE=${mode}`);
+    assert.deepEqual(dsh.command({ ...turn, access }).slice(3, 5), ["--permission-mode", preset]);
   }
-  const again = dsh.command({ ...turn, resume: "session-1" });
-  assert.deepEqual(again.slice(5), ["--session-id", "session-1", "做这件事"]);
+  const again = dsh.command({ ...turn, access: "read", resume: "session-1" });
+  assert.deepEqual(again.slice(3), [
+    "--permission-mode",
+    "read-only",
+    ...policy,
+    "--session-id",
+    "session-1",
+    "做这件事",
+  ]);
 });
 
 const lines = (...events: object[]) => events.map((event) => JSON.stringify(event)).join("\n");
 const opened = { type: "session", sessionId: "session-1", cwd: "/x" };
 const step = (usage: object) => ({ type: "status", phase: "step_end", usage });
-const ended = (reason: object) => ({ type: "status", phase: "turn_end", reason });
-const final = (text: string) => ({ type: "final", text });
+const turnEnded = (reason: object) => ({ type: "status", phase: "turn_end", turn: 1, reason });
+const final = (text: string, reason: object | null) => ({ type: "final", sessionId: "session-1", reason, text });
+const completed = { kind: "completed" };
 
 test("DSH: a completed turn's final text is its answer, with every step's tokens added up", () => {
   const reading = dsh.read(
@@ -82,11 +94,11 @@ test("DSH: a completed turn's final text is its answer, with every step's tokens
       { type: "status", phase: "step_start" },
       step({ inputTokens: 7500, outputTokens: 2, cacheReadTokens: 5120, cacheWriteTokens: 0, totalTokens: 12622 }),
       { type: "text", text: "中途" },
-      { type: "tool_call", name: "read" },
-      { type: "tool_result", text: "资料" },
+      { type: "tool_call", callId: "1", tool: "read", input: {} },
+      { type: "tool_result", callId: "1", status: "completed", result: "资料" },
       step({ inputTokens: 10, outputTokens: 4, cacheReadTokens: 1 }),
-      final("好了"),
-      ended({ kind: "completed" }),
+      turnEnded(completed),
+      final("好了", completed),
     ),
     0,
     "",
@@ -113,10 +125,15 @@ test("DSH: a turn that's still going has no answer and no error", () => {
     usage: { input: 7, output: 1, cached: 2 },
     started: true,
   });
-  // The terminal event alone doesn't say the turn completed; turn_end does.
-  const unfinished = dsh.read(lines(opened, final("好了")), 0, "");
-  assert.equal(unfinished.text, undefined);
-  assert.equal(unfinished.error, "DSH 没有完成并留下实际结果");
+  // A turn has ended, but the run waits on its background work, which may start another: it isn't over until `final`.
+  assert.deepEqual(dsh.read(lines(opened, turnEnded(completed), { type: "text", text: "中途" }), null, ""), {
+    session: "session-1",
+    started: true,
+  });
+  // `final` with no reason: the last turn never closed.
+  const unclosed = dsh.read(lines(opened, final("好了", null)), 1, "");
+  assert.equal(unclosed.text, undefined);
+  assert.equal(unclosed.error, "DSH 没跑完这一轮");
 });
 
 test("DSH: why the turn ended is the reason it failed", () => {
@@ -128,20 +145,20 @@ test("DSH: why the turn ended is the reason it failed", () => {
     [{ kind: "max-tokens" }, "这一轮用完了输出上限"],
     [{ kind: "interrupted" }, "DSH 没跑完这一轮"],
   ] as const) {
-    assert.deepEqual(dsh.read(lines(opened, final("好了"), ended(reason)), 1, ""), {
+    assert.deepEqual(dsh.read(lines(opened, turnEnded(reason), final("好了", reason)), 1, ""), {
       session: "session-1",
       started: true,
       finished: true,
       error,
     });
   }
-  const empty = dsh.read(lines(opened, final("  "), ended({ kind: "completed" })), 0, "");
+  const empty = dsh.read(lines(opened, final("  ", completed)), 0, "");
   assert.equal(empty.finished, true);
   assert.equal(empty.text, undefined, "a blank message isn't an answer");
   assert.equal(empty.error, "DSH 没有完成并留下实际结果");
 });
 
-test("DSH: a turn that ended without saying why falls back to its exit", () => {
+test("DSH: a run that ended with no final event falls back to its exit", () => {
   assert.equal(dsh.read("", 3, "cannot start").error, "退出码 3：cannot start");
   assert.equal(dsh.read("", 3, "").error, "退出码 3：没留下原因");
   assert.equal(dsh.read("", 0, "boom").error, "boom");
