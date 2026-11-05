@@ -58,8 +58,8 @@ export function settings(value: any, testLocalHealth = false): Settings {
 }
 
 export function git(root: string, ...args: string[]) {
-  const safe = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false"];
-  return execFileSync("git", [...safe, ...args], {
+  const options = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false"];
+  return execFileSync("git", [...options, ...args], {
     cwd: root,
     encoding: "utf8",
     timeout: 60000,
