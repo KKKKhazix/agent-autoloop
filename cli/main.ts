@@ -24,14 +24,16 @@ const HELP = `Agent 自动化中台
   agent-autoloop why <第几轮> [--json]  查看时间线；--json 输出原始事实
   agent-autoloop conformance <地址> --config <测试凭据文件>
                                     在测试中台上检查协议
-  agent-autoloop status                  现在什么情况：谁在线、等你什么、在做什么、做过什么、花了多少
+  agent-autoloop status [--json]         现在什么情况：谁在线、等你什么、在做什么、做过什么、花了多少
+                                     --json 输出 /v1/state 的原始结构，给脚本用
   agent-autoloop answer <卡片> [序号] [--text 别的想法]
                                     回答一张卡片；通知不用写序号
   agent-autoloop resolve <卡片> <结果>   这件事不用决定了，写一句结果
   agent-autoloop doctor                  查哪里没配好
   agent-autoloop check                   检查 rules.json
-  agent-autoloop emit <类型> [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
-                                    发一条事件
+  agent-autoloop rules explain           按本机 rules.json 说明生效的规则、Agent、通道和下次定时
+  agent-autoloop emit <类型> [--dry-run] [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
+                                    发一条事件；--dry-run 只预演会派给谁，不连接中台
   agent-autoloop tell <编号> [--task 定时任务名]
                                     直接告诉你一件事，内容从标准输入读
   agent-autoloop stop <第几轮>           停掉一轮
@@ -63,6 +65,11 @@ const INIT_USAGE = `用法：agent-autoloop init [--agent claude|codex] [--comma
 const TRY_USAGE = `用法：agent-autoloop try
 
 用本机接好的 Agent 跑一遍完整流程：提问，进程退出等你回复，你拍板，它接着干完。`;
+
+const STATUS_USAGE = `用法：agent-autoloop status [--json]
+
+现在什么情况：谁在线、等你什么、在做什么、做过什么、花了多少。
+  --json  输出 /v1/state 的原始结构，给脚本和看板用`;
 
 type Flags = Record<string, string | true>;
 
@@ -326,9 +333,10 @@ const RUN_STATES: Record<string, string> = {
   cancelled: "停了",
 };
 
-async function status() {
+async function status(named: Flags) {
   const owner = ownerClient();
   const state = await owner.state();
+  if (named.json !== undefined) return console.log(JSON.stringify(state, null, 2));
   const { totals } = state;
   const clock = { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" } as const;
   const at = (iso: string) => new Date(iso).toLocaleString("zh-CN", { timeZone: state.timezone, ...clock });
@@ -492,16 +500,26 @@ async function key(args: string[]) {
 async function emit(args: string[]) {
   const { named, rest } = flags(args);
   const config = readConfig();
-  const type = rest[0] ?? fail("用法：agent-autoloop emit <类型>");
-  const secret = text(named.key) ?? config.source?.key ?? fail("这台电脑上没有来源的密钥：用 --key");
-  const answer = await client(secret, config).event({
+  const type = rest[0] ?? fail("用法：agent-autoloop emit <类型> [--dry-run]");
+  const event = {
     id: text(named.id) ?? randomUUID(),
     type,
     ...(text(named.subject) && { subject: text(named.subject) }),
     ...(text(named.summary) && { summary: text(named.summary) }),
     ...(text(named.detail) && { detail: text(named.detail) }),
     ...(text(named.link) && { link: text(named.link) }),
-  });
+  };
+  if (named["dry-run"] !== undefined) {
+    // The hub tells a source by its key, and only the key's own source is known here.
+    if (text(named.key)) return fail("--dry-run 按这台电脑的来源预演，不能和 --key 一起用");
+    if (!config.source) return fail("这台电脑上没有来源的密钥：--dry-run 需要知道来源名");
+    const { previewEvent } = await import("./explain.ts");
+    console.log("预演（按本机 rules.json，不连接中台、不写日志）：");
+    for (const line of previewEvent(readFileSync(RULES_FILE, "utf8"), config.source.name, event)) console.log(line);
+    return;
+  }
+  const secret = text(named.key) ?? config.source?.key ?? fail("这台电脑上没有来源的密钥：用 --key");
+  const answer = await client(secret, config).event(event);
   console.log(answer.routed.length ? `交给了：${answer.routed.join("、")}` : "记下了，没有规则接它。");
 }
 
@@ -530,6 +548,13 @@ async function restoreCommand(args: string[]) {
   const { restore } = await import("./backup.ts");
   const { safety } = await restore(HOME, path.resolve(rest[0]));
   console.log(`恢复好了。原来的文件在 ${safety}。\n启动：agent-autoloop up 或 agent-autoloop service install`);
+}
+
+async function rulesCommand(args: string[]) {
+  const { rest } = flagsOf(args, [], "用法：agent-autoloop rules explain");
+  if (rest[0] !== "explain" || rest.length > 1) return fail("用法：agent-autoloop rules explain");
+  const { explainRules } = await import("./explain.ts");
+  for (const line of explainRules(readFileSync(RULES_FILE, "utf8"), Date.now())) console.log(line);
 }
 
 async function tell(args: string[]) {
@@ -615,13 +640,14 @@ const commands: Record<string, () => unknown> = {
     flagsOf(args, [], TRY_USAGE);
     return tryIt();
   },
-  status,
+  status: () => status(flagsOf(args, ["json"], STATUS_USAGE).named),
   why: () => why(args),
   conformance: () => checkConformance(args),
   answer: () => answer(args),
   resolve: () => resolve(args),
   doctor,
   check,
+  rules: () => rulesCommand(args),
   key: () => key(args),
   emit: () => emit(args),
   tell: () => tell(args),
