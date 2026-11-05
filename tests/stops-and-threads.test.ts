@@ -100,6 +100,23 @@ test("a run with that card, stopped while it's going, closes the card when it ha
   it.check();
 });
 
+test("a run told to stop whose worker stopped mentioning it closes the card that says it may still be going", () => {
+  const it = hub();
+  it.act("ingest", "app", feedback);
+  const job = it.act("claimNext", "w1", "c1");
+  it.act("cancel", job.run);
+  it.pass(6);
+  it.act("heartbeat", "w1", []);
+  it.act("tick");
+  assert.equal(it.run(job.run).state, "unknown");
+  const unknown = () => it.cards().find((card) => card.key === `run:${job.run}:unknown`);
+  assert.equal(unknown()?.state, "open");
+  it.act("finish", job.run, job.token, { outcome: "failed", error: "boom" });
+  assert.equal(it.run(job.run).state, "cancelled");
+  assert.equal(unknown()?.state, "closed");
+  it.check();
+});
+
 test("an answer comes back to the thread that asked, after the rule stopped running in parallel", () => {
   const it = hub();
   it.act("ingest", "app", feedback);

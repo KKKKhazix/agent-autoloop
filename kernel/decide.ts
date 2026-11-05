@@ -127,8 +127,9 @@ function closeOpen(draft: Draft, matches: (key: string) => boolean, result: stri
   for (const card of open) closeCard(draft, card, result);
 }
 
-const closeFailing = (draft: Draft, run: number, result: string) =>
-  closeOpen(draft, (key) => key === `run:${run}:failing`, result);
+/** Once it's stopped, nothing should still say it will try again, or that it may still be going. */
+const closeStopped = (draft: Draft, run: number, result: string) =>
+  closeOpen(draft, (key) => key === `run:${run}:failing` || key === `run:${run}:unknown`, result);
 
 const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
@@ -282,7 +283,7 @@ function claimNext(draft: Draft, worker: string, claim: string) {
 /** Ends a run nothing will pick up again, and says so. */
 function stopRun(draft: Draft, run: Row, why: string, summary: string, words: string) {
   put(draft, "runs", run.id, { state: "cancelled", finished_at: draft.at, summary });
-  closeFailing(draft, run.id, summary);
+  closeStopped(draft, run.id, summary);
   notify(draft, `run:${run.id}:${why}`, run.rule, words, threadOf(run));
 }
 
@@ -362,7 +363,7 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
   const summary = result.summary ?? "";
   const rejected: Rejected[] = [];
   put(draft, "runs", id, { state: result.outcome, finished_at: draft.at, summary, error: null, cancel_at: null });
-  closeFailing(draft, id, "后来跑成了");
+  closeOpen(draft, (key) => key === `run:${id}:failing`, "后来跑成了");
   closeOpen(draft, (key) => key === `run:${id}:unknown`, "结果回来了");
   const eventIds = eventsOf(draft.view, id).map((event) => event.id);
   const isAnswered = (card: Row) => card.state === "decided" && eventIds.includes(card.answer_event);
@@ -413,7 +414,7 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
       summary: result.summary ?? "",
       cancel_at: null,
     });
-    closeFailing(draft, id, "已停止");
+    closeStopped(draft, id, "已停止");
   } else if (result.outcome === "failed") rejected = retryLater(draft, run, result);
   else rejected = applyReceipt(draft, run, result);
   put(draft, "runs", id, { last_answer: JSON.stringify(rejected) });
@@ -577,7 +578,7 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     if (!run) throw new NotFound("没有这一轮");
     if (run.state === "queued") {
       put(draft, "runs", id, { state: "cancelled", finished_at: draft.at });
-      closeFailing(draft, id, "已停止");
+      closeStopped(draft, id, "已停止");
     } else if (run.state === "claimed") put(draft, "runs", id, { cancel_at: draft.at });
     else throw new InputError("这一轮已经结束了");
   },
