@@ -4,7 +4,8 @@
 // be loaded is marked as started, so the worker never starts a new one; an agent is told a version number left behind by a
 // release. Going on in a session, a failure before the prompt (the program exits at once, initialize fails, loading breaks
 // off) is taken for a session that can't be gone on in, so the work is done again in a new one; an agent that refuses the
-// session or can't go on in any isn't let go to a new one; an agent that only has session/resume is told session/load.
+// session or can't go on in any isn't let go to a new one; an agent that only has session/resume is told session/load; a
+// session something else has open just now is taken for one the agent refused, so the work is done again in a new one.
 // A U+2028 or U+2029 in anything the agent says, which JSON leaves as it is, cuts the line and ends the turn.
 // With edit access, a link in the folder that goes nowhere, or through such a link, passes for a new file inside it, and
 // writing through it lands outside. A permission request that gives only the tool call's id is judged as if it had no kind;
@@ -143,6 +144,17 @@ test("ACP lets a new session start only when the agent says no to this one", asy
       /没有这个会话/,
     ],
     ["cannot-resume", declaring({}), /不支持恢复/],
+    // What the official adapter says of a session that truly isn't there, and the same code as "in use" for another reason.
+    [
+      "no-rollout",
+      `on['session/load'] = (m) => send({ id: m.id, error: { code: -32603, message: 'no rollout found' } });`,
+      /no rollout found/,
+    ],
+    [
+      "bad-request",
+      `on['session/load'] = (m) => send({ id: m.id, error: { code: -32600, message: '不接受', data: { reason: 'other' } } });`,
+      /不接受/,
+    ],
   ] as const) {
     const result = await launch(name, script, "agent-session");
     assert.notEqual(result.code, 0);
@@ -153,6 +165,20 @@ test("ACP lets a new session start only when the agent says no to this one", asy
   }
   const fresh = await launch("fresh-breaks", `on.initialize = ${refusing("初始化坏了")};`);
   assert.equal(acp.read(fresh.out, fresh.code, fresh.err).started, undefined, "a new session has nothing to stay in");
+});
+
+test("ACP stays in a session something else has open, and says why in the agent's own words", async () => {
+  const inUse = `(m) => send({ id: m.id, error: { code: -32600, message: '这个会话正在别处打开，关掉后再试', data: { reason: 'thread_active_writer' } } })`;
+  for (const [name, script] of [
+    ["in-use-load", `on['session/load'] = ${inUse};`],
+    ["in-use-resume", `${declaring({ sessionCapabilities: { resume: {} } })} on['session/resume'] = ${inUse};`],
+  ] as const) {
+    const result = await launch(name, script, "agent-session");
+    assert.notEqual(result.code, 0);
+    const reading = acp.read(result.out, result.code, result.err);
+    assert.deepEqual([reading.started, reading.session], [true, "agent-session"], name);
+    assert.match(reading.error!, /这个会话正在别处打开，关掉后再试/);
+  }
 });
 
 test("ACP uses session/resume for an agent that only has that, and session/load for one that has both", async () => {

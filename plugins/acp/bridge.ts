@@ -7,7 +7,7 @@ import { eachLine } from "../../host/lines.ts";
 import { versionName } from "../../host/version.ts";
 import type { Turn } from "../../worker/agents.ts";
 
-/** The agent answered with an error, as opposed to going away or saying nothing. */
+/** The agent said no, as opposed to going away, saying nothing, or having what was asked for in use. */
 class Refused extends Error {}
 
 const isLink = (file: string) => {
@@ -110,8 +110,12 @@ export async function bridge(turn: Turn) {
     } else if (pending.has(incoming.id)) {
       const request = pending.get(incoming.id)!;
       pending.delete(incoming.id);
-      if (incoming.error) request.reject(new Refused(incoming.error.message));
-      else request.resolve(incoming.result);
+      if (incoming.error) {
+        // Open somewhere else just now isn't a no to the session: a new one would do its work again. The reason and not
+        // the code, which is generic: another agent's no under it has to stay a no, or it would never get a new session.
+        const inUse = incoming.error.data?.reason === "thread_active_writer";
+        request.reject(new (inUse ? Error : Refused)(incoming.error.message));
+      } else request.resolve(incoming.result);
     }
   };
   let over = false;

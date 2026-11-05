@@ -20,7 +20,8 @@
 // up here in place of the one it read while the run was going, which a retry can't go on in; trouble with one run, like a
 // folder it can't write to, holds up the others, ends the worker or fills the log; a worker started again after trouble
 // needs the folder it lost. Over ACP, a retry in a session a turn already started in that breaks before the prompt redoes the
-// work in a new one, and one the agent refuses or can't go on in doesn't get a new one; a "没跑成" after a finished tool call
+// work in a new one, or does so because something else has the session open just now, and one the agent refuses or can't go
+// on in doesn't get a new one; a "没跑成" after a finished tool call
 // is run together with what came before it and counts as work done; a failed turn whose agent won't go, or leaves something
 // holding its output, or closes its output and stays, holds its place until the time limit and loses the real reason. An
 // agent that crashes or vanishes leaves what it was running going while its result goes in, so a retry runs alongside it;
@@ -972,6 +973,21 @@ test("over ACP, a retry that breaks before its prompt stays in the session its w
     assert.equal(hub.results[0].session, "S1", name);
     assert.equal(agent.launches(), 1, `${name}: a new session would do the work again`);
   }
+});
+
+test("over ACP, a session something else has open stays, and the run goes back to be tried there again", async () => {
+  const hub = fakeHub();
+  const agent = acp(
+    "in-use",
+    `on['session/load'] = (m) => send({ id: m.id, error: { code: -32600, message: '这个会话正在别处打开，关掉后再试', data: { reason: 'thread_active_writer' } } });`,
+  );
+  hub.jobs.push(job({ use: "acp", session: "S1", command: agent.command }));
+  await until(worker(hub), () => hub.results.length === 1);
+  assert.deepEqual(
+    [hub.results[0].outcome, hub.results[0].error, hub.results[0].session],
+    ["failed", "这个会话正在别处打开，关掉后再试", "S1"],
+  );
+  assert.equal(agent.launches(), 1, "a new session would do the work again");
 });
 
 test("over ACP, a session the agent refuses or can't go on in gets a new one, once", async () => {
