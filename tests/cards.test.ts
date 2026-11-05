@@ -602,6 +602,23 @@ test("receipt FYIs arrive as grey closed cards; ordinary notices and questions s
   );
 });
 
+test("a run that keeps failing says its FYI once, and the third failure in a row is still told", () => {
+  clean();
+  ingest("app", note(1), at(0));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const job = claim("w1", at(attempt * 120))!;
+    finish(
+      job.run,
+      job.token,
+      { outcome: "failed", error: "boom", notice: [{ title: "已试过", text: "还在试", key: "retry", fyi: true }] },
+      at(attempt * 120 + 1),
+    );
+  }
+  const cards = all<{ key: string; state: string }>("SELECT key, state FROM cards ORDER BY id");
+  assert.equal(cards.filter((card) => card.key.endsWith(":retry")).length, 1);
+  assert.equal(cards.filter((card) => card.key.endsWith(":failing") && card.state === "open").length, 1);
+});
+
 test("why shows receipt FYIs while keeping hub end notices and empty closures hidden", () => {
   clean();
   ingest("ops", { id: "why-fyi", type: "alert.raised", subject: "probe" }, at(0));
