@@ -24,9 +24,11 @@
 // is run together with what came before it and counts as work done; a failed turn whose agent won't go, or leaves something
 // holding its output, or closes its output and stays, holds its place until the time limit and loses the real reason. An
 // agent that crashes or vanishes leaves what it was running going while its result goes in, so a retry runs alongside it;
-// clearing that up loses the session or the reason, or forgets where it had got to over a restart.
+// clearing that up loses the session or the reason, or forgets where it had got to over a restart. A run's number that has
+// since gone to someone else's program, after a reboot or with the worker down a long while, gets their process group
+// stopped or killed, whichever way the run had ended.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -1184,3 +1186,33 @@ test("over ACP, an agent that crashes while its tool runs has the tool stopped b
   assert.match(hub.results[0].error, /工具跑到一半崩了/);
   assert.equal(hub.results[0].session, "agent-session");
 });
+
+for (const [what, fields, exit, expected] of [
+  ["after a reboot, with no exit", {}, undefined, "failed"],
+  ["after the worker was down, with a failed exit", {}, 1, "failed"],
+  ["with a stop under way when the worker went", { stopping: 1, why: "cancel" }, undefined, "cancelled"],
+] as const) {
+  test(`a run's number that's now someone else's leaves them alone: ${what}`, async () => {
+    const other = spawn("/bin/sh", ["-c", "exec sleep 120"], { detached: true, stdio: "ignore" });
+    other.unref();
+    let stopped = false;
+    other.on("exit", () => (stopped = true));
+    const hub = fakeHub();
+    const given = job();
+    // As a worker finds it on coming back: a run it had going, with the number that's since gone to that program.
+    const dir = join(home, "worker", "runs", `${given.run}-1`);
+    mkdirSync(dir, { recursive: true });
+    const entry = { run: given.run, token: given.token, attempt: 1, job: given, dir, prompt: "p", turn: 1 };
+    const rest = { session: "s", resume: null, repairs: 0, triedFresh: false, pid: other.pid };
+    writeFileSync(join(dir, "entry.json"), JSON.stringify({ ...entry, ...rest, ...fields }));
+    if (exit !== undefined) writeFileSync(join(dir, "exit-1"), `${exit}\n`);
+    try {
+      await until(worker(hub), () => hub.results.length === 1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(stopped, false, "it was never part of the run");
+      assert.equal(hub.results[0].outcome, expected);
+    } finally {
+      other.kill("SIGKILL");
+    }
+  });
+}

@@ -141,6 +141,13 @@ function signal(entry: Entry, name: NodeJS.Signals) {
 
 /** Whether anything in the run's group is still going, null when we could not look. */
 function groupAlive(entry: Entry): boolean | null {
+  if (!entry.pid) return false;
+  // Its number can have gone to another program since, as after a reboot. A number isn't given out while a group of that
+  // number is left, so nothing of this run's remains, and whatever has that group now isn't this run's to stop.
+  try {
+    const seen = execFileSync("ps", ["-p", String(entry.pid), "-o", "stat=", "-o", "command="], { encoding: "utf8" });
+    if (seen.trim() && !seen.trim().startsWith("Z") && !seen.includes(marker(entry))) return false;
+  } catch {}
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
   try {
     return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
