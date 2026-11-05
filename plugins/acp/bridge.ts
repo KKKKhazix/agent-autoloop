@@ -93,13 +93,7 @@ export async function bridge(turn: Turn) {
     }
   };
   const onLine = (line: string) => {
-    if (!line.trim()) return;
-    let incoming: any = null;
-    try {
-      incoming = JSON.parse(line);
-    } catch {}
-    // A program's stdout gets stray prints too, and a turn isn't worth losing over one.
-    if (!incoming || typeof incoming !== "object") return console.error(`ACP 的输出里有读不懂的一行，跳过了：${line}`);
+    const incoming = JSON.parse(line);
     if (incoming.method === "session/update" && collecting && incoming.params?.sessionId === session) {
       onUpdate(incoming.params.update);
     } else if (incoming.method && incoming.id !== undefined) {

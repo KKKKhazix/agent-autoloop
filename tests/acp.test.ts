@@ -11,8 +11,8 @@
 // writing through it lands outside. A permission request that gives only the tool call's id is judged as if it had no kind;
 // what an earlier message said of the call hides what this one says, or a field left empty wipes what was known. A thought
 // in the middle of a message loses its first half; a finished tool call between two messages with no id runs them together,
-// so a "没跑成" after it reads as work done; a blank or unreadable line on the agent's stdout ends the turn. A failed turn
-// doesn't say so until the agent and its stdout are gone, which may be never; its half-written answer counts; or what the
+// so a "没跑成" after it reads as work done; a line that can't be read, which an agent must not write, is passed over, so one
+// with no newline takes the answer with it and the run hangs until its time limit. A failed turn doesn't say so until the agent and its stdout are gone, which may be never; its half-written answer counts; or what the
 // agent itself said on stderr is lost from the reason.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -261,28 +261,28 @@ test("ACP finds where the last message starts", async () => {
   }
 });
 
-test("ACP skips blank and unreadable lines on the agent's stdout, and says so on stderr", async () => {
-  const result = await launch(
-    "noisy-stdout",
-    `const noise = () => process.stdout.write('\\n \\n这不是 JSON\\nnull\\n123\\n');
-    noise();
-    const { initialize, 'session/new': fresh } = on;
-    on.initialize = (m) => { noise(); initialize(m); };
-    on['session/new'] = (m) => { noise(); fresh(m); };
-    on['session/prompt'] = (m) => {
-      noise();
-      say('做完了');
-      noise();
-      send({ id: m.id, result: { stopReason: 'end_turn' } });
-    };`,
-  );
-  assert.equal(result.code, 0, result.err);
-  const reading = acp.read(result.out, result.code, result.err);
-  assert.equal(reading.text, "做完了");
-  assert.equal(reading.finished, true);
-  assert.match(result.err, /这不是 JSON/);
-  assert.match(result.err, /null/);
-  assert.ok(!result.out.includes("这不是 JSON"), "stdout stays what the adapter reads");
+test("ACP ends a turn as soon as it can't read a line from the agent", async () => {
+  for (const [name, stray] of [
+    ["a-stray-line", "这不是 JSON\\n"],
+    ["a-stray-print-with-no-newline", "这不是 JSON"],
+    ["a-blank-line", "\\n"],
+    ["a-null", "null\\n"],
+  ] as const) {
+    // Passed over, a print with no newline takes the answer with it, and nothing would end the turn but this timer.
+    const result = await launch(
+      name,
+      `setTimeout(() => process.exit(0), 3000);
+      on['session/prompt'] = (m) => {
+        say('做完了');
+        process.stdout.write('${stray}');
+        send({ id: m.id, result: { stopReason: 'end_turn' } });
+      };`,
+    );
+    assert.notEqual(result.code, 0, name);
+    const reading = acp.read(result.out, result.code, result.err);
+    assert.equal(reading.text, undefined, name);
+    assert.doesNotMatch(reading.error!, /退出/, `${name}: it didn't wait for the agent to go`);
+  }
 });
 
 test("ACP says a turn has failed and why as soon as it has, so nothing has to wait for the agent to go", async () => {
