@@ -71,6 +71,15 @@ const STATUS_USAGE = `用法：agent-autoloop status [--json]
 现在什么情况：谁在线、等你什么、在做什么、做过什么、花了多少。
   --json  输出 /v1/state 的原始结构，给脚本和看板用`;
 
+const UPDATE_USAGE = `用法：agent-autoloop update
+
+更新到最新发布的版本。没有参数。`;
+
+const UNINSTALL_USAGE = `用法：agent-autoloop uninstall [--yes]
+
+卸载程序并保留规则、密钥和记录。
+  --yes  跳过确认`;
+
 const RESTORE_USAGE = `用法：agent-autoloop restore <目录> [--yes]
 
 恢复会替换本机的数据库、主密钥和配置文件；先停掉中台，--yes 跳过确认。`;
@@ -109,9 +118,9 @@ const TAKES: Record<string, { flags: string[]; usage: string }> = {
   stop: { flags: [], usage: "用法：agent-autoloop stop <第几轮>" },
   tell: { flags: ["task"], usage: "用法：agent-autoloop tell <编号> [--task 定时任务名]，内容从标准输入读" },
   try: { flags: [], usage: TRY_USAGE },
-  uninstall: { flags: ["yes"], usage: "用法：agent-autoloop uninstall [--yes]" },
+  uninstall: { flags: ["yes"], usage: UNINSTALL_USAGE },
   up: { flags: [], usage: "用法：agent-autoloop up" },
-  update: { flags: [], usage: "用法：agent-autoloop update" },
+  update: { flags: [], usage: UPDATE_USAGE },
   why: { flags: ["json"], usage: "用法：agent-autoloop why <第几轮> [--json]" },
 };
 
