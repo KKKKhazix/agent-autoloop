@@ -156,6 +156,7 @@ Built-in plugins ship with the program and are enabled through configuration. Us
 
 | Agent | Command |
 |---|---|
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cli-help.md#dsh-headless) older versions (the built-in plugin needs 0.2.2 or newer) | `dsh --profile headless {prompt}` |
 | [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/cli.md) | `pi --print {prompt}` |
 | [OpenClaw](https://docs.openclaw.ai/cli/agent) | `openclaw agent exec {prompt}` |
 | [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | `hermes chat -q {prompt}` |

@@ -2,8 +2,9 @@
 // the one its session was saved with; a call that needs approval waits for someone who isn't there; a resumed turn starts a
 // new session; a run that's still going, or whose turn has ended while its background work finishes, is taken for an answer
 // or a failure, and stopped; a run that ended in an error or without an answer is taken for a result; the token counts of a
-// run's several steps are dropped; a program that's missing or broken doesn't say what to do. The events are the shapes in
-// DSH's own packages/bundle/headless/src/json-stream.ts. The program is looked up through the login shell, so this points the shell and HOME at
+// run's several steps are dropped; a program that's missing, broken or too old to take these options passes for usable, or
+// a mistake it can only report on stdout is lost. The events are the shapes in DSH's own
+// packages/bundle/headless/src/json-stream.ts and startup.ts; its real program has not been run here. The program is looked up through the login shell, so this points the shell and HOME at
 // this test's own instead of whatever this machine has installed.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -21,8 +22,10 @@ const shell = join(scratch, "shell");
 writeFileSync(
   program,
   `#!/bin/sh
-[ "\${DSH_TEST_USABLE:-}" = 1 ] || { echo "dsh: cannot run" >&2; exit 1; }
-echo 0.2.0
+[ "\${DSH_TEST_USABLE:-}" = "" ] && { echo "dsh: cannot run" >&2; exit 1; }
+[ "$1 $2" = "headless --help" ] || { echo "dsh: unexpected $*" >&2; exit 1; }
+echo "  --json"
+[ "\${DSH_TEST_USABLE:-}" = old ] || echo "  --approval-policy <policy>"
 `,
   { mode: 0o755 },
 );
@@ -166,6 +169,11 @@ test("DSH: a run that ended with no final event falls back to its exit", () => {
   assert.deepEqual(dsh.read("", null, "still starting"), {}, "running, so nothing to report yet");
 });
 
+test("DSH: a mistake only reported on stdout is the reason it gives", () => {
+  const refused = JSON.stringify({ type: "error", message: "unknown option '--permission-mode'" });
+  assert.equal(dsh.read(refused, 1, "").error, "退出码 1：unknown option '--permission-mode'");
+});
+
 test("DSH: a line of output that's JSON but no event is noise", () => {
   const noise = 'null\n42\n"words"\n[]\n';
   assert.doesNotThrow(() => dsh.read(noise, null, ""));
@@ -174,8 +182,10 @@ test("DSH: a line of output that's JSON but no event is noise", () => {
 
 test("DSH: check passes when the program runs, and says what to do when it doesn't", () => {
   assert.match(check()!, /^DSH 用不了：运行 dsh headless "hi" 看看（/);
-  process.env.DSH_TEST_USABLE = "1";
+  process.env.DSH_TEST_USABLE = "old";
   try {
+    assert.match(check()!, /版本太旧/);
+    process.env.DSH_TEST_USABLE = "1";
     assert.equal(check(), null);
   } finally {
     delete process.env.DSH_TEST_USABLE;

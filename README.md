@@ -154,6 +154,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 | Agent | 接入命令 |
 |---|---|
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cli-help.md#dsh-headless) 旧版（内置插件要 0.2.2 或更新） | `dsh --profile headless {prompt}` |
 | [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/cli.md) | `pi --print {prompt}` |
 | [OpenClaw](https://docs.openclaw.ai/cli/agent) | `openclaw agent exec {prompt}` |
 | [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | `hermes chat -q {prompt}` |

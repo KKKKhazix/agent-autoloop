@@ -49,7 +49,7 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 
 只需要打印最后一条消息时，用内置 `command` 加参数数组即可，不必写插件。
 
-DeepSeek Harness 有内置 `dsh` 插件，规则里写 `use: "dsh"`：它以 `dsh headless --json` 跑一轮，从 `session` 事件拿会话编号，用 `--session-id` 续接，把 `step_end` 的用量汇总为 Token，`final` 事件才算跑完；`access` 每次都映射成 `--permission-mode`，要人批准的调用用 `--approval-policy never` 直接拒绝。没有可打开的桌面会话链接。
+DeepSeek Harness 有内置 `dsh` 插件，规则里写 `use: "dsh"`，要 0.2.2 或更新（现在要 `npm install -g @deepseek-ai/dsh@next`，`latest` 还是旧版，`agent-autoloop doctor` 会查）。它以 `dsh headless --json` 跑一轮，从 `session` 事件拿会话编号，用 `--session-id` 续接，把 `step_end` 的用量汇总为 Token，`final` 事件才算跑完；`access` 每次都映射成 `--permission-mode`，要人批准的调用用 `--approval-policy never` 直接拒绝。规则里的 `model`、`effort` 不起作用，用 DSH 自己的配置。没有可打开的桌面会话链接。DSH 默认把会话日志上传给 DeepSeek，见[它的说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)。
 
 ### 浏览器接入
 
@@ -110,7 +110,7 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 |---|---|---|---|
 | Codex | `read-only`：能跑 shell，不能写文件，命令默认不能联网 | `workspace-write`：能跑 shell、写工作目录和临时目录，命令默认不能联网 | `danger-full-access`：能写文件、跑 shell、联网，无审批 |
 | Claude Code | `plan`：能读文件和运行只读命令；其他命令取决于自动审批及本机规则 | `acceptEdits`：再允许目录内文件编辑和常见文件操作；任意 shell 或联网仍需放行 | `bypassPermissions`：跳过工具审批，没有额外系统隔离 |
-| DeepSeek Harness | `read-only` | `workspace-write`：命令和文件改动限于工作目录和临时目录，读文件和联网不受限 | `danger-full-access`：不受限制 |
+| DeepSeek Harness | `read-only`：不能写文件，读文件和联网不受限 | `workspace-write`：命令和文件改动限于工作目录和临时目录，读文件和联网不受限 | `danger-full-access`：不受限制 |
 
 Codex 的三个档位已用插件命令实跑；DeepSeek Harness 和 Claude Code 分别依据 [DSH 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)和[官方权限说明](https://code.claude.com/docs/en/permission-modes)整理，没有调用模型实跑。Codex 的命令网络限制与托管搜索、MCP 不是同一个边界，详见[官方沙箱说明](https://learn.chatgpt.com/docs/agent-approvals-security)。用户的 CLI 配置可能改变上述能力；`read` 也不代表读不到本机密钥。
 
