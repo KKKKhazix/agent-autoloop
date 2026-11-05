@@ -304,10 +304,8 @@ export function createWorker({
     } catch (error) {
       sayOnce(`run ${entry.run}: couldn't read its output: ${error}`);
       // One still going goes on, since this says nothing about how it's doing. Whether one that has ended got started isn't
-      // known, and starting it again in a new session could do its work twice: it stays in this one, the session last read,
-      // since the one made up at launch may be nothing its CLI knows of.
-      const problem = `读不懂这个 Agent 的输出：${(error as Error).message ?? error}`;
-      return { started: true, error: problem, ...(entry.told && { session: entry.told }) };
+      // known, and starting it again in a new session could do its work twice: it stays in this one.
+      return { started: true, error: `读不懂这个 Agent 的输出：${(error as Error).message ?? error}` };
     }
   }
 
@@ -420,6 +418,11 @@ export function createWorker({
     if (looking === null && !blind) log(`couldn't run ps; runs count as going until they end or time out`);
     blind = looking === null;
     const seen = read(entry, adapter, null);
+    // Kept as soon as it's read: if the end can't be read, the one made up at launch may be nothing its CLI knows of.
+    if (seen.session && seen.session !== entry.session) {
+      entry.session = seen.session;
+      save(entry);
+    }
     const session = seen.session ?? (adapter.link ? (entry.resume ?? entry.session) : undefined);
     if (session && session !== entry.told) {
       try {
