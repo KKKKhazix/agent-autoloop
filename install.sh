@@ -32,7 +32,14 @@ chmod 700 "$ROOT"
 # A copy follows where it came from, and what came from the public repository follows its newest release, which has passed
 # every check. cli/update.ts decides the same way, or an update would fail on a copy this had moved.
 from="$REPO"
-if [ -d "$APP/.git" ]; then from=$(git -C "$APP" config --get remote.origin.url || true); fi
+if [ -d "$APP/.git" ]; then
+  from=$(git -C "$APP" config --get remote.origin.url || true)
+  # Going on would say it had updated, and leave this copy following where it came from.
+  if [ -n "${AGENT_AUTOLOOP_REPO:-}" ] && [ "$from" != "$REPO" ]; then
+    echo "这里已经装过了，来源是 $from，不是 $REPO。要换来源，先运行 agent-autoloop uninstall 再装。"
+    exit 1
+  fi
+fi
 release=""
 if [ "$from" = "$PUBLISHED" ]; then
   # On a line of its own: in a pipe, not getting an answer would look like there being no releases.

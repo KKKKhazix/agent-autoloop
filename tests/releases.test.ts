@@ -218,7 +218,7 @@ test("the installer run over a copy from elsewhere leaves it following there, an
   assert.deepEqual(updateCode(it.app), { changed: false, to: null });
 });
 
-test("a repository given by hand over a copy that follows releases changes nothing and doesn't fail", () => {
+test("a repository given by hand over a copy from elsewhere stops and says so, rather than saying it updated", () => {
   // One that was on main before releases, which pulling can't do anything with once it's at a release.
   const person = join(dir, "by-hand-over");
   const app = join(person, "hub", "app");
@@ -227,7 +227,10 @@ test("a repository given by hand over a copy that follows releases changes nothi
   updateCode(app);
   const release = at(app);
   writeFileSync(join(person, "hub", "config.json"), "{}");
-  install(person, { AGENT_AUTOLOOP_REPO: `file://${original}` });
+  const done = runInstaller(person, { AGENT_AUTOLOOP_REPO: `file://${original}` });
+  assert.notEqual(done.status, 0);
+  assert.match(done.stdout, /要换来源/);
+  assert.doesNotMatch(done.stdout, /更新好了/);
   assert.equal(at(app), release);
 });
 
