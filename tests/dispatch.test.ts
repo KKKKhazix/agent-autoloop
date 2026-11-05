@@ -121,3 +121,43 @@ test("cancelled dispatch never retries a late failed receipt, including duplicat
   assert.equal(f.act("claimNext", "w1", "again"), null);
   assert.deepEqual(snapshot(evolve(empty(), f.log)), snapshot(f.view()));
 });
+
+// The opt-in dispatch guarantee must not silently change ordinary queue semantics.
+test("ordinary runs retain upstream claim behavior when their session strings match", () => {
+  const f = fixture();
+  for (const subject of ["ordinary:a", "ordinary:b"]) {
+    f.act("ingest", "app", { id: subject, type: "feedback.new", subject });
+    const job = f.act("claimNext", "w1", subject);
+    f.act("finish", job.run, job.token, {
+      outcome: "done",
+      session: "shared",
+      ask: [{ title: subject, text: "continue", options: ["yes", "no"] }],
+    });
+  }
+  for (const card of rows(f.view(), "cards")) f.act("answer", card.id, { choice: 0 });
+  assert.equal(f.act("claimNext", "w1", "ordinary:first").session, "shared");
+  assert.equal(f.act("claimNext", "w1", "ordinary:second")?.session, "shared");
+});
+
+for (const explicitFirst of [true, false])
+  test(`explicit dispatch excludes an ordinary claimant of its session (explicit first: ${explicitFirst})`, () => {
+    const f = fixture();
+    f.act("ingest", "app", { id: "ordinary", type: "feedback.new", subject: "ordinary" });
+    const job = f.act("claimNext", "w1", "initial");
+    f.act("finish", job.run, job.token, {
+      outcome: "done",
+      session: "shared",
+      ask: [{ title: "continue", text: "continue", options: ["yes", "no"] }],
+    });
+    const answer = () => f.act("answer", rows(f.view(), "cards")[0].id, { choice: 0 });
+    const dispatch = () => f.act("dispatch", { ...f.request("explicit"), resumeFrom: job.run });
+    if (explicitFirst) {
+      dispatch();
+      answer();
+    } else {
+      answer();
+      dispatch();
+    }
+    assert.equal(f.act("claimNext", "w1", "first").session, "shared");
+    assert.equal(f.act("claimNext", "w1", "second"), null);
+  });

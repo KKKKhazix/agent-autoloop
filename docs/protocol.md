@@ -439,26 +439,13 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 
 ## 所有者：显式派发（可选扩展）
 
-### 用在按 Thread 续接的路由器里
-
-Thread 是同一业务事项的连续事件，例如同一个 PR、IM 话题或邮件串，不等同于一次 Run 或一个 Agent 原生会话。外部路由器保存 Thread 与执行会话的绑定；同一 Thread 可以关联多个执行会话，由路由器选择本次接收者。
-
-- Slow Path：新 Thread、没有可用绑定或任务超出原执行者范围时，由路由器判断交给谁，选择可信规则并首次派发；完成后记录返回的 Run 和原生会话关系。
-- Fast Path：Thread 已绑定可续接的执行者时，后续事件直接按绑定派发，以 `resumeFrom` 指向兼容且已完成的 Run，不再重新做语义分派。执行者还忙时，路由器保留待投递事件，待其结束后续接；本接口不向运行中的会话注入消息。
-
-例如“分析这个问题”执行完成后，同一 Thread 又收到“补充这份材料”：路由器用新批次 id 和新增事件编号、原 lane、上一轮的 `resumeFrom` 派发，内核创建新 Run 并续接原生会话。网络重试沿用同一批次 id，不会额外创建 Run。同一 group 内的 `lane` 是串行执行边界，不能简单地把一次新 Run 当成新会话。
-
-本扩展只提供上述流程所需的可靠派发、续接和取消原语；不在内核实现 Thread 识别、订阅表、Fast/Slow Path 选择或模型路由。普通事件入口、分组和重试语义保持兼容；领取阶段增加同原生会话的已领取 Run 互斥，普通任务也适用。这不是外部 Agent 进程锁，unknown 轮次仍需调用方核对。插件应避免同一事件同时进入普通路由和显式派发。
-
-### 请求与执行约定
-
 复杂路由插件可以先通过来源接口登记事件，再使用 owner 密钥派发已记录的事件：
 ```json
 {"id":"task:123:batch:1","rule":"处理告警","lane":"task:123","eventIds":[34],"resumeFrom":12,"context":{"replyTarget":{"messageId":"message-2"}}}
 ```
 `POST /v1/dispatch` 返回 `{ "run": 13, "duplicate": false }`。相同 id 和内容重试返回同一 Run（duplicate=true），内容改变返回 409。JSON 对象键顺序不影响幂等；数组顺序有意义。id 最多 200 个 ASCII 标识符字符，lane 使用 subject 字符集、最多 100 字符；eventIds 为 1–100 个唯一正整数。context 是最多 8000 字符的 JSON 对象，通过 Job.context.dispatch 传递，不作为指令解释。
 
-此接口只有 owner 可调用；来源、worker、run token 均不能控制派发。执行配置仍来自已存在的规则，不能注入 model、cwd、access 或 session。resumeFrom 可省略；指定时必须引用已正常结束、保存了 session、Agent 配置及 cwd 与目标一致的 Run。规则在派发时固定，后续规则重载不修改该派发的排队执行配置；规则被删除仍按既有规则停止语义处理。相同组/lane 串行，同一会话不能被两个已领取的 Run 同时使用。失败重试不合并或删除独立派发的 Run。
+此接口只有 owner 可调用；来源、worker、run token 均不能控制派发。执行配置仍来自已存在的规则，不能注入 model、cwd、access 或 session。resumeFrom 可省略；指定时必须引用已正常结束、保存了 session、Agent 配置及 cwd 与目标一致的 Run。规则在派发时固定，后续规则重载不修改该派发的排队执行配置；规则被删除仍按既有规则停止语义处理。相同组/lane 串行。涉及显式派发时，同一会话不能被两个已领取的 Run 同时使用；普通 Run 之间保持既有领取语义。这不是外部进程锁，unknown 状态仍需核对。失败重试不合并或删除独立派发的 Run。
 
 派发 id 在事实日志中永久记录；取消或完成后重发同 id 也不会重新执行。不同 id 是不同执行请求，即使 eventIds 一样。插件必须稳定保存批次 id，并避免同一事件同时走普通规则与显式派发；内核不猜测 Thread/Task、不做语义去重、不验证插件的业务政策。回复目标与订阅关系由插件维护，context 不自动修改卡片路由。
 

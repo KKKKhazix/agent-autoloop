@@ -319,7 +319,10 @@ function claimNext(draft: Draft, worker: string, claim: string) {
     (run.dispatch_id || ruleNamed(draft, run.rule)) &&
     !claimed.some((other) => other.grp === run.grp && other.lane === run.lane) &&
     !claimed.some(
-      (other) => (run.session ?? run.resume) && (other.session ?? other.resume) === (run.session ?? run.resume),
+      (other) =>
+        (run.dispatch_id || other.dispatch_id) &&
+        (run.session ?? run.resume) &&
+        (other.session ?? other.resume) === (run.session ?? run.resume),
     ) &&
     claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp);
   // The same claim again means the answer got lost: it gets back the run it already has.
