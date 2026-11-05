@@ -693,6 +693,14 @@
             "type": "string",
             "maxLength": 200
           }
+        },
+        "paused": {
+          "description": "Rules that match the event but are paused, so it was recorded for them and not dispatched.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
         }
       },
       "required": ["event", "duplicate", "routed"],

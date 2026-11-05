@@ -1,13 +1,23 @@
 // Reading the view: what the decisions and the doors ask of it, and the shapes they hand out.
 import { credential, type Environment } from "./credentials.ts";
 import { rows, type Fact, type Row, type View } from "./evolve.ts";
-import { ruleOf, type Rules } from "./rules.ts";
+import { ruleOf, type Rule, type Rules } from "./rules.ts";
 import type { Job } from "../protocol/job.ts";
 
 export function configuration(view: View, version?: number): Rules {
   const current = view.get("config", "rules");
   return (version === undefined || version === current?.version ? current : view.get("config", version))?.value;
 }
+/** Where a pause is kept: one per rule and one per capability, so lifting one never lifts the other. */
+export const pauseKey = (kind: "rule" | "requires", name: string) => `${kind}:${name}`;
+const pauseAt = (row: Row | undefined, now: number) => !!row && (row.until === null || Date.parse(row.until) > now);
+
+/** What keeps a rule from taking work at this moment: its own pause, and the pause of anything it requires. */
+export function pausesOf(view: View, rule: Rule, now: number): Row[] {
+  const keys = [pauseKey("rule", rule.name), ...(rule.requires ?? []).map((name) => pauseKey("requires", name))];
+  return keys.map((key) => view.get("pauses", key)).filter((row): row is Row => pauseAt(row, now));
+}
+
 export const workerOf = (view: View, run: Row) => configuration(view, run.rules_version).agents[run.agent]?.worker;
 export function agentsOf(view: View, worker: string) {
   const agents = Object.entries(configuration(view).agents);

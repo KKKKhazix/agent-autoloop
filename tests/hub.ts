@@ -11,7 +11,7 @@ export { RulesError } from "../protocol/rules.ts";
 
 export const ruleNamed = (name: string) => rules.rules.find((rule) => rule.name === name);
 
-type EventAck = { event: number; duplicate: boolean; routed: string[] };
+type EventAck = { event: number; duplicate: boolean; routed: string[]; paused: string[] };
 export const ingest = (source: string, input: unknown, now = Date.now()): EventAck =>
   execute("ingest", [source, input], now);
 export const claimNext = (worker: string, claim: string, now = Date.now()): Job | null =>

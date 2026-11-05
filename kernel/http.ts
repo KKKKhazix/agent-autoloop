@@ -206,6 +206,35 @@ async function cardAction(call: Call, id: number, action: string) {
   return json({ ok: true });
 }
 
+const CONTROL_FIELDS: Record<string, string[]> = { pause: ["reason", "until"], resume: [], run: ["subject", "reason"] };
+const CONTROL_INPUTS: Record<string, Record<string, string>> = {
+  rules: { pause: "pauseRule", resume: "resumeRule", run: "runRule" },
+  requires: { pause: "pauseRequires", resume: "resumeRequires" },
+};
+
+/** Pause, resume or run a rule now, or pause every rule that requires something: the owner's, kept in the log. */
+async function control(call: Call, what: string, encoded: string, action: string) {
+  const holder = requireKey(call, "owner");
+  let name: string;
+  try {
+    name = decodeURIComponent(encoded);
+  } catch {
+    throw new InputError("名字不正确");
+  }
+  const text = await readText(call.request);
+  let given: unknown = {};
+  try {
+    if (text.trim()) given = JSON.parse(text);
+  } catch {
+    throw new InputError("不是 JSON");
+  }
+  if (!given || typeof given !== "object" || Array.isArray(given)) throw new InputError("要是一个 JSON 对象");
+  const unknown = Object.keys(given).filter((field) => !CONTROL_FIELDS[action].includes(field));
+  if (unknown.length) throw new InputError(`不认识的字段：${unknown.join("、")}`);
+  const type = CONTROL_INPUTS[what][action];
+  return json(action === "resume" ? act(call, type, name) : act(call, type, name, holder, given));
+}
+
 function state(call: Call) {
   requireKey(call, "owner");
   const before = call.url.searchParams.get("before");
@@ -263,6 +292,10 @@ async function route(call: Call): Promise<Response> {
   if (method === "GET" && path === "/v1/cards/next") return nextCard(call);
   const card = /^\/v1\/cards\/([1-9][0-9]*)\/(delivered|failed|answer|resolve)$/.exec(path);
   if (method === "POST" && card) return cardAction(call, Number(card[1]), card[2]);
+  const ruleControl = /^\/v1\/(rules|requires)\/([^/]+)\/(pause|resume|run)$/.exec(path);
+  if (method === "POST" && ruleControl && CONTROL_INPUTS[ruleControl[1]][ruleControl[3]]) {
+    return control(call, ruleControl[1], ruleControl[2], ruleControl[3]);
+  }
   if (method === "GET" && path === "/v1/state") return state(call);
   if (method === "GET" && path === "/v1/stream") return stream(call);
   return json({ error: "没有这个地址" }, 404);
