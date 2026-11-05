@@ -79,6 +79,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["resume", (value) => typeof value === "boolean", "只能是 true 或 false", true],
     ["tell", (value) => TELLS.includes(value as string), `只能是 ${TELLS.join("、")}`, true],
     ["emits", isObject, "要是一个对象", true],
+    ["channels", isSomeWords, "要是通道的列表", true],
   ]);
   if (isObject(when) && "source" in when) {
     checkFields(issues, `${where}的 when `, when, [
@@ -105,6 +106,19 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
       ["source", emittable, `不是已登记的来源：${rule.emits.source}`],
       ["types", isTypes, "要是事件类型的列表"],
     ]);
+  }
+  // A rule may name the channels its cards go to, but only channels that exist, and only once each.
+  if (isObject(rule) && Array.isArray(rule.channels)) {
+    for (const channel of rule.channels) {
+      if (!isText(channel)) {
+        issues.push(`${where}的 channels 要写通道的编号`);
+        continue;
+      }
+      // `in` would accept names that only look like channels, such as "constructor": they are not registered.
+      if (!Object.hasOwn(rules.channels, channel)) issues.push(`${where}的 channels 里没有这个通道：${channel}`);
+      if (rule.channels.indexOf(channel) !== rule.channels.lastIndexOf(channel))
+        issues.push(`${where}的 channels 里 ${channel} 写了两次`);
+    }
   }
   rule.group ??= rule.name;
   rule.tell ??= "needed";

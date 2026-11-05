@@ -214,8 +214,36 @@ test("a channel comes for cards, reports them, and passes on who answered; the l
   );
   assert.equal((await call(url, { key: keys.chat, body: { choice: 0, by: "me", ref: "om_other" } })).status, 401);
   assert.equal((await call(url, { key: keys.chat, body: { choice: 9, by: "me", ref: `om_${ask.id}` } })).status, 400);
-  const yes = await call(url, { key: keys.chat, body: { choice: 1, by: "me", ref: `om_${ask.id}` } });
+  // HTTP version gate: 400 on non-positive safe integer, 409 on stale version, 200 on matching version
+  assert.equal(
+    (await call(url, { key: keys.chat, body: { choice: 1, by: "me", ref: `om_${ask.id}`, expectedVersion: 0 } }))
+      .status,
+    400,
+  );
+  const beforeStale = (await call("/v1/state", { key: keys.owner })).json;
+  assert.equal(
+    (await call(url, { key: keys.chat, body: { choice: 1, by: "me", ref: `om_${ask.id}`, expectedVersion: 999 } }))
+      .status,
+    409,
+  );
+  const afterStale = (await call("/v1/state", { key: keys.owner })).json;
+  assert.deepEqual(
+    [afterStale.cards.find((c: any) => c.id === ask.id), afterStale.totals.queued, afterStale.totals.running],
+    [beforeStale.cards.find((c: any) => c.id === ask.id), beforeStale.totals.queued, beforeStale.totals.running],
+    "a stale answer leaves the card, the queue and the running count as they were",
+  );
+  const yes = await call(url, {
+    key: keys.chat,
+    body: { choice: 1, by: "me", ref: `om_${ask.id}`, expectedVersion: 1 },
+  });
   assert.deepEqual([yes.status, yes.json.changed], [200, true]);
+  // After moving to version 2, expectedVersion 1 gets 409 Conflict even on decided card
+  assert.equal(
+    (await call(url, { key: keys.chat, body: { choice: 0, by: "me", ref: `om_${ask.id}`, expectedVersion: 1 } }))
+      .status,
+    409,
+  );
+  // Without expectedVersion, old idempotent behaviour returns changed: false
   assert.equal(
     (await call(url, { key: keys.chat, body: { choice: 0, by: "me", ref: `om_${ask.id}` } })).json.changed,
     false,
@@ -234,6 +262,29 @@ test("a channel comes for cards, reports them, and passes on who answered; the l
     (await call("/v1/cards/99999/delivered", { key: keys.chat, body: { version: 1, ref: "x" } })).status,
     404,
   );
+});
+
+test("a directed delivery rejects a future version over HTTP", async () => {
+  const { execute, getView, nextCard } = await import("../host/runtime.ts");
+  const made = execute("createCard", [
+    { key: "http-directed-version", kind: "ask", title: "版本", options: ["是"], target_channel: "chat" },
+  ]);
+  // Claim directly to avoid consuming unrelated fixture cards through the HTTP queue.
+  let claimed = nextCard("chat");
+  for (let i = 0; claimed && claimed.id !== made.card && i < 100; i++) claimed = nextCard("chat");
+  assert.equal(claimed?.id, made.card);
+  const before = getView().seq;
+  const rejected = await call(`/v1/cards/${made.card}/delivered`, {
+    key: keys.chat,
+    body: { version: 999, ref: "future" },
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(getView().seq, before);
+  const accepted = await call(`/v1/cards/${made.card}/delivered`, {
+    key: keys.chat,
+    body: { version: 1, ref: "valid" },
+  });
+  assert.equal(accepted.status, 200);
 });
 
 test("the owner's key reads everything, answers, resolves and stops; nothing else does, and there's no sign-in", async () => {
@@ -361,6 +412,28 @@ test("with no channel taking links, a card's link doesn't open", async () => {
     reloadRules(fixture);
   }
   assert.equal((await call(path)).status, 200);
+});
+
+test("a card for a channel that takes no links doesn't open, though another channel does", async () => {
+  const token = (id: number) => `/c/${one<{ token: string }>("SELECT token FROM cards WHERE id = ?", [id])!.token}`;
+  const chat = createCard({
+    kind: "ask",
+    title: "问",
+    text: "问",
+    options: ["甲", "乙"],
+    key: "to-chat",
+    target_channel: "chat",
+  });
+  const plain = createCard({
+    kind: "ask",
+    title: "问",
+    text: "问",
+    options: ["甲", "乙"],
+    key: "to-plain",
+    target_channel: "plain",
+  });
+  assert.equal((await call(token(chat.card))).status, 404, "the card is for the channel that takes no links");
+  assert.equal((await call(token(plain.card))).status, 200, "another channel does take them");
 });
 
 test("a card's link takes words of your own, and a notice takes a line of its own", async () => {

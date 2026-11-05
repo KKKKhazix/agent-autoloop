@@ -132,6 +132,16 @@ test("a mistake says which rule and what is wrong", () => {
     r.channels.chat.answerers = "me";
   }, /通道 chat.*answerers/);
   problem((r) => {
+    r.rules[0].channels = ["nowhere"];
+  }, /规则「意见」的 channels 里没有这个通道/);
+  problem((r) => {
+    r.rules[0].channels = ["chat", "chat"];
+  }, /规则「意见」的 channels 里 chat 写了两次/);
+  // A name the object only inherits is not a channel: "constructor" would otherwise pass a plain `in` check.
+  problem((r) => {
+    r.rules[0].channels = ["constructor"];
+  }, /规则「意见」的 channels 里没有这个通道：constructor/);
+  problem((r) => {
     r.elsewhere[0].to = "nobody";
   }, /定时任务「每周清理」.*to/);
   problem((r) => {

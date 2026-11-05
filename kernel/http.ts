@@ -100,8 +100,12 @@ async function cardAtLink(call: Call, linkToken: string) {
   const { rules, request } = call;
   const { environment } = call.services;
   const card = call.services.card(linkToken);
-  const linksInUse = Object.values(rules.channels).some((channel) => channel.links);
-  if (!card || !linksInUse) throw new NotFound("没有这张卡片");
+  if (!card) throw new NotFound("没有这张卡片");
+  const target = card.target_channel;
+  const targetAllows = target ? rules.channels[target]?.links === true : false;
+  const anyAllows = Object.values(rules.channels).some((channel) => channel.links);
+  const linksAllowed = target ? targetAllows : anyAllows;
+  if (!linksAllowed) throw new NotFound("没有这张卡片");
   if (call.now - Date.parse(card.created_at) > LINK_LIFETIME) {
     throw new AuthError("这个链接过期了。在装它的电脑上运行 agent-autoloop status，还没答的卡片都在那里，可以接着回答");
   }
@@ -183,7 +187,14 @@ async function cardAction(call: Call, id: number, action: string) {
   }
   if (action === "answer") {
     const who = channel ? { by: given?.by, ref: given?.ref, channel } : { by: "本人" };
-    return json(act(call, "answer", id, { choice: given?.choice, text: given?.text, ...who }));
+    return json(
+      act(call, "answer", id, {
+        choice: given?.choice,
+        text: given?.text,
+        expectedVersion: given?.expectedVersion,
+        ...who,
+      }),
+    );
   }
   if (!Number.isInteger(given?.version)) throw new InputError("要说明是哪个版本");
   const ref = typeof given.ref === "string" ? given.ref : null;

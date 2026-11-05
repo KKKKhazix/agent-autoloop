@@ -41,8 +41,13 @@ export function sourceOf(view: View, runId: number) {
 export function openInScope(view: View, run: Row) {
   const source = sourceOf(view, run.id);
   if (!source || !run.claimed_at) return [];
-  const inScope = (card: Row) => card.grp === run.grp && card.source === source && card.created_at <= run.claimed_at;
-  return rows(view, "cards", { state: "open", grp: run.grp, source }).filter(inScope);
+  const targetChannel = run.target_channel ?? null;
+  const inScope = (card: Row) =>
+    card.grp === run.grp &&
+    card.source === source &&
+    (card.target_channel ?? null) === targetChannel &&
+    card.created_at <= run.claimed_at;
+  return rows(view, "cards", { state: "open", grp: run.grp, source, target_channel: targetChannel }).filter(inScope);
 }
 
 export function cardView(card: Row, env: Environment, ref: string | null = null, links = false) {
@@ -75,7 +80,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
   const { name, cwd, skill, prompt, emits } = rules.rules.find((rule) => rule.name === run.rule)!;
   const events = eventsOf(view, run.id);
   const eventIds = events.map((event) => event.id);
-  const thread = { rule: run.rule, lane: run.lane };
+  const thread = { rule: run.rule, lane: run.lane, target_channel: run.target_channel ?? null };
   const answers = rows(view, "cards", { ...thread, answer_event: eventIds });
   const timers = rows(view, "timers", { ...thread, event_id: eventIds });
   const waiting = rows(view, "timers", { ...thread, event_id: null });

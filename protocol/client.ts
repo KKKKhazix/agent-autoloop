@@ -44,8 +44,10 @@ export function hubClient(url: string, key: string) {
       call("POST", `/v1/cards/${card}/delivered`, { body: { version, ref } }),
     failed: (card: number, version: number, error: string) =>
       call("POST", `/v1/cards/${card}/failed`, { body: { version, error } }),
-    answer: (card: number, body: { choice?: number; text?: string; by?: string; ref?: string }) =>
-      call("POST", `/v1/cards/${card}/answer`, { body }),
+    answer: (
+      card: number,
+      body: { choice?: number; text?: string; by?: string; ref?: string; expectedVersion?: number },
+    ) => call("POST", `/v1/cards/${card}/answer`, { body }),
     // Sources, the owner and tasks elsewhere.
     event: (body: unknown) => call("POST", "/v1/events", { body }),
     tell: (body: unknown) => call("POST", "/v1/tell", { body }),

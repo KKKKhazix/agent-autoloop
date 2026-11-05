@@ -153,10 +153,14 @@ export class View {
   *deliveryCandidates(channel: string, now: number): Generator<Row> {
     const sql = `SELECT c.data FROM (
       SELECT ${field("id")} AS id FROM projections WHERE collection='cards' AND ${field("state")}='open'
+        AND (${field("target_channel")} IS NULL OR ${field("target_channel")}=?)
       UNION SELECT ${field("id")} FROM projections WHERE collection='cards' AND ${field("fyi")}=1 AND ${field("created_at")}>=?
+        AND (${field("target_channel")} IS NULL OR ${field("target_channel")}=?)
       UNION SELECT card_id FROM projection_pending WHERE channel=?
-    ) candidates JOIN projections c ON c.collection='cards' AND c.key=CAST(candidates.id AS TEXT) ORDER BY candidates.id`;
-    for (const row of statement(this.db, sql).iterate(iso(now - 86400_000), channel))
+    ) candidates JOIN projections c ON c.collection='cards' AND c.key=CAST(candidates.id AS TEXT)
+      WHERE (json_extract(c.data,'$.target_channel') IS NULL OR json_extract(c.data,'$.target_channel')=?)
+      ORDER BY candidates.id`;
+    for (const row of statement(this.db, sql).iterate(channel, iso(now - 86400_000), channel, channel, channel))
       yield freeze(JSON.parse(String(row.data)));
   }
   fork() {

@@ -35,7 +35,8 @@ CREATE TABLE runs (
   finished_at TEXT,
   summary TEXT,
   error TEXT,
-  usage TEXT
+  usage TEXT,
+  target_channel TEXT
 );
 
 CREATE TABLE run_events (
@@ -70,6 +71,7 @@ CREATE TABLE cards (
   answer_event INTEGER,
   token TEXT NOT NULL UNIQUE,
   version INTEGER NOT NULL DEFAULT 1,
+  target_channel TEXT,
   created_at TEXT NOT NULL,
   decided_at TEXT,
   closed_at TEXT

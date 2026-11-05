@@ -51,6 +51,7 @@ const DEFAULTS: Partial<Record<Table, Row>> = {
     attempts: 0,
     ...nulls("claim", "issued", "last_issued", "last_result", "last_answer", "cancel_at", "resume", "session", "link"),
     ...nulls("claimed_at", "seen_at", "finished_at", "summary", "error", "usage"),
+    target_channel: null,
   },
   cards: {
     ...CARD_BASICS,
@@ -58,6 +59,7 @@ const DEFAULTS: Partial<Record<Table, Row>> = {
     lane: "",
     ...nulls("grp", "source", "agent", "session", "run_id", "answer_event"),
     version: 1,
+    target_channel: null,
     ...nulls("decided_at", "closed_at"),
   },
   deliveries: NOT_DELIVERED,
@@ -106,6 +108,10 @@ function add(draft: Draft, table: Table, fields: Row) {
 }
 
 const ruleNamed = (draft: Draft, name: string) => draft.rules.rules.find((rule) => rule.name === name);
+/** The channel a rule's cards go to by default: the first one it lists, or every channel if it lists none. */
+const defaultChannel = (rule: Rule): string | null => rule.channels?.[0] ?? null;
+/** A rule that lists channels may only put cards on those; a rule that lists none may go anywhere. */
+const allowsChannel = (rule: Rule, channel: string): boolean => rule.channels?.includes(channel) ?? false;
 function assignQueued(draft: Draft, run: Row) {
   const config = draft.view.get("config", "rules")!;
   const rule = (config.value as Rules).rules.find((rule) => rule.name === run.rule);
@@ -113,7 +119,12 @@ function assignQueued(draft: Draft, run: Row) {
   const session = rule.to === run.agent ? {} : nulls("session", "resume");
   put(draft, "runs", run.id, { agent: rule.to, rules_version: config.version, ...session });
 }
-const threadOf = (run: Row) => ({ rule: run.rule, lane: run.lane, grp: run.grp });
+const threadOf = (run: Row) => ({
+  rule: run.rule,
+  lane: run.lane,
+  grp: run.grp,
+  target_channel: run.target_channel ?? null,
+});
 
 /** The session a round about to start goes on in. With resume, one that has none takes its thread's last, unless that round was
  * stopped: what stopped it, or the owner's reason, would meet this one too. Rounds on a thread can share a session, so another
@@ -160,8 +171,13 @@ function justSeen({ now }: Draft, row?: Row) {
 }
 
 function createCard(draft: Draft, spec: Row) {
-  const cards = rows(draft.view, "cards", { key: spec.key, ...(!spec.once && { state: "open" }) }, 1, true);
-  const existing = cards.findLast((card) => card.key === spec.key && (spec.once || card.state === "open"));
+  const cards = rows(draft.view, "cards", { key: spec.key, ...(!spec.once && { state: "open" }) });
+  const existing = cards.findLast(
+    (card) =>
+      card.key === spec.key &&
+      (spec.once || card.state === "open") &&
+      (card.target_channel ?? null) === (spec.target_channel ?? null),
+  );
   if (existing) return { card: existing.id, duplicate: true };
   const { once, run, options, fyi, quiet, ...fields } = spec;
   const stored = {
@@ -179,13 +195,33 @@ const notify = (draft: Draft, key: string, title: string, text: string, extra: R
   createCard(draft, { key, kind: "notice", title, text, ...extra });
 
 /** A queued run of this rule and thread takes the event, so what comes in while it waits is handled together. */
-function enqueue(draft: Draft, rule: Rule, event: number, lane: string, resume?: string | null) {
+function enqueue(
+  draft: Draft,
+  rule: Rule,
+  event: number,
+  lane: string,
+  resume?: string | null,
+  targetChannel?: string | null,
+) {
   const rulesVersion = draft.view.get("config", "rules")!.version;
   const stamps = { not_before: draft.at, created_at: draft.at, rules_version: rulesVersion };
-  const isSameQueued = (run: Row) => run.rule === rule.name && run.lane === lane && run.state === "queued";
+  const target = targetChannel !== undefined ? targetChannel : defaultChannel(rule);
+  const isSameQueued = (run: Row) =>
+    run.rule === rule.name &&
+    run.lane === lane &&
+    (run.target_channel ?? null) === (target ?? null) &&
+    run.state === "queued";
   const run =
     rows(draft.view, "runs", { rule: rule.name, lane, state: "queued" }).find(isSameQueued) ??
-    add(draft, "runs", { rule: rule.name, agent: rule.to, grp: rule.group, lane, state: "queued", ...stamps });
+    add(draft, "runs", {
+      rule: rule.name,
+      agent: rule.to,
+      grp: rule.group,
+      lane,
+      state: "queued",
+      target_channel: target ?? null,
+      ...stamps,
+    });
   put(draft, "run_events", `${run.id}:${event}`, { run_id: run.id, event_id: event });
   if (resume) put(draft, "runs", run.id, { resume });
 }
@@ -345,7 +381,11 @@ function retryLater(draft: Draft, run: Row, result: Result) {
     return rejected;
   }
   put(draft, "runs", id, { state: "queued", not_before: iso(notBefore), ...failure });
-  const sameThread = (other: Row) => other.id !== id && other.rule === run.rule && other.lane === run.lane;
+  const sameThread = (other: Row) =>
+    other.id !== id &&
+    other.rule === run.rule &&
+    other.lane === run.lane &&
+    (other.target_channel ?? null) === (run.target_channel ?? null);
   for (const other of rows(draft.view, "runs", { rule: run.rule, lane: run.lane, state: "queued" }).filter(
     sameThread,
   )) {
@@ -368,15 +408,27 @@ function retryLater(draft: Draft, run: Row, result: Result) {
 
 function scheduleReview(draft: Draft, run: Row, later: Later) {
   const { rule, lane } = run;
+  const targetChannel = run.target_channel ?? null;
   const existing = rows(draft.view, "timers", { rule, lane, key: later.key, event_id: null }).find(
-    (timer) => timer.rule === rule && timer.lane === lane && timer.key === later.key && timer.event_id === null,
+    (timer) =>
+      timer.rule === rule &&
+      timer.lane === lane &&
+      timer.key === later.key &&
+      timer.event_id === null &&
+      (timer.target_channel ?? null) === targetChannel,
   );
   if (later.cancel) {
     if (existing) set(draft, "timers", existing.id, null);
     return;
   }
   const session = draft.view.get("runs", run.id)!.session;
-  const fields = { at: iso(Date.parse(later.at!)), about: later.about, session, hops: hopsOf(draft, run) };
+  const fields = {
+    at: iso(Date.parse(later.at!)),
+    about: later.about,
+    session,
+    hops: hopsOf(draft, run),
+    target_channel: targetChannel,
+  };
   if (existing) return void put(draft, "timers", existing.id, fields);
   const source = sourceOf(draft.view, run.id) ?? SCHEDULE;
   add(draft, "timers", { ...fields, rule, lane, key: later.key, source, event_id: null, created_at: draft.at });
@@ -404,7 +456,13 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
   for (const ask of result.ask ?? []) cardFromReceipt(draft, run, "ask", ask);
   for (const notice of result.notice ?? []) cardFromReceipt(draft, run, "notice", notice);
   if (rule?.tell === "always" && result.outcome === "done") {
-    const once = { fyi: true, once: true, ...threadOf(run), source: sourceOf(draft.view, id), run: id };
+    const once = {
+      fyi: true,
+      once: true,
+      ...threadOf(run),
+      source: sourceOf(draft.view, id),
+      run: id,
+    };
     notify(draft, `run:${id}:done`, run.rule, summary, once);
   }
   for (const later of result.later ?? []) scheduleReview(draft, run, later);
@@ -451,10 +509,19 @@ function answer(draft: Draft, id: number, given: Row) {
   const card = draft.view.get("cards", id);
   if (!card) throw new NotFound("没有这张卡片");
   if (given.channel !== undefined) {
+    if (card.target_channel != null && card.target_channel !== given.channel) {
+      throw new AuthError("这张卡片不归这个通道");
+    }
     const allowed = draft.rules.channels[given.channel]?.answerers;
     if (allowed && !allowed.includes(given.by ?? "")) throw new AuthError("这个人不能回答这张卡片");
     const delivery = draft.view.get("deliveries", `${id}:${given.channel}`);
     if (!delivery?.ref || delivery.ref !== given.ref) throw new AuthError("不是发出去的那条消息");
+  }
+  if (given.expectedVersion !== undefined) {
+    if (!Number.isSafeInteger(given.expectedVersion) || given.expectedVersion <= 0) {
+      throw new InputError("卡片版本号必须是正整数");
+    }
+    if (card.version !== given.expectedVersion) throw new Conflict("卡片版本已变化");
   }
   if (card.state !== "open") return { changed: false, state: card.state };
   if (given.by !== undefined && (typeof given.by !== "string" || [...given.by].length > ANSWER_BY)) {
@@ -482,13 +549,15 @@ function answer(draft: Draft, id: number, given: Row) {
   const eventId = recordEvent(draft, card.source ?? SCHEDULE, event, rule ? [rule.name] : []);
   const decision = { choice: given.choice ?? null, answer: text, by: given.by ?? null, decided_at: draft.at };
   put(draft, "cards", id, { state: "decided", ...decision, answer_event: eventId, version: card.version + 1 });
-  if (rule) enqueue(draft, rule, eventId, card.lane, card.agent === rule.to ? card.session : null);
+  if (rule)
+    enqueue(draft, rule, eventId, card.lane, card.agent === rule.to ? card.session : null, card.target_channel ?? null);
   return { changed: true, state: "decided" };
 }
 
 function nextCard(draft: Draft, channel: string) {
   const { now } = draft;
   for (const card of draft.view.deliveryCandidates(channel, now)) {
+    if (card.target_channel != null && card.target_channel !== channel) continue;
     const key = `${card.id}:${channel}`;
     const delivery = draft.view.get("deliveries", key) ?? NOT_DELIVERED;
     const recentNote = card.fyi && Date.parse(card.created_at) >= now - 24 * 60 * MINUTE;
@@ -535,7 +604,7 @@ function tick(draft: Draft) {
     const event = { id: `timer:${timer.id}`, type: "timer.due", subject: timer.lane, hops: timer.hops ?? 0 };
     const eventId = recordEvent(draft, timer.source, event, rule ? [rule.name] : []);
     put(draft, "timers", timer.id, { event_id: eventId });
-    if (rule) enqueue(draft, rule, eventId, timer.lane, timer.session);
+    if (rule) enqueue(draft, rule, eventId, timer.lane, timer.session, timer.target_channel ?? null);
   }
   sweep(draft);
 }
@@ -560,7 +629,24 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     return true;
   },
   ingest,
-  createCard,
+  createCard(draft, spec) {
+    const rule = spec.rule ? ruleNamed(draft, spec.rule) : undefined;
+    if (spec.rule && !rule) throw new InputError("规则不存在");
+    // A target the caller states is taken as stated, including null for every channel; only a target left out
+    // inherits the rule's own. A rule's allowlist narrows what may be named, never what silence means.
+    const target = Object.hasOwn(spec, "target_channel")
+      ? (spec.target_channel ?? null)
+      : rule
+        ? defaultChannel(rule)
+        : null;
+    if (target != null) {
+      if (typeof target !== "string" || !Object.hasOwn(draft.rules.channels, target)) {
+        throw new InputError("目标通道不存在");
+      }
+      if (rule?.channels && !allowsChannel(rule, target)) throw new InputError("规则不允许这个通道");
+    }
+    return createCard(draft, { ...spec, target_channel: target });
+  },
   tell(draft, key, title, text) {
     const told = createCard(draft, { key, title, text, kind: "notice", fyi: true, once: true });
     if (!told.duplicate) return told;
@@ -616,18 +702,40 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     return true;
   },
   answer,
+  answerLink(draft, id, given) {
+    const card = draft.view.get("cards", id);
+    if (!card) throw new NotFound("没有这张卡片");
+    const allowed =
+      card.target_channel != null
+        ? draft.rules.channels[card.target_channel]?.links === true
+        : Object.values(draft.rules.channels).some((channel) => channel.links);
+    if (!allowed) throw new NotFound("没有这张卡片");
+    return answer(draft, id, given);
+  },
   nextCard,
   delivered(draft, channel, id, version, ref) {
-    if (!draft.view.get("cards", id)) throw new NotFound("没有这张卡片");
+    const card = draft.view.get("cards", id);
+    if (!card) throw new NotFound("没有这张卡片");
+    if (card.target_channel != null && card.target_channel !== channel) {
+      throw new AuthError("这张卡片不归这个通道");
+    }
+    const prior = draft.view.get("deliveries", `${id}:${channel}`);
+    if (card.target_channel != null && !prior) throw new AuthError("要先领到卡片才能确认投递");
+    if (card.target_channel != null && (!Number.isSafeInteger(version) || version <= 0 || version > card.version)) {
+      throw new InputError("卡片版本不正确");
+    }
     if (ref !== null && (typeof ref !== "string" || [...ref].length > DELIVERY_REF)) {
       throw new InputError(`消息编号最多 ${DELIVERY_REF} 字`);
     }
-    const delivery = draft.view.get("deliveries", `${id}:${channel}`) ?? NOT_DELIVERED;
+    const delivery = prior ?? NOT_DELIVERED;
     const sent = { version: Math.max(delivery.version, version), ref: delivery.ref ?? ref };
     put(draft, "deliveries", `${id}:${channel}`, { card_id: id, channel, ...sent, ...NOT_TRYING, error: null });
   },
   failed(draft, channel, id, version, error) {
     const card = draft.view.get("cards", id);
+    if (card && card.target_channel != null && card.target_channel !== channel) {
+      throw new AuthError("这张卡片不归这个通道");
+    }
     const delivery = draft.view.get("deliveries", `${id}:${channel}`);
     if (!card || !delivery) throw new NotFound("这张卡片没有交给这个通道");
     const firstTry = delivery.first_try_at ? Date.parse(delivery.first_try_at) : draft.now;
