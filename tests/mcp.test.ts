@@ -1,7 +1,8 @@
 // Failure modes: stdout contains non-protocol text; unknown tools execute arbitrary endpoints; malformed arguments reach
 // the hub; an HTTP failure becomes a successful tool result; notifications get responses; source keys act as owner keys;
 // a client is told a version number left behind by a release; a slow tool call holds up a ping or another call, or is
-// dropped when the input ends while it's in hand.
+// dropped when the input ends while it's in hand; a U+2028 or U+2029 in a request, which JSON leaves as it is, cuts the
+// line, so the request never gets an answer.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -132,6 +133,23 @@ test("MCP stdio initializes and exposes only the typed hub operations", async ()
     ["/v1/runs/999/why", "Bearer owner-key"],
     ["/v1/state", "Bearer owner-key"],
   ]);
+});
+
+test("U+2028 and U+2029 in a request are part of the line", async () => {
+  let told = "";
+  const mcp = await connect(async (req, res) => {
+    for await (const chunk of req) told += chunk;
+    res.end(JSON.stringify({ ok: true }));
+  });
+  try {
+    const text = "第一行 第二行 第三行";
+    mcp.send({ id: 2, method: "tools/call", params: { name: "tell", arguments: { key: "k", text } } });
+    assert.equal((await mcp.answered(2)).result.isError, undefined);
+    assert.deepEqual(JSON.parse(told), { key: "k", text });
+    assert.ok(!mcp.answers().some((answer) => answer.error), "and no pieces of it were taken for requests");
+  } finally {
+    await mcp.close();
+  }
 });
 
 test("a slow tool call holds up neither a ping nor another call, and is still answered after the input ends", async () => {

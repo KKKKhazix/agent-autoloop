@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { createInterface } from "node:readline";
+import { eachLine } from "../../host/lines.ts";
 import { versionName } from "../../host/version.ts";
 import type { Turn } from "../../worker/agents.ts";
 
@@ -77,8 +77,9 @@ export async function bridge(turn: Turn) {
       else request.resolve(incoming.result);
     }
   };
-  const lines = createInterface({ input: child.stdout });
-  lines.on("line", (line) => {
+  let over = false;
+  eachLine(child.stdout, (line) => {
+    if (over) return;
     try {
       onLine(line);
     } catch (error) {
@@ -121,8 +122,8 @@ export async function bridge(turn: Turn) {
     if (result.stopReason !== "end_turn" || !text.trim()) throw new Error(`ACP 没有完成这一轮：${result.stopReason}`);
     console.log(JSON.stringify({ session, text, finished: true }));
   } finally {
+    over = true;
     process.removeListener("SIGTERM", stop);
-    lines.close();
     child.stdin.end();
     child.kill("SIGTERM");
   }

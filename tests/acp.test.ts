@@ -5,6 +5,7 @@
 // release. Going on in a session, a failure before the prompt (the program exits at once, initialize fails, loading breaks
 // off) is taken for a session that can't be gone on in, so the work is done again in a new one; an agent that refuses the
 // session or can't go on in any isn't let go to a new one; an agent that only has session/resume is told session/load.
+// A U+2028 or U+2029 in anything the agent says, which JSON leaves as it is, cuts the line and ends the turn.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "node:fs";
@@ -167,6 +168,19 @@ test("ACP uses session/resume for an agent that only has that, and session/load 
   );
   assert.equal(hasBoth.code, 0, hasBoth.err);
   assert.deepEqual(JSON.parse(readFileSync(called, "utf8")), ["session/load", "agent-session", home, []]);
+});
+
+test("ACP reads U+2028 and U+2029 in what the agent says as part of the line", async () => {
+  const result = await launch(
+    "line-separators",
+    `on['session/prompt'] = (m) => {
+      update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'read', title: '工具输出\\u2028第二行' });
+      say('第一行\\u2028第二行\\u2029第三行');
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+    };`,
+  );
+  assert.equal(result.code, 0, result.err);
+  assert.equal(acp.read(result.out, result.code, result.err).text, "第一行 第二行 第三行");
 });
 
 test("ACP chooses only a one-time permission and respects structured kinds and resolved paths", () => {
