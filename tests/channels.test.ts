@@ -356,3 +356,58 @@ test("GitHub: signed or not taken, and what it says becomes a plain event", () =
     /^a\/b-c$/,
   );
 });
+
+test("feishu: a card that can't be patched is sent again, not lost", async () => {
+  // Failure this guards: the bot didn't send the message being updated, so Feishu refuses the patch and the update is
+  // dropped once the tries run out. The reader is then stuck looking at the version before the answer. Sending the
+  // newer words as a new message costs a second card, which is the cheaper of the two.
+  const log = join(dir, "lark-patch.log");
+  const lark = join(dir, "lark-patch");
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+echo "$*" >> "${log}"
+case "$*" in
+  *"event consume"*) exec sleep 30 ;;
+  *"messages patch"*) cat > /dev/null; exit 1 ;;
+  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_new"}}' ;;
+esac
+`,
+  );
+  chmodSync(lark, 0o755);
+  const stop = new AbortController();
+  const cards: (Card | null)[] = [{ ...base, version: 2, ref: "om_old", state: "decided", choice: 1 }];
+  const calls: unknown[][] = [];
+  const hub = {
+    async nextCard() {
+      if (cards.length) return { card: cards.shift()! };
+      stop.abort();
+      return { card: null };
+    },
+    async delivered(...args: unknown[]) {
+      calls.push(["delivered", ...args]);
+      return {};
+    },
+    async failed(...args: unknown[]) {
+      calls.push(["failed", ...args]);
+      return {};
+    },
+    async answer(...args: unknown[]) {
+      calls.push(["answer", ...args]);
+      return { changed: true };
+    },
+  };
+  await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  const lines = readFileSync(log, "utf8").trim().split("\n");
+  assert.ok(
+    lines.some((l) => l.includes("messages patch --message-id om_old")),
+    "the message that was sent is tried first",
+  );
+  const sends = lines.filter((l) => l.includes("+messages-send"));
+  assert.equal(sends.length, 1, "a refused patch falls back to a new message");
+  assert.ok(
+    sends[0].includes("--idempotency-key agent-autoloop-card-5-v2"),
+    "the second message is this card's, at this version",
+  );
+  assert.deepEqual(calls, [["delivered", 5, 2, "om_new"]], "later updates change the message that exists now");
+});
