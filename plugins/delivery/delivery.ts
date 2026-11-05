@@ -192,8 +192,12 @@ export async function deliver(
     }
     pr = await io.api(`pulls/${number}`);
     if (pr.head.sha !== head) throw new Error("要合并的提交没有经过本轮审查");
+    if (pr.base.ref !== "main") throw new Error("等待检查期间目标分支改了，只合并到 main");
     if (!pr.merged_at) {
-      if (!labels(pr).has("deliver")) return { summary: "交付标记已撤回" };
+      if (!labels(pr).has("deliver")) {
+        await status(io, head, "delivery", "success", "交付标记已撤回，未合并或发布");
+        return { summary: "交付标记已撤回" };
+      }
       if (labels(pr).has("deliver-review")) return reviewOnly(pr);
       if ((await io.api("git/ref/heads/main")).object.sha !== base) {
         if (round < 3) continue;

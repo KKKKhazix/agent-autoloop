@@ -10,7 +10,8 @@
 // attestation of the commit standing; a merged PR without the label is followed and written to, so a later failed release turns
 // a completed delivery into a failure; findings on a PR someone merged during review report it as not merged, and its release
 // is not followed; right after ready the newest run is still a draft one and stands for the full check; a matrix job never
-// matches the required name, so a passed check waits forever.
+// matches the required name, so a passed check waits forever; a PR retargeted during checks is merged into the other branch; a
+// delivery withdrawn during checks leaves its status pending for good.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deliver, fullCheck, waitLive, disableAuto, type DeliveryIO } from "../plugins/delivery/delivery.ts";
@@ -242,6 +243,32 @@ test("a delivery withdrawn while main moves on stops without touching the branch
   assert.equal(state.reviewed, 1);
   assert.equal(state.merges, 0);
   assert.ok(!state.writes.includes("pulls/1/update-branch"));
+});
+test("a PR retargeted during checks is not merged", async () => {
+  const { io, state } = fixture();
+  const { api } = io;
+  io.api = async (path, body, method) => {
+    if (path.startsWith("actions/runs/1/jobs")) state.pr.base.ref = "release";
+    return api(path, body, method);
+  };
+  await assert.rejects(() => deliver("example/app", 1, io), /main/);
+  assert.equal(state.merges, 0);
+  assert.ok(!state.statuses.some((s: any) => s.context === "my-review"));
+});
+test("a delivery withdrawn during checks does not leave its status pending", async () => {
+  const { io, state } = fixture();
+  const { api } = io;
+  io.api = async (path, body, method) => {
+    if (path.startsWith("actions/runs/1/jobs")) state.pr.labels = [];
+    return api(path, body, method);
+  };
+  assert.equal((await deliver("example/app", 1, io)).summary, "交付标记已撤回");
+  assert.equal(state.merges, 0);
+  const last = state.statuses.filter((s: any) => s.context === "delivery").at(-1);
+  assert.equal(last.state, "success");
+  assert.match(last.description, /撤回/);
+  assert.match(last.description, /未合并/);
+  assert.ok(!state.statuses.some((s: any) => s.context === "my-review"));
 });
 test("findings and review-only mode stop before merge", async () => {
   const first = fixture();
