@@ -75,6 +75,7 @@
       "tell": "needed", // always 每轮做成都发（没事可做、没跑成不发）/ needed 只在有卡片时（默认）/ never 只压住回执里的通知，提问和中台自己的告警照发
       "emits": { "source": "shop", "types": ["pr.*"] }, // 回执里能发什么事件，不写就不能发
       "channels": ["feishu"], // 这条规则的卡片和通知只发到这几个通道，不写就发到所有通道
+      "requires": ["egress"], // 这条规则依赖的能力，可以按能力一起暂停，不写就没有
     },
   ],
   "elsewhere": [
@@ -91,6 +92,8 @@
   ],
 }
 ```
+
+`requires` 是这条规则依赖的能力名，小写字母、数字和 `-`，不重复，比如 `egress`（要连外网）。中台不检查能力本身，只用它来一起暂停：出口断了，暂停 `egress` 就停下所有写了它的规则。
 
 `elsewhere` 是在别处定时跑的任务：中台不启动它们，只在 `agent-autoloop status` 里列出来，它们要找你时用 `POST /v1/tell`。写了 `cwd`（还要写 `skill` 或 `prompt`）的也能问你：卡片带选项，你答了，中台像规则的一轮那样叫醒 `to`，在 `cwd` 照 `skill`、`prompt` 接着做，这一轮的组就是任务名，一次一轮，不接定时任务自己的会话。规则写错了，文件改动不生效，旧规则继续跑，并推一张卡片告诉你错在哪。
 
@@ -275,7 +278,42 @@ POST /v1/cards/56/resolve   { "reason": "不用决定了，因为……" }
 POST /v1/runs/12/cancel     {}
 ```
 
-`agent-autoloop status`、`answer`、`resolve`、`stop` 就是这几个请求。`/v1/state` 一次给最近 60 轮，`?before=<nextBefore>` 翻更早的。
+`agent-autoloop status`、`answer`、`resolve`、`stop` 就是这几个请求。
+
+### 暂停、恢复、立即运行
+
+```
+POST /v1/rules/巡检/pause      { "reason": "上游在修", "until": "2026-11-07T09:00:00+08:00" }   两项都可以不写
+→ 200 { "changed": true, "rule": "巡检", "paused": [{ "kind": "rule", "name": "巡检", "by": "owner", "reason": "上游在修", "since": "…", "until": "…" }] }
+POST /v1/rules/巡检/resume     {}
+→ 200 { "changed": true, "rule": "巡检", "paused": [] }          paused 不空：还被能力暂停着
+POST /v1/rules/巡检/run        { "subject": "#12", "reason": "看一眼" }                         两项都可以不写
+→ 200 { "event": 88, "run": 41 }
+POST /v1/requires/egress/pause  { "reason": "出口断了", "until": "…" }
+→ 200 { "changed": true, "requires": "egress", "rules": ["巡检", "意见"] }
+POST /v1/requires/egress/resume {}
+→ 200 { "changed": true, "requires": "egress", "rules": ["巡检", "意见"], "stillPaused": ["意见"] }
+```
+
+只接受本人的密钥。规则名按 URL 编码放进路径，请求体可以为空；不认识的字段返回 400。没有这条规则返回 404 `没有这条规则：<名字>`；`elsewhere` 里的任务返回 400，因为中台不启动它；没有规则写了这项能力返回 404。
+
+暂停和恢复是日志里的事实（种类 `pauseRule`、`resumeRule`、`pauseRequires`、`resumeRequires`），不改 `rules.json`；重启、从日志重建投影后照样有效。`by` 是所用本人密钥的名字。重复暂停只更新原因和 `until`，`since` 保留第一次的时间；原因和 `until` 都没变时 `changed` 为 false，也不追加事实。`until` 要带时区、晚于现在；到了这个时间中台自动恢复，记一条 `tick` 事实。
+
+一条规则自己的暂停和按能力的暂停分开记账：一条规则只要还有一个暂停在生效，就是暂停的。恢复能力不会恢复单独暂停的规则，`stillPaused` 列出还停着的；恢复一条规则也不会解除它所需能力的暂停。按能力暂停只记一条事实，之后新加的规则写了这项能力也一样停着。
+
+暂停期间：
+
+- **定时规则**：到点直接跳过，不记事件，不积压。`lines[].skippedAt` 是最近一次跳过的时刻。恢复（手动或到了 `until`）后不补跑暂停期间错过的时刻，从恢复的那一刻起的下一个时刻照常跑；中台在暂停期间睡着了也一样。
+- **事件规则**：事件照常记下，但这条规则不接、不派活；恢复后也不补接。事件的 `paused` 记着因为暂停没接它的规则，`/v1/events` 的应答多一个 `paused` 列表，`routed` 只列真正接了的规则。最近 20 条这样的事件在 `/v1/state` 的 `skipped` 里。这类事件不算“没有规则接的事件”。同一事件匹配的其他规则照常接。不补接是因为暂停常常是因为下游坏了或者要止损，事后一次性涌进来的活比漏掉的更难收拾；需要时用立即运行补一轮。
+- **已经排队的、等重试的、暂停期间收到回答或到期复查的这一轮**：留在队列里不派出去，恢复后照常领取，不丢回答。已经在跑的这一轮不受影响，要停用 `stop`。
+
+立即运行走正常派活：记一条 `run.manual` 事件（定时规则的来源是 `schedule`，事件规则用它的 `when.source`），`summary` 是“<密钥名> 手动运行”，`detail` 是 `reason`；`subject` 决定 `parallel` 规则的事项。同一事项已经有排队的一轮时并进那一轮，并取消它的重试等待。这一轮的 `runs[].manual` 为 true。**暂停中的规则不能立即运行**，返回 409 `规则「…」暂停中（…），先恢复再手动运行`：暂停的意思是这条规则一件活都不派，手动运行也不例外，这样“暂停了就不会再花钱、不会再对外动作”这一条没有例外，按能力暂停时（比如出口断了）手动运行也只会失败。要试跑就先恢复再运行。
+
+`/v1/state` 里每条规则（`lines[]`）多了 `requires`、`paused`（生效中的暂停列表，每项有 `kind`：`rule` 或 `requires`、`name`、`by`、`reason`、`since`、`until`，没暂停是空列表）和 `skippedAt`；顶层多了 `pauses`（所有生效中的暂停，每项带它覆盖的 `rules`）和 `skipped`。旧客户端忽略这些字段即可。
+
+命令行：`agent-autoloop pause <规则> [--reason 原因] [--until 时间]`、`pause --requires <能力>`、`resume <规则>`、`resume --requires <能力>`、`run <规则> [--subject 对象] [--reason 说明]`；`status` 列出暂停中的规则。
+
+`agent-autoloop check [文件]` 只读文件、校验规则，不打开中台数据库，也不把文件载入中台；不写文件名就查 `rules.json`。可以先校验一份草稿再换上去。`/v1/state` 一次给最近 60 轮，`?before=<nextBefore>` 翻更早的。
 
 `/v1/state` 的 `spending.today`、`spending.week` 独立于分页，按规则时区的今天和过去 7 × 24 小时的完成时间汇总。每项含 `rounds`、`tokens`、`cost`、`missingTokens`、`missingCost`，后两项是没报对应用量的轮数；从未开始就取消的轮次不计入。
 
@@ -306,6 +344,8 @@ POST /v1/runs/12/cancel     {}
 | 提问之后问题自己好了                     | 后面的 Agent 核实后在 `resolve` 里结掉，卡片自动改成“不用决定了”                                                                                                                                                                    |
 | 规则写错了                               | 旧规则继续跑，告诉你错在哪                                                                                                                                                                                                          |
 | 规则删掉或改名了                         | 还没领走的和之后没跑成的这一轮记为 `cancelled`，不再派发，发一张通知卡片；已经在跑的跑完照常收结果                                                                                                                                  |
+| 规则暂停了                               | 到点跳过、事件不接，都不积压；排队的留着；恢复后不补跑，从下一个时刻照常跑                                                                                                                                                          |
+| 暂停写了 `until`，中台到点时没开着       | 醒来就恢复，暂停期间的时刻不补                                                                                                                                                                                                      |
 | 规则文件被删、移走或读不到               | 旧规则继续跑，告诉你一次；放回去就接着用。从没载入过规则的新中台读不到就不启动                                                                                                                                                      |
 
 这是“至少一次”的系统：Agent 可能被叫两次，所以 Skill 里有副作用的动作要先核实当前状态。
@@ -319,7 +359,7 @@ POST /v1/runs/12/cancel     {}
 | 一轮的 token     | 报告这一轮的这一次执行                                      | 碰别的轮次                             |
 | 通道的密钥       | 领卡片、报告、转达 `answerers` 的回答                       | 其他一切                               |
 | 带权限的卡片链接 | 回答这一张卡片                                              | 其他一切                               |
-| 本人的密钥       | 看全部、回答、结案、停止                                    | 发事件，领活，改规则（规则只在文件里） |
+| 本人的密钥       | 看全部、回答、结案、停止，暂停、恢复、立即运行规则          | 发事件，领活，改规则（规则只在文件里） |
 
 普通访问密钥只保存 SHA-256；本机主密钥另存 `master.key`。接单程序不把中台密钥放进 Agent 的提示词或资料文件，文件系统的访问范围由 Agent 权限决定。
 
