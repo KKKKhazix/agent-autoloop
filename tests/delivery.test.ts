@@ -11,7 +11,8 @@
 // a completed delivery into a failure; findings on a PR someone merged during review report it as not merged, and its release
 // is not followed; right after ready the newest run is still a draft one and stands for the full check; a matrix job never
 // matches the required name, so a passed check waits forever; a PR retargeted during checks is merged into the other branch; a
-// delivery withdrawn during checks leaves its status pending for good.
+// delivery withdrawn during checks leaves its status pending for good; a status write failing right after findings closes the
+// commit to further reviews with nobody told what they found.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deliver, fullCheck, waitLive, disableAuto, type DeliveryIO } from "../plugins/delivery/delivery.ts";
@@ -342,6 +343,25 @@ test("a commit with findings that someone merged by hand still goes on to Ship",
   assert.equal((await deliver("example/app", 1, io)).merged, "merged");
   assert.equal(state.reviewed, 1);
   assert.equal(latest(state, "delivery").state, "success");
+});
+test("a status write failing on findings leaves the commit open to a review that reports them", async () => {
+  for (const context of ["delivery", "my-review"]) {
+    const { io, state } = fixture();
+    io.review = async () => problem;
+    const { api } = io;
+    let failing = true;
+    io.api = async (path, body, method) => {
+      if (failing && body?.context === context && body.state === "failure") {
+        failing = false;
+        throw new Error("HTTP 502");
+      }
+      return api(path, body, method);
+    };
+    await assert.rejects(() => deliver("example/app", 1, io), /HTTP 502/);
+    assert.deepEqual((await deliver("example/app", 1, io)).findings, problem);
+    assert.equal(latest(state, "my-review").state, "failure");
+    assert.equal(state.merges, 0);
+  }
 });
 test("findings name the commit they were found on", async () => {
   const { io, state } = fixture();

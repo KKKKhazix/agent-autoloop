@@ -15,7 +15,7 @@ export type DeliveryIO = {
 };
 export type Delivered = { summary: string; merged?: string; reviewOnly?: boolean; findings?: Finding[]; head?: string };
 
-const FINDINGS = "审查发现问题，修复后重新交付";
+const FINDINGS = "审查发现问题，修复后推新提交才会重审";
 const labels = (pr: any) => new Set<string>((pr.labels ?? []).map((label: any) => label.name));
 const newestFirst = (a: any, b: any) => b.id - a.id;
 
@@ -135,10 +135,10 @@ export async function deliver(
   let head = pr.head.sha;
   if (!pr.merged_at) {
     // The label stays on after findings, so another event lands here: a second review that misses them would merge the commit.
+    // The review status keeps the record, since a failed round writes its error over `delivery`.
     const { statuses } = await io.api(`commits/${head}/status?per_page=100`);
-    const last = statuses.find((item: any) => item.context === "delivery");
-    if (last?.state === "failure" && last.description === FINDINGS)
-      return { summary: "这个提交审查发现过问题，修复后再交付" };
+    if (statuses.some((item: any) => item.context === config.review.status && item.state === "failure"))
+      return { summary: "这个提交审查发现过问题，修复后推新提交才会重审" };
   }
   await status(io, head, "delivery", "pending", "正在审查、检查和核实发布");
   let tooLate: Finding[] = [];
@@ -170,8 +170,9 @@ export async function deliver(
     }
     if (current.head.sha !== head) throw new Error("审查期间提交变了，等待重新交付");
     if (findings.length) {
-      await status(io, head, config.review.status, "failure", FINDINGS);
       await status(io, head, "delivery", "failure", FINDINGS);
+      // Last: once this stands nothing reviews the commit again, so a failed write must not keep the findings from going out.
+      await status(io, head, config.review.status, "failure", FINDINGS);
       return { summary: "审查发现问题，尚未合并", findings, head };
     }
     if (labels(current).has("deliver-review")) {
