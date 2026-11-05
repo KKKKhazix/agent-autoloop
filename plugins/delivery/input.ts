@@ -38,7 +38,8 @@ export function deliveryReceipt(number: number, result: Delivered, attended: boo
   if (attended) return `${result.summary}\n${text.replaceAll("```", "'''")}`;
   // An open card with the same key takes the new one in, so findings on a new commit need a key of their own.
   const key = `review-${number}-${result.head?.slice(0, 12)}`;
-  const notice = { key, title: "交付前需要修复问题", text: [...text].slice(0, 1500).join("") };
+  const title = result.merged ? "已合并的改动审查发现问题" : "交付前需要修复问题";
+  const notice = { key, title, text: [...text].slice(0, 1500).join("") };
   return `${result.summary}\n${receiptBlock({ notice: [notice] })}`;
 }
 

@@ -8,7 +8,8 @@
 // before main moved decide what a round against the newer main does, so a health check added there is skipped; another event
 // on a commit with findings reviews it again, and a review that misses them this time merges it; findings leave an earlier
 // attestation of the commit standing; a merged PR without the label is followed and written to, so a later failed release turns
-// a completed delivery into a failure.
+// a completed delivery into a failure; findings on a PR someone merged during review report it as not merged, and its release
+// is not followed.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deliver, fullCheck, waitLive, disableAuto, type DeliveryIO } from "../plugins/delivery/delivery.ts";
@@ -380,6 +381,23 @@ test("a different client merging during checks is followed without a second merg
   };
   assert.equal((await deliver("example/app", 1, io)).merged, "merged");
   assert.equal(state.merges, 0);
+});
+test("a PR merged during review goes on to Ship and keeps what the review found", async () => {
+  for (const pushed of ["head", "pushed-then-merged"]) {
+    const { io, state } = fixture();
+    io.review = async () => {
+      Object.assign(state.pr, { state: "closed", merged_at: "other", merge_commit_sha: "merged" });
+      state.pr.head.sha = pushed;
+      return problem;
+    };
+    const result = await deliver("example/app", 1, io);
+    assert.equal(result.merged, "merged");
+    assert.deepEqual(result.findings, problem);
+    assert.equal(result.head, "head");
+    assert.equal(state.merges, 0);
+    assert.equal(latest(state, "delivery").state, "success");
+    assert.ok(!state.statuses.some((s: any) => s.state === "failure"));
+  }
 });
 test("a merged PR resumes directly at Ship without reviewing or merging again", async () => {
   const { io, state } = fixture();
