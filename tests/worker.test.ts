@@ -901,3 +901,19 @@ test("trouble with one run waits for the next round and holds up no other", asyn
   await until(w, () => Boolean(resultOf(hub, troubled)));
   assert.equal(resultOf(hub, troubled).outcome, "done");
 });
+
+test("explicit dispatch refuses a fresh writer when its registered session cannot resume", async () => {
+  const hub = fakeHub();
+  const j = job({
+    use: "scripted",
+    session: "owned-session",
+    command: ['if [ -n "$1" ]; then echo "active writer" >&2; exit 1; fi; echo "unexpected fresh execution"'],
+  });
+  (j.context as any).dispatch = { id: "batch", context: {} };
+  hub.jobs.push(j);
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "failed");
+  assert.equal(hub.results[0].session, "owned-session");
+  assert.match(hub.results[0].error, /active writer/);
+});

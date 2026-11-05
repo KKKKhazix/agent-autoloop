@@ -416,3 +416,43 @@ test("there's no other page: what's going on is read through the doors", async (
   for (const path of ["/", "/index.html", "/app.js", "/style.css", "/../package.json"])
     assert.equal((await call(path)).status, 404, path);
 });
+
+test("explicit dispatch is owner-only, including duplicate retries", async () => {
+  const body = { id: "http-dispatch", rule: "意见", lane: "task:http", eventIds: [999999] };
+  for (const key of [undefined, keys.app, keys.w1, keys.chat]) {
+    assert.equal((await call("/v1/dispatch", { key, body })).status, 401);
+  }
+  assert.equal((await call("/v1/dispatch", { key: keys.owner, body })).status, 404);
+});
+
+test("dispatch lookup reconciles a lost acknowledgement without starting new work", async () => {
+  const path = "/v1/dispatch/not-submitted";
+  assert.equal((await call(path, { key: keys.w1 })).status, 401);
+  assert.equal((await call(path, { key: keys.owner })).status, 404);
+  const event = await call("/v1/events", { key: keys.app, body: { id: "lookup-source", type: "manual.unrouted" } });
+  const body = { id: "lookup-batch", rule: "意见", lane: "lookup", eventIds: [event.json.event] };
+  const first = await call("/v1/dispatch", { key: keys.owner, body });
+  const found = await call("/v1/dispatch/lookup-batch", { key: keys.owner });
+  assert.equal(found.status, 200);
+  assert.equal(found.json.run, first.json.run);
+});
+
+// A late POST must not undo an authenticated cancellation recorded before submission.
+test("dispatch cancellation is owner-only and survives a late HTTP submission", async () => {
+  const path = "/v1/dispatch/http-cancel-first";
+  for (const key of [undefined, keys.app, keys.w1, keys.chat])
+    assert.equal((await call(path, { key, method: "DELETE" })).status, 401);
+  assert.equal((await call(path, { key: keys.owner, method: "DELETE" })).status, 200);
+  assert.equal((await call(path, { key: keys.owner })).json.run, null);
+  assert.equal((await call(path, { key: keys.owner, method: "DELETE" })).json.state, "cancelled");
+  const event = await call("/v1/events", { key: keys.app, body: { id: "http-late-event", type: "manual.unrouted" } });
+  const late = await call("/v1/dispatch", {
+    key: keys.owner,
+    body: { id: "http-cancel-first", rule: "意见", lane: "late", eventIds: [event.json.event] },
+  });
+  assert.equal(late.status, 409);
+  assert.equal(
+    one<{ cancelled: number }>("SELECT cancelled FROM dispatches WHERE id=?", ["http-cancel-first"])!.cancelled,
+    1,
+  );
+});
