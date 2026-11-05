@@ -3,8 +3,8 @@
 // one name; a rule matching no event or with both a source and a schedule; a schedule that is malformed or never comes; an
 // unknown way of telling; an agent without a worker, with an unknown access level, or a command or ACP agent without a
 // command line, which only shows when it runs and then fails ten times; a rule with neither a skill nor a prompt, or
-// without a folder; a misspelt field taken silently; a rule running more than one at a time without saying how many, or rules in one group disagreeing on it; an emit naming a source that isn't
-// there; a scheduled task shown on the page naming a source or agent that isn't there or a malformed schedule; a time zone
+// without a folder; a misspelt field taken silently; a rule running more than one at a time without saying how many, or
+// rules in one group disagreeing on it; an emit naming a source that isn't there; a scheduled task shown on the page naming a source or agent that isn't there or a malformed schedule; a time zone
 // that doesn't exist; the reserved source redefined; a null rule crashes reload instead of keeping the old rules.
 // A good file changing on disk takes effect; a bad one doesn't, and says why. A file that is gone or can't be read
 // crashes the hub, at reload or at restart, instead of keeping the rules it had. A file broken while the hub was down
