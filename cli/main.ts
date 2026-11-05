@@ -237,7 +237,9 @@ async function agentsToUse(named: Flags, worker: string) {
 }
 
 async function init(args: string[]) {
-  const { named } = flags(args);
+  const { named, rest } = flags(args);
+  // `init -p 4000` would otherwise install on the default port in silence.
+  if (rest.length) return fail(`不认识的参数：${rest.join(" ")}\n\n${INIT_USAGE}`);
   if (existsSync(CONFIG_FILE)) return fail(`已经装过了：${CONFIG_FILE}`);
   mkdirSync(HOME, { recursive: true, mode: 0o700 });
   mkdirSync(path.join(HOME, "try"), { recursive: true });

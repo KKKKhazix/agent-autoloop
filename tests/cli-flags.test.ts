@@ -55,6 +55,15 @@ test("a flag init does not read stops it instead of installing with the default"
   assert.equal(existsSync(join(ran.home, "config.json")), false);
 });
 
+test("words init does not read stop it too", async () => {
+  for (const args of [["-p", "3360"], ["3360"]]) {
+    const ran = await run(["init", ...args, "--no-service"]);
+    assert.equal(ran.code, 1);
+    assert.match(ran.stderr, /不认识的参数/);
+    assert.equal(existsSync(join(ran.home, "config.json")), false);
+  }
+});
+
 test("the flags init does read still reach the config", async () => {
   const ran = await run(["init", "--command", "echo {prompt}", "--port", "3361", "--no-service"]);
   assert.equal(ran.code, 0, ran.stderr);
