@@ -92,6 +92,20 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 
 **只会发文字的（钉钉、企微的群机器人，Slack、Discord 的 Webhook）**：用 `plugins/webhook/channel.ts`，`config.json` 的通道项写 `"use": "webhook"`、`"platform": "dingtalk"` 和 `"url": "已有的 Webhook 地址"`；平台也可选 `wecom`、`slack`、`discord`。`rules.json` 里写 `"links": true`，卡片链接本身就能回答；`config.json` 的 `hub.publicUrl` 要配成手机或电脑能打开的地址。
 
+**iMessage、微信、Telegram 等 Hermes 已配好的平台**：用 `plugins/hermes/channel.ts`，它调 `hermes send`，不另配账号。先 `hermes send --list` 看目标怎么写，然后把冒号前面的平台名照抄进 `target`：
+
+```json
+// rules.json
+"channels": { "imessage": { "name": "iMessage", "links": true }, "wechat": { "name": "微信", "links": true } }
+// config.json
+"channels": {
+  "imessage": { "use": "hermes", "key": "…", "target": "photon" },
+  "wechat":   { "use": "hermes", "key": "…", "target": "weixin" }
+}
+```
+
+卡片标题走 `--subject`，正文是卡片文字、编号选项和回答链接；超过 3500 字截断并标省略号。发不出去用 `hub.failed` 报告，不会当成已送达。一个任务想走哪个通道，规则里写 `channels`，或在发事件时用 `--to` 点名。
+
 **有按钮的新通道**：在 `~/.agent-autoloop/plugins/<名字>/channel.ts` 写一个，照 `plugins/feishu/channel.ts`：循环领卡片、发或改、报告；收到点击转给 `hub.answer`。协议在 `docs/protocol.md`，用别的语言写也行，只要会发 HTTP。
 
 ## 交付流水线
