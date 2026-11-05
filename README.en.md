@@ -253,3 +253,5 @@ Start reading at `bin/agent-autoloop.ts` → `cli/main.ts`, then follow the feat
 </details>
 
 [MIT License](LICENSE)
+
+Advanced routing plugins can use the optional owner-only explicit dispatch API for idempotent recorded-event batches, compatible completed-session continuation and cancellation. See [the protocol](docs/protocol.md#所有者显式派发可选扩展); ordinary source and worker integrations remain compatible.
