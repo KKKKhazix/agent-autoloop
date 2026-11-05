@@ -1,0 +1,80 @@
+name: probe
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  # A real systemd user service on real Linux, from install to uninstall: install-smoke.sh takes no service.
+  linux-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: |
+          set -x
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          for i in $(seq 1 30); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          cat >"$HOME/agent.sh" <<'END'
+          #!/bin/sh
+          if grep -q 'card.answered' "$AGENT_AUTOLOOP_CONTEXT"; then
+            echo "你选了绿色，试跑通过"
+          else
+            cat <<'ASK'
+          问了一个问题
+
+          ```agent-autoloop
+          {"ask":[{"title":"试跑：选一个颜色","text":"这是一次试跑，选哪个都行。","options":["蓝色","绿色"],"key":"try-color"}]}
+          ```
+          ASK
+          fi
+          END
+          sed -i 's/^          //' "$HOME/agent.sh"
+          chmod +x "$HOME/agent.sh"
+          port=3391
+          healthy() { for i in $(seq 1 30); do curl -fsS "http://127.0.0.1:$port/healthz" && return 0; sleep 1; done; return 1; }
+          export AGENT_AUTOLOOP_REPO="file://$PWD"
+          export PATH="$HOME/.local/bin:$PATH"
+          sh install.sh --command "$HOME/agent.sh" --port "$port"
+          agent-autoloop --version
+          systemctl --user list-units --all | grep -i agent
+          healthy
+          agent-autoloop doctor || true
+          agent-autoloop try </dev/null
+          agent-autoloop answer 1 2
+          sleep 6
+          agent-autoloop status
+          unit=$(systemctl --user list-units --all --plain --no-legend | grep -i agent | awk '{print $1}' | head -n 1)
+          echo "=== restart"
+          systemctl --user restart "$unit"
+          sleep 2
+          healthy
+          echo "=== killed, it comes back"
+          pkill -9 -f "agent-autoloop.ts up" || true
+          sleep 8
+          healthy
+          systemctl --user status "$unit" --no-pager | head -n 8
+          echo "=== uninstall"
+          agent-autoloop uninstall --yes
+          systemctl --user list-units --all | grep -i agent && exit 1
+          curl -fsS --max-time 3 "http://127.0.0.1:$port/healthz" && exit 1
+          echo "linux-service: all good"
+  # What native Windows does today, for the Windows work. It's expected to fail; the log is what's wanted.
+  windows-quick:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run test:quick
