@@ -12,6 +12,7 @@ import { installService, removeService, restartService, serviceRunning, systemUn
 import { versionLine } from "../host/version.ts";
 import { spendLine } from "./spend.ts";
 import { attemptsOf, newFailure, waitingRetry } from "./try.ts";
+import { backup, restore } from "./backup.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROGRAM = path.join(ROOT, "bin", "agent-autoloop.ts");
@@ -32,6 +33,8 @@ const HELP = `Agent 自动化中台
   agent-autoloop check                   检查 rules.json
   agent-autoloop emit <类型> [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
                                     发一条事件
+  agent-autoloop emit <类型> [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
+                                    发一条事件
   agent-autoloop tell <编号> [--task 定时任务名]
                                     直接告诉你一件事，内容从标准输入读
   agent-autoloop stop <第几轮>           停掉一轮
@@ -43,6 +46,8 @@ const HELP = `Agent 自动化中台
   agent-autoloop mcp                      用标准输入输出连接 MCP 客户端
   agent-autoloop join <中台地址> --worker <名字> --key <密钥>
                                     另一台电脑只接活时用
+  agent-autoloop backup [目录]           备份数据库、主密钥和配置；不填目录就放在 ~/.agent-autoloop/backups
+  agent-autoloop restore <目录> [--yes]  停掉中台后，用一次备份恢复本机数据
   agent-autoloop update                  更新到最新发布的版本
   agent-autoloop uninstall [--yes]       卸载程序并保留数据；--yes 跳过确认
   agent-autoloop --version               版本和当前提交
@@ -503,6 +508,36 @@ async function emit(args: string[]) {
   console.log(answer.routed.length ? `交给了：${answer.routed.join("、")}` : "记下了，没有规则接它。");
 }
 
+async function backupCommand(args: string[]) {
+  flagsOf(args, [], "用法：agent-autoloop backup [目录]");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const target = path.resolve(args[0] ?? path.join(HOME, "backups", stamp));
+  const { files } = backup(HOME, target);
+  console.log(`备份好了：${target}\n  ${files.join("、")}\n把它放到安全的地方；恢复要中台停下来。`);
+}
+
+async function restoreCommand(args: string[]) {
+  const { named, rest } = flagsOf(
+    args,
+    ["yes"],
+    "用法：agent-autoloop restore <目录> [--yes]\n\n恢复会替换本机的数据库、主密钥和配置文件；先停掉中台，--yes 跳过确认。",
+  );
+  // `--yes` before the folder takes the folder as its value; accept either order.
+  const source = rest[0] ?? (typeof named.yes === "string" ? named.yes : undefined);
+  if (!source) return fail("用法：agent-autoloop restore <目录> [--yes]");
+  const confirmed = named.yes !== undefined;
+  if (!confirmed) {
+    if (!process.stdin.isTTY) return fail("恢复会替换本机数据；确认后运行 agent-autoloop restore <目录> --yes");
+    const answer = await askAtTerminal("恢复会替换本机的数据库、主密钥和配置文件，继续？[y/N] ");
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      console.log("没有恢复。");
+      return;
+    }
+  }
+  const { safety } = restore(HOME, path.resolve(String(source)));
+  console.log(`恢复好了。原来的文件在 ${safety}。\n启动：agent-autoloop up 或 agent-autoloop service install`);
+}
+
 async function tell(args: string[]) {
   const { named, rest } = flags(args);
   const config = readConfig();
@@ -587,6 +622,7 @@ const commands: Record<string, () => unknown> = {
     return tryIt();
   },
   status,
+
   why: () => why(args),
   conformance: () => checkConformance(args),
   answer: () => answer(args),
@@ -597,6 +633,8 @@ const commands: Record<string, () => unknown> = {
   emit: () => emit(args),
   tell: () => tell(args),
   stop: () => stop(args),
+  backup: () => backupCommand(args),
+  restore: () => restoreCommand(args),
   update,
   uninstall: async () => {
     const { uninstall } = await import("./uninstall.ts");
