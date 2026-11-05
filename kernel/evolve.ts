@@ -3,6 +3,7 @@ import { DatabaseSync, type StatementSync, type SQLInputValue } from "node:sqlit
 export type Row = Record<string, any>;
 export const TABLES = [
   "events",
+  "dispatches",
   "runs",
   "run_events",
   "cards",

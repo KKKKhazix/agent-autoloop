@@ -228,6 +228,21 @@ async function route(call: Call): Promise<Response> {
   if (link && ["GET", "POST"].includes(method)) return cardAtLink(call, link[1]);
   const hook = /^\/v1\/in\/([a-z][a-z0-9-]*)$/.exec(path);
   if (method === "POST" && hook) return webhook(call, hook[1]);
+  if (method === "DELETE" && path.startsWith("/v1/dispatch/")) {
+    requireKey(call, "owner");
+    return json(act(call, "cancelDispatch", decodeURIComponent(path.slice("/v1/dispatch/".length))));
+  }
+  if (method === "GET" && path.startsWith("/v1/dispatch/")) {
+    requireKey(call, "owner");
+    const id = decodeURIComponent(path.slice("/v1/dispatch/".length));
+    const dispatch = call.view.get("dispatches", id);
+    if (!dispatch) throw new NotFound("没有这次派发");
+    return json({ run: dispatch.run_id, duplicate: true });
+  }
+  if (method === "POST" && path === "/v1/dispatch") {
+    requireKey(call, "owner");
+    return json(act(call, "dispatch", await readJson(request)));
+  }
   if (method === "POST" && path === "/v1/events") {
     return json(act(call, "ingest", requireKey(call, "source"), await readJson(request)));
   }

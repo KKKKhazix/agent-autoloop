@@ -1,5 +1,6 @@
 // Everything that can change the hub is decided here: given the view and one input, the facts to record and the answer
 // to give. Time and secrets come in as arguments, so the same input on the same view always decides the same.
+import { parseDispatch } from "../protocol/dispatch.ts";
 import { credential, digest, type Environment } from "./credentials.ts";
 import { latestBefore, nextRun, parseCron } from "./cron.ts";
 import { deadlines, MINUTE, offlineCard, OFFLINE_AFTER, RUN_LEASE, SEEN_EVERY, WORKER_FRESH } from "./due.ts";
@@ -107,6 +108,7 @@ function add(draft: Draft, table: Table, fields: Row) {
 
 const ruleNamed = (draft: Draft, name: string) => draft.rules.rules.find((rule) => rule.name === name);
 function assignQueued(draft: Draft, run: Row) {
+  if (run.dispatch_id) return; // Explicit dispatch pins the validated configuration.
   const config = draft.view.get("config", "rules")!;
   const rule = (config.value as Rules).rules.find((rule) => rule.name === run.rule);
   if (!rule) return;
@@ -159,7 +161,8 @@ function enqueue(draft: Draft, rule: Rule, event: number, subject: string, resum
   const lane = rule.parallel ? subject : "";
   const rulesVersion = draft.view.get("config", "rules")!.version;
   const stamps = { not_before: draft.at, created_at: draft.at, rules_version: rulesVersion };
-  const isSameQueued = (run: Row) => run.rule === rule.name && run.lane === lane && run.state === "queued";
+  const isSameQueued = (run: Row) =>
+    !run.dispatch_id && run.rule === rule.name && run.lane === lane && run.state === "queued";
   const run =
     rows(draft.view, "runs", { rule: rule.name, lane, state: "queued" }).find(isSameQueued) ??
     add(draft, "runs", { rule: rule.name, agent: rule.to, grp: rule.group, lane, state: "queued", ...stamps });
@@ -203,6 +206,57 @@ function ingest(draft: Draft, source: string, given: unknown) {
   }
   for (const rule of matched) enqueue(draft, rule, id, event.subject);
   return { event: id, duplicate: false, routed };
+}
+
+/** Owner-selected rule and existing event batch. No model, directory or permission comes from the request. */
+function dispatch(draft: Draft, given: unknown) {
+  const request = parseDispatch(given);
+  const hash = digest(JSON.stringify(request));
+  const old = draft.view.get("dispatches", request.id);
+  if (old) {
+    if (old.cancelled) throw new Conflict("这次派发已经取消");
+    if (old.request_hash !== hash) throw new Conflict("相同派发 id 的内容不能改变");
+    return { run: old.run_id, duplicate: true };
+  }
+  const rule = ruleNamed(draft, request.rule);
+  if (!rule) throw new NotFound("没有这条规则");
+  for (const id of request.eventIds) {
+    const event = draft.view.get("events", id);
+    if (!event) throw new NotFound("没有这个事件");
+    if ((event.hops ?? 0) > MAX_HOPS) throw new InputError("事件已超过处理链上限");
+  }
+  let resume: string | null = null;
+  if (request.resumeFrom !== undefined) {
+    const previous = draft.view.get("runs", request.resumeFrom);
+    if (!previous || !["done", "nothing"].includes(previous.state)) throw new Conflict("续接轮次必须已经正常结束");
+    const prior = configuration(draft.view, previous.rules_version);
+    const priorRule = prior.rules.find((r) => r.name === previous.rule);
+    if (
+      previous.agent !== rule.to ||
+      priorRule?.cwd !== rule.cwd ||
+      JSON.stringify(prior.agents[previous.agent]) !== JSON.stringify(draft.rules.agents[rule.to])
+    )
+      throw new Conflict("原会话与目标规则的执行配置不一致");
+    if (!previous.session) throw new Conflict("原轮次没有可续接的会话");
+    resume = previous.session;
+  }
+  const run = add(draft, "runs", {
+    rule: rule.name,
+    agent: rule.to,
+    grp: rule.group,
+    lane: request.lane,
+    state: "queued",
+    not_before: draft.at,
+    created_at: draft.at,
+    rules_version: draft.view.get("config", "rules")!.version,
+    dispatch_id: request.id,
+    dispatch_context: request.context ?? {},
+    resume,
+  });
+  for (const event of request.eventIds)
+    put(draft, "run_events", `${run.id}:${event}`, { run_id: run.id, event_id: event });
+  put(draft, "dispatches", request.id, { id: request.id, request_hash: hash, run_id: run.id, created_at: draft.at });
+  return { run: run.id, duplicate: false };
 }
 
 function heldRun(draft: Draft, id: number, token: string, states: string[]) {
@@ -260,10 +314,13 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   const groupLimit = (group: string) => draft.rules.rules.find((rule) => rule.group === group)?.parallel ?? 1;
   const claimable = (run: Row) =>
     run.state === "queued" &&
-    agents.includes(ruleNamed(draft, run.rule)?.to ?? "") &&
+    (run.dispatch_id ? workerOf(draft.view, run) === worker : agents.includes(ruleNamed(draft, run.rule)?.to ?? "")) &&
     Date.parse(run.not_before) <= draft.now &&
-    ruleNamed(draft, run.rule) &&
+    (run.dispatch_id || ruleNamed(draft, run.rule)) &&
     !claimed.some((other) => other.grp === run.grp && other.lane === run.lane) &&
+    !claimed.some(
+      (other) => (run.session ?? run.resume) && (other.session ?? other.resume) === (run.session ?? run.resume),
+    ) &&
     claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp);
   // The same claim again means the answer got lost: it gets back the run it already has.
   const held = claimed.find((run) => run.claim === claim && workerOf(draft.view, run) === worker);
@@ -271,7 +328,7 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   if (!run) return null;
   if (!held) assignQueued(draft, run);
   const since = held ? { claimed_at: run.claimed_at, link: run.link } : { claimed_at: draft.at, link: null };
-  const rules_version = held ? run.rules_version : draft.view.get("config", "rules")!.version;
+  const rules_version = held || run.dispatch_id ? run.rules_version : draft.view.get("config", "rules")!.version;
   const claiming = { state: "claimed", claim, issued: draft.seq, seen_at: draft.at, rules_version, ...since };
   put(draft, "runs", run.id, { ...claiming, ...nulls("last_issued", "last_result", "last_answer") });
   return jobOf(draft.view, draft.view.get("runs", run.id)!, draft.env);
@@ -299,6 +356,12 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   for (const what of ["ask", "resolve", "later", "events"] as const) {
     for (const _ of result[what] ?? []) rejected.push({ what, reason: "没跑成的一轮只能发通知" });
   }
+  if (run.dispatch_id && draft.view.get("dispatches", run.dispatch_id)?.cancelled) {
+    // A failed receipt can race with DELETE after the worker has already stopped.
+    put(draft, "runs", id, { state: "cancelled", finished_at: draft.at, attempts, error, ...unclaimed });
+    for (const _ of result.notice ?? []) rejected.push({ what: "notice", reason: "这次派发已经取消" });
+    return rejected;
+  }
   for (const notice of result.notice ?? []) cardFromReceipt(draft, run, "notice", notice);
   const failure = { attempts, error, ...unclaimed };
   if (!ruleNamed(draft, run.rule)) {
@@ -316,7 +379,8 @@ function retryLater(draft: Draft, run: Row, result: Result) {
     return rejected;
   }
   put(draft, "runs", id, { state: "queued", not_before: iso(notBefore), ...failure });
-  const sameThread = (other: Row) => other.id !== id && other.rule === run.rule && other.lane === run.lane;
+  const sameThread = (other: Row) =>
+    !run.dispatch_id && !other.dispatch_id && other.id !== id && other.rule === run.rule && other.lane === run.lane;
   for (const other of rows(draft.view, "runs", { rule: run.rule, lane: run.lane, state: "queued" }).filter(
     sameThread,
   )) {
@@ -529,6 +593,21 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     return true;
   },
   ingest,
+  dispatch,
+  cancelDispatch(draft, id) {
+    if (typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(id)) throw new InputError("派发 id 不正确");
+    const old = draft.view.get("dispatches", id);
+    if (!old) {
+      put(draft, "dispatches", id, { id, request_hash: null, run_id: null, cancelled: true, created_at: draft.at });
+      return { run: null, state: "cancelled" };
+    }
+    put(draft, "dispatches", id, { cancelled: true });
+    const run = draft.view.get("runs", old.run_id);
+    if (!run) return { run: null, state: "cancelled" };
+    if (run.state === "queued") put(draft, "runs", run.id, { state: "cancelled", finished_at: draft.at });
+    else if (run.state === "claimed") put(draft, "runs", run.id, { cancel_at: run.cancel_at ?? draft.at });
+    return { run: run.id, state: run.state === "queued" ? "cancelled" : run.state };
+  },
   createCard,
   tell(draft, key, title, text) {
     const told = createCard(draft, { key, title, text, kind: "notice", fyi: true, once: true });

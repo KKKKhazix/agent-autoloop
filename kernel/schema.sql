@@ -26,6 +26,8 @@ CREATE TABLE runs (
   claim TEXT,
   last_result TEXT,
   cancel_at TEXT,
+  dispatch_id TEXT,
+  dispatch_context TEXT,
   resume TEXT,
   session TEXT,
   link TEXT,
@@ -122,3 +124,11 @@ CREATE TABLE keys (
   PRIMARY KEY (kind, name)
 );
 
+-- Durable acknowledgments for owner dispatch; never merged away with retry batches.
+CREATE TABLE dispatches (
+  id TEXT PRIMARY KEY,
+  request_hash TEXT,
+  run_id INTEGER,
+  cancelled INTEGER,
+  created_at TEXT NOT NULL
+);

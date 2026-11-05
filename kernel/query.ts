@@ -93,6 +93,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
     session: run.session ?? run.resume,
     askFirst: rules.askFirst,
     context: {
+      ...(run.dispatch_id && { dispatch: { id: run.dispatch_id, context: run.dispatch_context ?? {} } }),
       events: events.map(({ key: id, source, type, subject, summary, detail, link, received_at: receivedAt, hops }) => {
         const sourceName = rules.sources[source]?.name ?? source;
         return { id, source, sourceName, type, subject, summary, detail, link, receivedAt, hops: hops ?? 0 };
