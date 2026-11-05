@@ -217,9 +217,14 @@ export async function deliver(
       if (!pr.merged_at) throw new Error("尚未确认合并，稍后继续核实");
     }
   }
-  await waitLive(pr.merge_commit_sha, config, io);
-  const summary = config.health ? "已合并、发布成功，健康版本已核实" : "已合并；项目没有线上服务";
-  await status(io, pr.head.sha, "delivery", "success", summary);
-  await clearLabels(number, pr, io);
-  return { summary, merged: pr.merge_commit_sha, findings: tooLate, head };
+  try {
+    await waitLive(pr.merge_commit_sha, config, io);
+    const summary = config.health ? "已合并、发布成功，健康版本已核实" : "已合并；项目没有线上服务";
+    await status(io, pr.head.sha, "delivery", "success", summary);
+    await clearLabels(number, pr, io);
+    return { summary, merged: pr.merge_commit_sha, findings: tooLate, head };
+  } catch (error) {
+    // The next round finds the PR merged and doesn't review, so what this one found has to leave with this failure.
+    throw Object.assign(error as Error, { merged: pr.merge_commit_sha, findings: tooLate, head });
+  }
 }

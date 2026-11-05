@@ -43,6 +43,13 @@ export function deliveryReceipt(number: number, result: Delivered, attended: boo
   return `${result.summary}\n${receiptBlock({ notice: [notice] })}`;
 }
 
+/** A failed round with findings to hand on: the first line tells the hub to retry, and only that line is the error. */
+export function failedReceipt(number: number, failure: Error & Partial<Delivered>, attended: boolean) {
+  const why = failure.message.split("\n")[0].replaceAll("```", "'''");
+  const { findings, head, merged } = failure;
+  return deliveryReceipt(number, { summary: `没跑成：${why}`, findings, head, merged }, attended);
+}
+
 export function pendingEvents(
   repo: string,
   rows: { number: number; head: string; labelEvent: number; kind: string }[],
