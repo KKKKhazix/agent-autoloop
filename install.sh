@@ -73,6 +73,8 @@ IFS=$usual_ifs
 if [ -f "$ROOT/config.json" ]; then
   echo "更新好了。"
   case " $* " in *" --no-service "*) ;; *) "$PROGRAM" service install ;; esac
+elif [ "${1:-}" = join ]; then
+  "$PROGRAM" "$@"
 else
   "$PROGRAM" init "$@"
 fi
