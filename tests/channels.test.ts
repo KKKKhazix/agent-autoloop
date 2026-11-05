@@ -231,14 +231,18 @@ esac
   chmodSync(lark, 0o755);
   const stop = new AbortController();
   const answers: unknown[][] = [];
+  let answered = () => {};
+  const click = new Promise<void>((resolve) => (answered = resolve));
   const hub = {
     async nextCard() {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Until the click comes, however busy this machine is, or until it's clear it won't.
+      await Promise.race([click, new Promise((resolve) => setTimeout(resolve, 2_000))]);
       stop.abort();
       return { card: null };
     },
     async answer(...args: unknown[]) {
       answers.push(args);
+      answered();
       return { changed: true };
     },
   };

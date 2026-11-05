@@ -1077,20 +1077,22 @@ async function launched(hub: ReturnType<typeof fakeHub>, given: ReturnType<typeo
   return { w, pid, seen };
 }
 
-/** A step that starts something in the same process group and leaves it going, until the gate opens or a while has gone. */
-const leaving = (held: { hold: string }, finished: string, stubborn = false) =>
-  `(${stubborn ? "trap '' TERM; " : ""}${held.hold}; touch "${finished}") &`;
-/** Whether a file has turned up, within a moment. */
-async function turnsUp(file: string) {
-  for (let i = 0; i < 100 && !existsSync(file); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-  return existsSync(file);
+/**
+ * A step that starts something in the same process group and leaves it going until the gate opens. It goes on only once
+ * that's under way: a stop that came sooner could miss a stubborn one's `trap`, and that would be a different test.
+ */
+function leftBehind(name: string, stubborn = false) {
+  const { hold, open } = gate(name);
+  const ready = join(folder, `${name}.ready`);
+  const finished = join(folder, `${name}.finished`);
+  const ignoring = stubborn ? "trap '' TERM; " : "";
+  const step = `(${ignoring}touch "${ready}"; ${hold}; touch "${finished}") & until [ -e "${ready}" ]; do sleep 0.02; done;`;
+  return { step, open, finished };
 }
 
 test("an agent that crashes has what it left behind stopped before its result goes in", async () => {
   const hub = fakeHub();
-  const held = gate("crash");
-  const finished = join(folder, "crash-child-finished");
-  const script = `printf 'session=s-c\\nTURN-BEGAN\\n'; ${leaving(held, finished)} echo 崩了 >&2; exit 3`;
+  const script = `printf 'session=s-c\\nTURN-BEGAN\\n'; ${leftBehind("crash").step} echo 崩了 >&2; exit 3`;
   const { w, seen } = await launched(hub, job({ use: "scripted", session: "s-c", command: [script] }));
   await until(w, () => hub.results.length === 1);
   assert.equal(seen.goingAtHandIn, false, "stopped first");
@@ -1099,16 +1101,12 @@ test("an agent that crashes has what it left behind stopped before its result go
     ["failed", "崩了", "s-c"],
     "and what comes back is what would have without it",
   );
-  held.open();
-  assert.equal(await turnsUp(finished), false);
 });
 
 test("what a crash left behind that ignores the stop is killed after a while, across a worker restart", async () => {
   const hub = fakeHub();
   let clock = Date.now();
-  const held = gate("crash-stubborn");
-  const finished = join(folder, "crash-stubborn-finished");
-  const script = `printf 'session=s-s\\nTURN-BEGAN\\n'; ${leaving(held, finished, true)} echo 崩了 >&2; exit 3`;
+  const script = `printf 'session=s-s\\nTURN-BEGAN\\n'; ${leftBehind("crash-stubborn", true).step} echo 崩了 >&2; exit 3`;
   const now = () => clock;
   const { w, seen } = await launched(hub, job({ use: "scripted", command: [script] }), { now });
   await until(w, () => w.entries()[0]?.stopping !== undefined);
@@ -1121,15 +1119,12 @@ test("what a crash left behind that ignores the stop is killed after a while, ac
   await until(again, () => hub.results.length === 1);
   assert.equal(seen.goingAtHandIn, false);
   assert.deepEqual([hub.results[0].outcome, hub.results[0].error], ["failed", "崩了"]);
-  held.open();
-  assert.equal(await turnsUp(finished), false);
 });
 
 test("the owner's stop still counts while what a crash left behind is being stopped", async () => {
   const hub = fakeHub();
   let clock = Date.now();
-  const held = gate("crash-cancelled");
-  const script = `${leaving(held, join(folder, "crash-cancelled-finished"), true)} echo 崩了 >&2; exit 3`;
+  const script = `${leftBehind("crash-cancelled", true).step} echo 崩了 >&2; exit 3`;
   const { w, seen } = await launched(hub, job({ use: "scripted", command: [script] }), { now: () => clock });
   await until(w, () => w.entries()[0]?.stopping !== undefined);
   const entry = w.entries()[0];
@@ -1140,40 +1135,31 @@ test("the owner's stop still counts while what a crash left behind is being stop
   await until(w, () => hub.results.length === 1);
   assert.equal(seen.goingAtHandIn, false);
   assert.equal(hub.results[0].outcome, "cancelled", "a failed run would be queued again");
-  held.open();
 });
 
 test("a session that can't be gone on in has what the failed try left behind stopped before a new one starts", async () => {
   const hub = fakeHub();
-  const held = gate("crash-fresh");
-  const finished = join(folder, "crash-fresh-finished");
-  const script = `if [ -n "$1" ]; then ${leaving(held, finished)} echo 接不上 >&2; exit 1; fi; printf 'session=new\\n开了新会话\\n'`;
+  const script = `if [ -n "$1" ]; then ${leftBehind("crash-fresh").step} echo 接不上 >&2; exit 1; fi; printf 'session=new\\n开了新会话\\n'`;
   const { w, seen } = await launched(hub, job({ use: "scripted", session: "old", command: [script] }));
   await until(w, () => hub.results.length === 1);
   assert.equal(seen.goingAtHandIn, false);
   assert.deepEqual([hub.results[0].outcome, hub.results[0].session], ["done", "new"]);
-  held.open();
-  assert.equal(await turnsUp(finished), false);
 });
 
 test("a plain command that crashes is cleared up too, and says the same as ever", async () => {
   const hub = fakeHub();
-  const held = gate("crash-command");
-  const finished = join(folder, "crash-command-finished");
-  const given = job({ command: ["/bin/sh", "-c", `${leaving(held, finished)} echo boom >&2; exit 3`] });
+  const given = job({ command: ["/bin/sh", "-c", `${leftBehind("crash-command").step} echo boom >&2; exit 3`] });
   const { w, seen } = await launched(hub, given);
   await until(w, () => hub.results.length === 1);
   assert.equal(seen.goingAtHandIn, false);
   assert.match(hub.results[0].error, /退出码 3：boom/);
-  held.open();
-  assert.equal(await turnsUp(finished), false);
 });
 
 test("a run whose wrapper vanished without an exit has the rest of its group stopped before its result goes in", async () => {
   const hub = fakeHub();
-  const held = gate("wrapper-gone");
+  const { hold } = gate("wrapper-gone");
   const going = join(folder, "wrapper-gone-going");
-  const script = `printf 'session=s-v\\nTURN-BEGAN\\n'; touch "${going}"; ${held.hold}`;
+  const script = `printf 'session=s-v\\nTURN-BEGAN\\n'; touch "${going}"; ${hold}`;
   const { w, pid, seen } = await launched(hub, job({ use: "scripted", session: "s-v", command: [script] }));
   await until(w, () => existsSync(going));
   process.kill(pid, "SIGKILL");
@@ -1183,20 +1169,22 @@ test("a run whose wrapper vanished without an exit has the rest of its group sto
     [hub.results[0].outcome, hub.results[0].error, hub.results[0].session],
     ["failed", "没留下结果", "s-v"],
   );
-  held.open();
 });
 
 test("an agent that exits cleanly keeps what it left running, as it always has", async () => {
   const hub = fakeHub();
-  const held = gate("clean-exit");
-  const finished = join(folder, "clean-exit-finished");
-  const script = `printf 'session=s-e\\n'; ${leaving(held, finished)} printf '做完了\\n'`;
+  const left = leftBehind("clean-exit");
+  const script = `printf 'session=s-e\\n'; ${left.step} printf '做完了\\n'`;
   const { w, seen } = await launched(hub, job({ use: "scripted", command: [script] }));
   await until(w, () => hub.results.length === 1);
   assert.equal(seen.goingAtHandIn, true, "not held back");
   assert.deepEqual([hub.results[0].outcome, hub.results[0].summary], ["done", "做完了"]);
-  held.open();
-  assert.equal(await turnsUp(finished), true, "and not stopped");
+  left.open();
+  const end = Date.now() + 15_000;
+  while (!existsSync(left.finished)) {
+    if (Date.now() > end) assert.fail("it was stopped");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 });
 
 test("over ACP, an agent that crashes while its tool runs has the tool stopped before its result goes in", async () => {

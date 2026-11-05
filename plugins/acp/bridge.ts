@@ -125,7 +125,7 @@ export async function bridge(turn: Turn) {
         fail(error as Error);
       }
     },
-    // An agent that dies ends its output first, and its exit says more. One still there after this can't hand anything in.
+    // An agent that dies ends its output first, and its exit says more. One still there after this has hung up on us.
     () => setTimeout(() => fail(new Error("ACP 在交回结果前关掉了输出")), 1000).unref(),
   );
 
@@ -167,8 +167,8 @@ export async function bridge(turn: Turn) {
     if (result.stopReason !== "end_turn" || !text.trim()) throw new Error(`ACP 没有完成这一轮：${result.stopReason}`);
     console.log(JSON.stringify({ session, text, finished: true }));
   } catch (error) {
-    // Now and not on the way out: the agent, or what it left holding its output, can keep this process here for good, and
-    // this is what lets the worker end it.
+    // Now and not on the way out: the agent, or what it left holding its output, can keep this process here for good,
+    // and this is what lets the worker end it.
     console.log(JSON.stringify({ session: session || undefined, finished: true, error: (error as Error).message }));
     throw error;
   } finally {

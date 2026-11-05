@@ -1,6 +1,6 @@
-// Lines as ACP, MCP and lark-cli frame them. Failure modes: a line is cut at U+2028 or U+2029, which JSON leaves as they are
-// inside a string; a character that two reads split comes out garbled; a line split by two reads comes out as two; a last
-// line with no newline is lost; the end isn't told, or is told before the last line.
+// Lines as ACP, MCP and lark-cli frame them. Failure modes: a line is cut at U+2028 or U+2029, which JSON leaves as they
+// are inside a string; a character that two reads split comes out garbled; a line split by two reads comes out as two; a
+// last line with no newline is lost; the end isn't told, or is told before the last line.
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
