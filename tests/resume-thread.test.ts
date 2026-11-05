@@ -2,8 +2,9 @@
 // starts a new session anyway, or starts one again when its first answer got lost; a round queued while another runs misses
 // the session that round ended in; a round goes on in another subject's session; a rule without the option changes behaviour;
 // a session goes over to the agent the rule was moved to; an answer or a retry loses the session it carries to a newer one;
-// a round that may still be running has its session opened by a second process; one such round stops its thread resuming for
-// ever; a round the owner stopped leaves the thread with nothing to go on in.
+// a round that is or may still be running has its session opened by a second process, by a new event, an answer or a due
+// check; one such round stops its thread resuming for ever; a session that keeps failing is gone back into by each new event,
+// ten tries each, though the card said it would start over.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -176,6 +177,16 @@ test("a session a round may still be running in isn't opened again; the thread g
   it.check();
 });
 
+test("a round it lost track of that moved to a session of its own leaves the old one free", () => {
+  const it = hub();
+  it.round("S");
+  it.message();
+  const lost = it.claim();
+  it.act("started", lost.run, lost.token, { session: "T" });
+  it.loseTrack();
+  assert.equal(it.round("U").session, "S");
+});
+
 test("a late result from a round it lost track of counts as how it ended", () => {
   const it = hub();
   it.round("S");
@@ -186,7 +197,102 @@ test("a late result from a round it lost track of counts as how it ended", () =>
   assert.equal(it.round("T").session, "S2");
 });
 
-test("a round the owner stopped leaves the thread on the last one that ended", () => {
+test("a newer round ending in the session doesn't hide one that may still be running in it", () => {
+  const it = hub();
+  it.round("S");
+  it.message();
+  const lost = it.claim();
+  it.act("started", lost.run, lost.token, { session: "S" });
+  it.loseTrack();
+  const reportsTheSame = it.round("S");
+  assert.equal(reportsTheSame.session, null);
+  assert.equal(it.round("T").session, null);
+});
+
+test("an answer doesn't open a session a round may still be running in, and still gets where it's going", () => {
+  const it = hub();
+  it.message();
+  const asking = it.claim();
+  const ask = [{ title: "选哪个", text: "x", options: ["甲", "乙"] }];
+  it.act("finish", asking.run, asking.token, { outcome: "done", session: "S", ask });
+  it.message();
+  const lost = it.claim();
+  it.act("started", lost.run, lost.token, { session: "S" });
+  it.loseTrack();
+  it.act("answer", it.cards().find((card) => card.kind === "ask")!.id, { choice: 0 });
+  const answered = it.claim();
+  assert.equal(answered.session, null);
+  assert.equal(answered.context.answers.length, 1);
+  it.check();
+});
+
+test("a due check doesn't open a session a round may still be running in, and still comes due", () => {
+  const it = hub();
+  it.message();
+  const asking = it.claim();
+  const later = [{ key: "复查", at: "2026-11-05T03:00:00.000Z", about: "看看好了没" }];
+  it.act("finish", asking.run, asking.token, { outcome: "done", session: "S", later });
+  it.message();
+  const lost = it.claim();
+  it.act("started", lost.run, lost.token, { session: "S" });
+  it.loseTrack();
+  it.pass(180);
+  it.act("tick");
+  const due = it.claim();
+  assert.equal(due.session, null);
+  assert.equal(due.context.events[0].type, "timer.due");
+  it.check();
+});
+
+test("without the option, an answer doesn't open a session a round may still be running in either", () => {
+  const it = hub();
+  const without = structuredClone(rules);
+  delete without.rules.find((rule) => rule.name === "意见")!.resume;
+  it.act("rules", without);
+  it.message();
+  const asking = it.claim();
+  const ask = ["一", "二"].map((title) => ({ title, text: "x", options: ["甲", "乙"] }));
+  it.act("finish", asking.run, asking.token, { outcome: "done", session: "S", ask });
+  const [first, second] = it.cards().filter((card) => card.kind === "ask");
+  it.act("answer", first.id, { choice: 0 });
+  const lost = it.claim();
+  assert.equal(lost.session, "S");
+  it.act("started", lost.run, lost.token, { session: "S" });
+  it.loseTrack();
+  it.act("answer", second.id, { choice: 0 });
+  assert.equal(it.claim().session, null);
+});
+
+test("a round still going keeps its session to itself when its rule's group changes under it", () => {
+  const it = hub();
+  it.round("S");
+  it.message();
+  const going = it.claim();
+  assert.equal(going.session, "S");
+  const regrouped = structuredClone(rules);
+  regrouped.rules.find((rule) => rule.name === "意见")!.group = "新组";
+  it.act("rules", regrouped);
+  it.message();
+  assert.equal(it.claim().session, null);
+});
+
+test("a round stopped for failing too often starts its thread over, as the card says", () => {
+  const it = hub();
+  it.round("S");
+  it.message();
+  for (let attempt = 0; attempt < 10; attempt++) {
+    it.pass(61);
+    const job = it.claim();
+    assert.equal(job.session, "S");
+    it.act("finish", job.run, job.token, { outcome: "failed", error: "太长了", session: "S" });
+  }
+  assert.ok(it.cards().some((card) => card.text.includes("从头开始")));
+  assert.equal(it.round("T").session, null);
+  assert.equal(it.round("U").session, "T");
+  it.check();
+});
+
+test("a round the owner stopped starts its thread over too", () => {
   const it = hub();
   it.round("S");
   it.message();
@@ -194,6 +300,7 @@ test("a round the owner stopped leaves the thread on the last one that ended", (
   it.act("cancel", stopped.run);
   it.act("finish", stopped.run, stopped.token, { outcome: "cancelled" });
   assert.equal(it.run(stopped.run).state, "cancelled");
-  assert.equal(it.round("T").session, "S");
+  assert.equal(it.round("T").session, null);
+  assert.equal(it.round("U").session, "T");
   it.check();
 });
