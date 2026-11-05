@@ -412,7 +412,7 @@ export function createWorker({
     const ended = () => {
       const code = exitCode();
       // What a crash left running would carry on alongside the retry. An agent that exited cleanly meant what it left.
-      if (code !== 0 && groupAlive(entry) !== false) return stop(entry, "exited");
+      if (code !== 0 && groupAlive(entry)) return stop(entry, "exited");
       return conclude(entry, adapter, code);
     };
     if (existsSync(exit)) return ended();
