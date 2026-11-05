@@ -117,7 +117,7 @@ export async function deliver(
     return { summary, reviewOnly: true };
   };
   let pr = await io.api(`pulls/${number}`);
-  if (!pr.merged_at && (pr.state !== "open" || !labels(pr).has("deliver"))) return { summary: "没有待交付的标记" };
+  if (!labels(pr).has("deliver") || (!pr.merged_at && pr.state !== "open")) return { summary: "没有待交付的标记" };
   if (pr.head.repo?.full_name !== repo || pr.base.ref !== "main") throw new Error("只处理本仓库分支到 main 的合并请求");
   if (pr.auto_merge) await disableAuto(number, io);
   const settingsAt = async (commit: string) => {

@@ -7,7 +7,8 @@
 // read are reviewed as the branch's own; a delivery withdrawn while main moves on still syncs and reviews again; settings read
 // before main moved decide what a round against the newer main does, so a health check added there is skipped; another event
 // on a commit with findings reviews it again, and a review that misses them this time merges it; findings leave an earlier
-// attestation of the commit standing.
+// attestation of the commit standing; a merged PR without the label is followed and written to, so a later failed release turns
+// a completed delivery into a failure.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deliver, fullCheck, waitLive, disableAuto, type DeliveryIO } from "../plugins/delivery/delivery.ts";
@@ -381,6 +382,18 @@ test("a merged PR resumes directly at Ship without reviewing or merging again", 
   assert.equal((await deliver("example/app", 1, io)).merged, "merged");
   assert.equal(state.reviewed, 0);
   assert.equal(state.merges, 0);
+});
+test("a merged PR without the label is left alone: no status, and no later release can fail it", async () => {
+  const { io, state } = fixture();
+  Object.assign(state.pr, { labels: [], state: "closed", merged_at: "before", merge_commit_sha: "merged" });
+  const { api } = io;
+  io.api = async (path, body, method) =>
+    path.startsWith("actions/workflows/ship.yml")
+      ? { workflow_runs: [run(1, "merged", "completed", "failure")] }
+      : api(path, body, method);
+  assert.equal((await deliver("example/app", 1, io)).summary, "没有待交付的标记");
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.statuses, []);
 });
 test("only the latest exact-head full workflow and successful required job count", async () => {
   for (const [workflow, job, want] of [
