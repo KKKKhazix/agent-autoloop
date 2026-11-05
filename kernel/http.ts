@@ -143,18 +143,22 @@ async function tell(call: Call) {
   if (!source && !worker) throw new AuthError("要来源或接单程序的密钥");
   const input = await readJson(call.request);
   const expected = source ? ["key", "text"] : ["key", "task", "text"];
-  const hasExpected = input && typeof input === "object" && Object.keys(input).sort().join() === expected.join();
+  const given = input && typeof input === "object" ? Object.keys(input).sort() : [];
+  const accepted = [expected.join(), [...expected, "target_channel"].sort().join()];
+  const hasExpected = accepted.includes(given.join());
   const keyIsValid = typeof input?.key === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(input.key);
   const text = typeof input?.text === "string" ? input.text.trim() : "";
+  const target = input?.target_channel;
   if (!hasExpected || !keyIsValid || !text || [...text].length > 20_000) {
-    throw new InputError("要有正确的 key 和 text，接单程序还要写 task，text 最多 20000 字");
+    throw new InputError("要有正确的 key 和 text，接单程序还要写 task，text 最多 20000 字，可以点名 target_channel");
   }
   if (source) {
-    return json(act(call, "tell", `source:${source}:${input.key}`, rules.sources[source]?.name ?? source, text));
+    const title = rules.sources[source]?.name ?? source;
+    return json(act(call, "tell", `source:${source}:${input.key}`, title, text, target));
   }
   const task = rules.elsewhere.find((task) => task.name === input.task && agentsOf(view, worker!).includes(task.to));
   if (!task) throw new AuthError("这台接单程序没有这个定时任务");
-  return json(act(call, "tell", `elsewhere:${task.name}:${input.key}`, task.name, text));
+  return json(act(call, "tell", `elsewhere:${task.name}:${input.key}`, task.name, text, target));
 }
 
 async function work(call: Call) {

@@ -10,7 +10,8 @@ import { at, setup } from "./helpers.ts";
 setup("card-routing");
 
 const { ingest } = await import("../host/runtime.ts");
-const { claimNext, finish, started, answer, nextCard, delivered, failed, getView } = await import("../host/runtime.ts");
+const { claimNext, finish, started, answer, nextCard, delivered, failed, getView, tell } =
+  await import("../host/runtime.ts");
 const { AuthError, NotFound, InputError } = await import("../kernel/errors.ts");
 const { all, one, run } = await import("./storage.ts");
 
@@ -240,6 +241,20 @@ test("a rule that names a channel the rules file does not know is refused", asyn
     /没有这个通道/,
     "a rule may not name a channel that does not exist",
   );
+});
+
+test("a notice told to one channel is offered to that channel and no other", () => {
+  clean();
+  useRules();
+  const { card: id } = tell("source:app:pinned", "应用", "只在文字里说", "plain", at(0));
+  assert.equal(card(id).target_channel, "plain");
+  assert.equal(nextCard("chat", at(1)), null, "a channel that was not named is not given it");
+  const given = nextCard("plain", at(1))!;
+  assert.equal(given.id, id);
+  delivered("plain", id, given.version, "p_1", at(1));
+  assert.throws(() => delivered("chat", id, given.version, "om_1", at(1)), AuthError);
+  assert.throws(() => tell("source:app:pinned2", "应用", "x", "nowhere", at(0)), InputError);
+  assert.equal(one<{ n: number }>("SELECT count(*) AS n FROM cards WHERE key = 'source:app:pinned2'")!.n, 0);
 });
 
 test("a run cannot see or resolve open cards from another target_channel", () => {

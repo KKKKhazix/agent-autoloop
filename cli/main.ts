@@ -34,8 +34,8 @@ const HELP = `Agent 自动化中台
   agent-autoloop rules explain           按本机 rules.json 说明生效的规则、Agent、通道和下次定时
   agent-autoloop emit <类型> [--dry-run] [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
                                     发一条事件；--dry-run 只预演会派给谁，不连接中台
-  agent-autoloop tell <编号> [--task 定时任务名]
-                                    直接告诉你一件事，内容从标准输入读
+  agent-autoloop tell <编号> [--task 定时任务名] [--to 通道]
+                                    直接告诉你一件事，内容从标准输入读；--to 只发给那个通道
   agent-autoloop stop <第几轮>           停掉一轮
   agent-autoloop key new <source|worker|channel|owner> <名字>
                                     新建一把密钥（只显示这一次）
@@ -117,7 +117,10 @@ const TAKES: Record<string, { flags: string[]; usage: string }> = {
   service: { flags: [], usage: "用法：agent-autoloop service install|remove" },
   status: { flags: ["json"], usage: STATUS_USAGE },
   stop: { flags: [], usage: "用法：agent-autoloop stop <第几轮>" },
-  tell: { flags: ["task"], usage: "用法：agent-autoloop tell <编号> [--task 定时任务名]，内容从标准输入读" },
+  tell: {
+    flags: ["task", "to"],
+    usage: "用法：agent-autoloop tell <编号> [--task 定时任务名] [--to 通道]，内容从标准输入读；--to 只发给那个通道",
+  },
   try: { flags: [], usage: TRY_USAGE },
   uninstall: { flags: ["yes"], usage: UNINSTALL_USAGE },
   up: { flags: [], usage: "用法：agent-autoloop up" },
@@ -617,9 +620,15 @@ async function tell(args: string[]) {
   const words = readFileSync(0, "utf8").trim();
   if (!words) return fail("要说的话从标准输入传，不能为空。");
   const task = text(named.task);
+  const to = text(named.to);
   const secret = task ? config.worker?.key : config.source?.key;
   if (!secret) return fail(task ? "这台电脑不是接单程序" : "这台电脑上没有来源的密钥");
-  const answer = await client(secret, config).tell({ key: matter, text: words, ...(task && { task }) });
+  const answer = await client(secret, config).tell({
+    key: matter,
+    text: words,
+    ...(task && { task }),
+    ...(to && { target_channel: to }),
+  });
   console.log(answer.duplicate ? "这件事已经说过了，这次没再发。" : "说了。");
 }
 

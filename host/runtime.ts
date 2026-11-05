@@ -190,8 +190,13 @@ export function tick(now = Date.now()) {
 
 export const createCard = (spec: Row, now = Date.now()) => execute("createCard", [spec], now);
 type CardAck = { card: number; duplicate: boolean };
-export const tell = (key: string, title: string, text: string, now = Date.now()): CardAck =>
-  execute("tell", [key, title, text], now);
+export const tell = (
+  key: string,
+  title: string,
+  text: string,
+  target: string | null = null,
+  now = Date.now(),
+): CardAck => execute("tell", [key, title, text, target], now);
 export type Answer = {
   choice?: number;
   text?: string;

@@ -509,3 +509,32 @@ test("there's no other page: what's going on is read through the doors", async (
   for (const path of ["/", "/index.html", "/app.js", "/style.css", "/../package.json"])
     assert.equal((await call(path)).status, 404, path);
 });
+
+test("a notice may name the one channel it is for, and a channel that isn't registered is refused", async () => {
+  const pinned = await call("/v1/tell", {
+    key: keys.app,
+    body: { key: "pinned", text: "只在文字里说", target_channel: "plain" },
+  });
+  assert.equal(pinned.status, 200);
+  assert.equal(
+    one<{ target_channel: string }>("SELECT target_channel FROM cards WHERE id = ?", [pinned.json.card])!
+      .target_channel,
+    "plain",
+    "the card keeps the channel it named",
+  );
+  const nowhere = await call("/v1/tell", {
+    key: keys.app,
+    body: { key: "pinned-2", text: "x", target_channel: "bark" },
+  });
+  assert.equal(nowhere.status, 400, "an unregistered channel is a mistake, not a broadcast");
+  assert.equal(
+    one<{ n: number }>("SELECT count(*) AS n FROM cards WHERE key = 'source:app:pinned-2'")!.n,
+    0,
+    "and no card is made",
+  );
+  // The keys a notice may carry are still counted exactly: a misspelt field is refused.
+  assert.equal(
+    (await call("/v1/tell", { key: keys.app, body: { key: "pinned-3", text: "x", target: "plain" } })).status,
+    400,
+  );
+});

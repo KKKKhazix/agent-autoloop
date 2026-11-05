@@ -419,7 +419,7 @@ test("each channel gets each card once, and an update when its state changes; a 
 
 test("a failed send is retried further and further apart, then given up within the hour; a channel that never came hasn't failed", () => {
   clean();
-  const id = tell("source:app:k", "应用", "周报来了", at(0)).card;
+  const id = tell("source:app:k", "应用", "周报来了", null, at(0)).card;
   const tries = [0, 1, 3, 7, 15, 25, 35, 45, 55];
   for (const minute of tries) {
     const given = nextCard("chat", at(minute));
@@ -446,7 +446,7 @@ test("a failed send is retried further and further apart, then given up within t
 
 test("a channel that takes a card and never reports stops getting it: after the last try, or once an hour is up", () => {
   clean();
-  const id = tell("source:app:k", "应用", "周报", at(0)).card;
+  const id = tell("source:app:k", "应用", "周报", null, at(0)).card;
   for (const minute of [0, 1, 2, 3, 4, 5, 6, 7, 8])
     assert.equal(nextCard("chat", at(minute))?.id, id, `try at ${minute}`);
   assert.equal(nextCard("chat", at(9)), null, "that was the last try");
@@ -525,14 +525,14 @@ test("a notice has one button that closes it; something only to know has none an
   const closed = nextCard("chat", at(1))!;
   assert.deepEqual([closed.id, closed.state, closed.options], [id, "closed", []], "its message loses the button");
   delivered("chat", id, closed.version, "om_1", at(1));
-  const fyi = tell("source:app:k2", "应用", "只是告诉你", at(2)).card;
+  const fyi = tell("source:app:k2", "应用", "只是告诉你", null, at(2)).card;
   const given = nextCard("chat", at(2))!;
   assert.deepEqual([given.id, given.state, given.options], [fyi, "closed", []]);
 });
 
 test("a card closed as it's made says when, or whatever reads the state takes it for still waiting", () => {
   clean();
-  tell("source:app:k3", "应用", "只是告诉你", at(1));
+  tell("source:app:k3", "应用", "只是告诉你", null, at(1));
   ingest("app", note(1), at(2));
   const job = claim("w1", at(2))!;
   finish(job.run, job.token, { outcome: "done", notice: [{ title: "已设好", text: "每天九点", fyi: true }] }, at(3));
@@ -697,13 +697,13 @@ for (const fyi of [undefined, false, true]) {
 
 test("what only needed saying is told once per key; given up, it can be told again", () => {
   clean();
-  const first = tell("source:app:k", "应用", "周报", at(0));
+  const first = tell("source:app:k", "应用", "周报", null, at(0));
   assert.equal(first.duplicate, false);
-  assert.equal(tell("source:app:k", "应用", "周报", at(1)).duplicate, true);
+  assert.equal(tell("source:app:k", "应用", "周报", null, at(1)).duplicate, true);
   for (const minute of [0, 1, 3, 7, 15, 25, 35, 45, 55])
     failed("chat", first.card, nextCard("chat", at(minute))!.version, "挂了", at(minute));
   assert.equal(nextCard("chat", at(60)), null);
-  const again = tell("source:app:k", "应用", "周报（更新）", at(70));
+  const again = tell("source:app:k", "应用", "周报（更新）", null, at(70));
   assert.deepEqual(
     [again.card, again.duplicate],
     [first.card, false],
@@ -715,7 +715,7 @@ test("what only needed saying is told once per key; given up, it can be told aga
 
 test("what only needed saying goes stale: a channel coming back after a day doesn't get yesterday's", () => {
   clean();
-  tell("source:app:k", "应用", "昨天的事", at(0));
+  tell("source:app:k", "应用", "昨天的事", null, at(0));
   assert.equal(nextCard("chat", at(25 * 60)), null);
   const { id } = asked(1, at(25 * 60));
   assert.equal(nextCard("chat", at(25 * 60))?.id, id, "what still needs an answer does");

@@ -647,8 +647,20 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     }
     return createCard(draft, { ...spec, target_channel: target });
   },
-  tell(draft, key, title, text) {
-    const told = createCard(draft, { key, title, text, kind: "notice", fyi: true, once: true });
+  tell(draft, key, title, text, target) {
+    // A notice may be told to one channel by name; anything not registered is refused rather than ignored.
+    if (target != null && (typeof target !== "string" || !Object.hasOwn(draft.rules.channels, target))) {
+      throw new InputError("目标通道不存在");
+    }
+    const told = createCard(draft, {
+      key,
+      title,
+      text,
+      kind: "notice",
+      fyi: true,
+      once: true,
+      target_channel: target ?? null,
+    });
     if (!told.duplicate) return told;
     // Said again after every channel gave up on it: it gets another go.
     const isGivenUp = (delivery: Row) => delivery.card_id === told.card && delivery.given_up;
