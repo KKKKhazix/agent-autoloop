@@ -1,10 +1,11 @@
 // Failure modes: empty/failed reviews pass; findings are unhandled but attested; Codex reads developer
-// config or memories, writes files, sees credentials, or executes a PR's programs/settings. Review receives a text snapshot.
+// config or memories, writes files, sees credentials, or executes a PR's programs/settings. Review receives a text snapshot;
+// what an octopus merge brings or a file Git calls binary holds never reaches the reviewer, so it passes unseen.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseReview, codexCommand, reviewSnapshot } from "../plugins/delivery/review.ts";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { settings } from "../plugins/delivery/project.ts";
@@ -65,4 +66,84 @@ test("review uses main's points and a text-only snapshot; ordinary internal docs
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+/** A project with one commit on main, and a stand-in reviewer that leaves a mark when it's called and finds nothing. */
+function project() {
+  const root = mkdtempSync(join(tmpdir(), "agent-autoloop-review-"));
+  const repo = join(root, "repo");
+  const called = join(root, "called");
+  const reviewer = join(root, "reviewer.mjs");
+  mkdirSync(join(repo, "docs"), { recursive: true });
+  writeFileSync(
+    reviewer,
+    `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(called)},'yes');console.log('{"findings":[]}');`,
+  );
+  const git = (...a: string[]) =>
+    execFileSync("git", a, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const identity = ["-c", "user.name=test", "-c", "user.email=test@example.invalid"];
+  const commit = () => {
+    git("add", "-A");
+    git(...identity, "commit", "-qm", "test");
+    return git("rev-parse", "HEAD");
+  };
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(repo, "AGENTS.md"), "## 审查要点\nmain-points\n");
+  writeFileSync(join(repo, "app.ts"), "export const version = 1;\n");
+  const main = commit();
+  const config = settings({
+    repo: "example/app",
+    internal: ["docs/*.md"],
+    review: { points: "AGENTS.md", command: [process.execPath, reviewer] },
+  });
+  const snapshot = join(root, "snapshot");
+  return {
+    repo,
+    main,
+    git,
+    identity,
+    commit,
+    write: (name: string, content: string) => writeFileSync(join(repo, name), content),
+    review: (head: string) => reviewSnapshot(repo, snapshot, main, head, config),
+    changes: () => readFileSync(join(snapshot, "changes.txt"), "utf8"),
+    reviewed: () => existsSync(called),
+    [Symbol.dispose]: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+test("a branch with an octopus merge is reported, not reviewed without what the merge brought", async () => {
+  using p = project();
+  for (const name of ["one", "two"]) {
+    p.git("switch", "-q", "-c", name, "main");
+    p.write(`${name}.txt`, name);
+    p.commit();
+  }
+  p.git("switch", "-q", "-c", "topic", "main");
+  p.write("topic.txt", "topic");
+  p.commit();
+  p.git(...p.identity, "merge", "-q", "--no-commit", "one", "two");
+  p.write("app.ts", "export const version = 'slipped in by the merge';\n");
+  const head = p.commit();
+  assert.equal(p.git("rev-list", "--parents", "-n1", head).split(" ").length, 4);
+  const findings = await p.review(head);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].title, /章鱼合并/);
+  assert.ok(!p.reviewed());
+});
+test("an ordinary merge still goes to the reviewer", async () => {
+  using p = project();
+  p.git("switch", "-q", "-c", "one", "main");
+  p.write("one.txt", "one");
+  p.commit();
+  p.git("switch", "-q", "-c", "topic", "main");
+  p.write("two.txt", "two");
+  p.commit();
+  p.git(...p.identity, "merge", "-q", "--no-edit", "one");
+  assert.deepEqual(await p.review(p.git("rev-parse", "HEAD")), []);
+  assert.ok(p.reviewed());
+});
+test("a file with a NUL byte shows its text in the snapshot", async () => {
+  using p = project();
+  p.write("app.ts", "// \0\nexport const hidden = 'visible-to-review';\n");
+  assert.deepEqual(await p.review(p.commit()), []);
+  assert.ok(p.reviewed());
+  assert.match(p.changes(), /visible-to-review/);
 });

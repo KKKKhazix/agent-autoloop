@@ -56,6 +56,15 @@ export function codexCommand(output: string, effort: string) {
 }
 
 export async function reviewSnapshot(bare: string, snapshot: string, main: string, head: string, config: Settings) {
+  // Git can't show what a merge of three or more parents brought: neither its paths nor its diff would reach the reviewer.
+  if (git(bare, "rev-list", "--min-parents=3", head, "--not", main)) {
+    return [
+      {
+        title: "这个 PR 含章鱼合并，审查看不到它带来的改动",
+        text: "一次合并三个及以上分支的提交，内容进不了审查。改成普通的两两合并后重新交付。",
+      },
+    ];
+  }
   // No checkout: hooks, filters, AGENTS.md and program/config files from the PR never become executable inputs here.
   const branchLog = ["--diff-merges=remerge", "--no-renames"];
   const changes = git(bare, "log", ...branchLog, "--format=%H", "--name-only", head, "--not", main)
@@ -64,7 +73,9 @@ export async function reviewSnapshot(bare: string, snapshot: string, main: strin
   const paths = changes.filter((line) => !COMMIT.test(line));
   const commits = changes.filter((line) => COMMIT.test(line));
   const diff = commits
-    .map((sha) => git(bare, "show", "--remerge-diff", "--no-renames", "--no-ext-diff", "--no-textconv", sha, "--"))
+    .map((sha) =>
+      git(bare, "show", "--remerge-diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--text", sha, "--"),
+    )
     .join("\n\n");
   if (!paths.length) return [];
   const raw = git(bare, "log", ...branchLog, "--format=", "--raw", head, "--not", main);
