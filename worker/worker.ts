@@ -423,7 +423,7 @@ export function createWorker({
       entry.session = seen.session;
       save(entry);
     }
-    const session = seen.session ?? (adapter.link ? (entry.resume ?? entry.session) : undefined);
+    const session = seen.session ?? (adapter.link ? entry.session : undefined);
     if (session && session !== entry.told) {
       try {
         await hub.started(entry.run, entry.token, { session, ...(adapter.link && { link: adapter.link(session) }) });
