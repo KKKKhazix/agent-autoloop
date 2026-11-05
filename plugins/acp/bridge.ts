@@ -80,16 +80,26 @@ export async function bridge(turn: Turn) {
   const onUpdate = (update: any) => {
     if (["tool_call", "tool_call_update"].includes(update.sessionUpdate)) toolCall(update);
     if (update.sessionUpdate === "agent_message_chunk" && update.content?.type === "text") {
-      if (boundary || (update.messageId && update.messageId !== message)) text = "";
+      // An id says which message this is. Only with none does what came in between have to tell.
+      if (update.messageId ? update.messageId !== message : boundary) text = "";
       message = update.messageId;
       boundary = false;
       text += update.content.text;
-    } else if (["tool_call", "agent_thought_chunk", "user_message_chunk"].includes(update.sessionUpdate)) {
+    } else if (
+      ["tool_call", "agent_thought_chunk", "user_message_chunk"].includes(update.sessionUpdate) ||
+      (update.sessionUpdate === "tool_call_update" && ["completed", "failed"].includes(update.status))
+    ) {
       boundary = true;
     }
   };
   const onLine = (line: string) => {
-    const incoming = JSON.parse(line);
+    if (!line.trim()) return;
+    let incoming: any = null;
+    try {
+      incoming = JSON.parse(line);
+    } catch {}
+    // A program's stdout gets stray prints too, and a turn isn't worth losing over one.
+    if (!incoming || typeof incoming !== "object") return console.error(`ACP 的输出里有读不懂的一行，跳过了：${line}`);
     if (incoming.method === "session/update" && collecting && incoming.params?.sessionId === session) {
       onUpdate(incoming.params.update);
     } else if (incoming.method && incoming.id !== undefined) {

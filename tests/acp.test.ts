@@ -8,7 +8,9 @@
 // A U+2028 or U+2029 in anything the agent says, which JSON leaves as it is, cuts the line and ends the turn.
 // With edit access, a link in the folder that goes nowhere, or through such a link, passes for a new file inside it, and
 // writing through it lands outside. A permission request that gives only the tool call's id is judged as if it had no kind;
-// what an earlier message said of the call hides what this one says, or a field left empty wipes what was known.
+// what an earlier message said of the call hides what this one says, or a field left empty wipes what was known. A thought
+// in the middle of a message loses its first half; a finished tool call between two messages with no id runs them together,
+// so a "没跑成" after it reads as work done; a blank or unreadable line on the agent's stdout ends the turn.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "node:fs";
@@ -184,6 +186,63 @@ test("ACP reads U+2028 and U+2029 in what the agent says as part of the line", a
   );
   assert.equal(result.code, 0, result.err);
   assert.equal(acp.read(result.out, result.code, result.err).text, "第一行 第二行 第三行");
+});
+
+test("ACP finds where the last message starts", async () => {
+  const tool = (sessionUpdate: string, status?: string) => ({ sessionUpdate, toolCallId: "t", title: "工具", status });
+  const thought = { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "想" } };
+  const say = (text: string, messageId?: string) => ({ text, messageId });
+  for (const [why, steps, expected] of [
+    ["a thought doesn't split a message with an id", [say("前半", "m1"), thought, say("后半", "m1")], "前半后半"],
+    ["a tool call doesn't split one either", [say("前半", "m1"), tool("tool_call"), say("后半", "m1")], "前半后半"],
+    ["nor does a finished one", [say("前半", "m1"), tool("tool_call_update", "completed"), say("后半", "m1")], "前半后半"],
+    ["a new id is a new message", [say("旧的", "m1"), say("新的", "m2")], "新的"],
+    ["an id after none is a new message", [say("旧的"), say("新的", "m2")], "新的"],
+    ["with no id, a thought is a boundary", [say("旧的"), thought, say("新的")], "新的"],
+    ["with no id, a tool call is a boundary", [say("旧的"), tool("tool_call"), say("新的")], "新的"],
+    ["with no id, a completed tool call is a boundary", [say("旧的"), tool("tool_call_update", "completed"), say("新的")], "新的"],
+    ["with no id, a failed tool call is a boundary", [say("旧的"), tool("tool_call_update", "failed"), say("新的")], "新的"],
+    ["a tool call still going isn't", [say("前半"), tool("tool_call_update", "in_progress"), say("后半")], "前半后半"],
+    ["nor is one that only reports", [say("前半"), tool("tool_call_update"), say("后半")], "前半后半"],
+    ["chunks with no boundary are one message", [say("一"), say("二"), say("三")], "一二三"],
+  ] as const) {
+    const result = await launch(
+      `boundary-${why.replaceAll(/\W/g, "-")}`,
+      `on['session/prompt'] = (m) => {
+        for (const step of ${JSON.stringify(steps)}) {
+          if (step.sessionUpdate) update(step);
+          else say(step.text, step.messageId);
+        }
+        send({ id: m.id, result: { stopReason: 'end_turn' } });
+      };`,
+    );
+    assert.equal(result.code, 0, result.err);
+    assert.equal(acp.read(result.out, result.code, result.err).text, expected, why);
+  }
+});
+
+test("ACP skips blank and unreadable lines on the agent's stdout, and says so on stderr", async () => {
+  const result = await launch(
+    "noisy-stdout",
+    `const noise = () => process.stdout.write('\\n \\n这不是 JSON\\nnull\\n123\\n');
+    noise();
+    const { initialize, 'session/new': fresh } = on;
+    on.initialize = (m) => { noise(); initialize(m); };
+    on['session/new'] = (m) => { noise(); fresh(m); };
+    on['session/prompt'] = (m) => {
+      noise();
+      say('做完了');
+      noise();
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+    };`,
+  );
+  assert.equal(result.code, 0, result.err);
+  const reading = acp.read(result.out, result.code, result.err);
+  assert.equal(reading.text, "做完了");
+  assert.equal(reading.finished, true);
+  assert.match(result.err, /这不是 JSON/);
+  assert.match(result.err, /null/);
+  assert.ok(!result.out.includes("这不是 JSON"), "stdout stays what the adapter reads");
 });
 
 test("ACP chooses only a one-time permission and respects structured kinds and resolved paths", () => {

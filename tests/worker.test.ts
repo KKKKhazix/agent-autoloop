@@ -20,7 +20,8 @@
 // up here in place of the one it read while the run was going, which a retry can't go on in; trouble with one run, like a
 // folder it can't write to, holds up the others, ends the worker or fills the log; a worker started again after trouble
 // needs the folder it lost. Over ACP, a retry in a session a turn already started in that breaks before the prompt redoes the
-// work in a new one, and one the agent refuses or can't go on in doesn't get a new one.
+// work in a new one, and one the agent refuses or can't go on in doesn't get a new one; a "没跑成" after a finished tool call
+// is run together with what came before it and counts as work done.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -991,4 +992,21 @@ test("over ACP, a session the agent refuses or can't go on in gets a new one, on
     );
     assert.equal(agent.launches(), 2, name);
   }
+});
+
+test("over ACP, a last message after a finished tool call is read by itself, so the run goes back to be tried again", async () => {
+  const hub = fakeHub();
+  const agent = acp(
+    "failed-after-a-tool",
+    `on['session/prompt'] = (m) => {
+      update({ sessionUpdate: 'tool_call', toolCallId: 't', title: '后台任务', status: 'in_progress' });
+      say('还在等后台任务');
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't', status: 'failed' });
+      say('没跑成：网络断了');
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+    };`,
+  );
+  hub.jobs.push(job({ use: "acp", command: agent.command }));
+  await until(worker(hub), () => hub.results.length === 1);
+  assert.deepEqual([hub.results[0].outcome, hub.results[0].error], ["failed", "网络断了"]);
 });
