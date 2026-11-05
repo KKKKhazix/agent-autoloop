@@ -39,6 +39,9 @@ export const wordsPage = (words: string) => shell(words, `<p>${escaped(words)}</
 
 export function cardPage(card: ReturnType<typeof cardView>) {
   const words = `<h1>${escaped(card.title)}</h1>${card.text ? `<p>${escaped(card.text)}</p>` : ""}`;
+  // The page names the version it was drawn at, so a press after the card moved on is refused instead of counted
+  // as an answer to what is on screen now.
+  const version = `<input type="hidden" name="expectedVersion" value="${card.version}">`;
   if (card.state === "open") {
     const button = (option: string, index: number) => {
       const best = index === card.recommend ? ' class="best"' : "";
@@ -50,8 +53,9 @@ export function cardPage(card: ReturnType<typeof cardView>) {
     const box = notice
       ? `<input name="text" placeholder="我实际怎么处理的（可不填）" aria-label="处理说明">`
       : `<input name="text" placeholder="别的想法" aria-label="别的想法" required>`;
-    const other = `<form method="post">${box}<button>${notice ? "记录并结案" : "发送"}</button></form>`;
-    return shell(card.title, `${words}<form method="post">${card.options.map(button).join("")}</form>${other}`);
+    const other = `<form method="post">${box}${version}<button>${notice ? "记录并结案" : "发送"}</button></form>`;
+    const choices = `<form method="post">${version}${card.options.map(button).join("")}</form>`;
+    return shell(card.title, `${words}${choices}${other}`);
   }
   const chosen = card.kind === "ask" ? (card.choice !== null ? card.options[card.choice] : card.answer) : null;
   const outcome = [chosen ? `你选了「${chosen}」` : "", card.result ?? ""].filter(Boolean).join("。");

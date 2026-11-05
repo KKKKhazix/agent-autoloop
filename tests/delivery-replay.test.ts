@@ -11,7 +11,7 @@ setup("delivery-replay");
 
 const { ingest, claimNext, started, finish, answer, resolve, nextCard, delivered, createCard, getView } =
   await import("../host/runtime.ts");
-const { AuthError, NotFound } = await import("../kernel/errors.ts");
+const { AuthError, NotFound, InputError } = await import("../kernel/errors.ts");
 const { all, one, run } = await import("./storage.ts");
 
 const clean = () => {
@@ -128,16 +128,16 @@ test("a report for a card that does not exist is refused", () => {
   assert.equal(one<{ n: number }>("SELECT count(*) AS n FROM deliveries")!.n, 0);
 });
 
-// Not a behaviour worth keeping, but the one broadcast cards still have: the version they name is not bounded by the
-// card's own. A report naming a version past the card's silences that channel for good, because a card is sent again
-// only while the delivery it knows is older than the card. Directed cards refuse this; broadcast cards do not.
-test("known gap: a broadcast report naming a future version is taken, and silences that channel", () => {
+test("a broadcast report naming a version past the card's is refused, and the channel keeps getting updates", () => {
   clean();
   const id = askedBroadcast(4);
   delivered("plain", id, 1, "p_1", at(1));
-  delivered("chat", id, 9, "om_future", at(1));
-  assert.equal(delivery(id, "chat").version, 9);
-  answer(id, { choice: 0, by: "me" }, at(2));
-  assert.equal(nextCard("chat", at(3)), null, "the channel is never offered the answer it made");
-  assert.equal(nextCard("plain", at(3))!.version, 2, "other channels are unaffected");
+  const before = getView().seq;
+  assert.throws(() => delivered("chat", id, 9, "om_future", at(1)), InputError);
+  assert.equal(getView().seq, before, "a refused report writes no fact");
+  assert.equal(delivery(id, "chat"), undefined, "and leaves no delivery behind");
+  assert.equal(nextCard("chat", at(2))!.id, id, "the channel is still offered the card");
+  delivered("chat", id, 1, "om_1", at(2));
+  answer(id, { choice: 0, by: "me" }, at(3));
+  assert.equal(nextCard("chat", at(4))!.version, 2, "and the answer it made comes to it");
 });

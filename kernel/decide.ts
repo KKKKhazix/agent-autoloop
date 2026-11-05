@@ -721,7 +721,9 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     }
     const prior = draft.view.get("deliveries", `${id}:${channel}`);
     if (card.target_channel != null && !prior) throw new AuthError("要先领到卡片才能确认投递");
-    if (card.target_channel != null && (!Number.isSafeInteger(version) || version <= 0 || version > card.version)) {
+    // A report names the version the channel was shown. A version past the card's own would silence that channel
+    // for good, because a card is only sent again while the delivery it knows is older than the card.
+    if (!Number.isSafeInteger(version) || version <= 0 || version > card.version) {
       throw new InputError("卡片版本不正确");
     }
     if (ref !== null && (typeof ref !== "string" || [...ref].length > DELIVERY_REF)) {

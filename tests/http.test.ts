@@ -436,6 +436,26 @@ test("a card for a channel that takes no links doesn't open, though another chan
   assert.equal((await call(token(plain.card))).status, 200, "another channel does take them");
 });
 
+test("a press on a link names the version the page was drawn at, and a stale one is not counted", async () => {
+  const { id, path } = await linkFor(65, { ask: [{ title: "链接版本", text: "选一个", options: ["甲", "乙"] }] });
+  const page = await call(path);
+  const drawn = /name="expectedVersion" value="(\d+)"/.exec(page.text);
+  assert.ok(drawn, "the page names the version it shows");
+  assert.equal(drawn[1], "1");
+  // The card moves on elsewhere while the page sits open in a tab.
+  const moved = await call(`/v1/cards/${id}/resolve`, { key: keys.owner, body: { reason: "在别处处理了" } });
+  assert.equal(moved.status, 200);
+  const stale = await form(path, `choice=0&expectedVersion=${drawn[1]}`);
+  assert.equal(stale.status, 409, "the press is refused, not counted");
+  assert.match(stale.text, /已经变了/);
+  assert.deepEqual([stored(id).state, stored(id).choice], ["closed", null], "nothing was answered");
+  // A page drawn after the move, on a card that is still open, answers at the version it shows.
+  const fresh = await linkFor(66, { ask: [{ title: "链接版本新", text: "选一个", options: ["甲", "乙"] }] });
+  const current = /name="expectedVersion" value="(\d+)"/.exec((await call(fresh.path)).text)![1];
+  assert.equal((await form(fresh.path, `choice=0&expectedVersion=${current}`)).status, 303);
+  assert.equal(stored(fresh.id).choice, 0);
+});
+
 test("a card's link takes words of your own, and a notice takes a line of its own", async () => {
   const asked = await linkFor(61, {
     ask: [{ title: "别的想法", text: "选一个", options: ["甲", "乙"], key: "words" }],

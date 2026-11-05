@@ -112,7 +112,21 @@ async function cardAtLink(call: Call, linkToken: string) {
   if (request.method === "GET") return new Response(cardPage(cardView(card, environment)), { headers: PAGE_HEADERS });
   const form = new URLSearchParams(await readText(request));
   const choice = form.has("choice") && { choice: Number(form.get("choice")) };
-  act(call, "answer", card.id, { ...choice, text: form.get("text") ?? undefined, by: "链接" });
+  const seen = form.get("expectedVersion");
+  const answer = {
+    ...choice,
+    text: form.get("text") ?? undefined,
+    by: "链接",
+    expectedVersion: seen ? Number(seen) : undefined,
+  };
+  try {
+    act(call, "answer", card.id, answer);
+  } catch (error) {
+    if (!(error instanceof Conflict)) throw error;
+    // The page was drawn before the card moved on: say so, and let a reload show what it says now.
+    const words = "这张卡片在你打开页面之后已经变了，这一下没有算。刷新页面可以看到它现在的样子。";
+    return new Response(wordsPage(words), { status: 409, headers: PAGE_HEADERS });
+  }
   return new Response(null, { status: 303, headers: { location: call.url.pathname, ...NO_STORE } });
 }
 

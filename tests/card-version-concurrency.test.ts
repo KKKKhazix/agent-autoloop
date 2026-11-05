@@ -102,109 +102,91 @@ async function runConcurrentOperations(
     }, timeoutMs);
   });
 
-  const waitForReady = (child: typeof pA, name: string): Promise<void> =>
-    new Promise<void>((resolve, reject) => {
-      const onMsg = (msg: any) => {
-        if (msg?.status === "ready") {
-          child.removeListener("exit", onExit);
-          child.removeListener("error", onErr);
-          resolve();
+  // Everything a worker says, and the way it ends, is recorded from the moment it starts: one that dies while a
+  // waiter is still being set up is a failure at once, not a wait until the whole test times out.
+  const watch = (child: typeof pA, name: string) => {
+    const seen: any[] = [];
+    const waiting: Array<{ match: (msg: any) => boolean; resolve: (msg: any) => void; reject: (e: Error) => void }> =
+      [];
+    let ended: string | null = null;
+    const settle = () => {
+      for (let i = waiting.length - 1; i >= 0; i--) {
+        const waiter = waiting[i];
+        const hit = seen.find(waiter.match);
+        if (hit) {
+          waiting.splice(i, 1);
+          waiter.resolve(hit);
+        } else if (ended) {
+          waiting.splice(i, 1);
+          waiter.reject(new Error(`Worker ${name} ${ended} without what was awaited`));
         }
-      };
-      const onExit = (code: number | null, signal: string | null) => {
-        child.removeListener("message", onMsg);
-        child.removeListener("error", onErr);
-        reject(new Error(`Worker ${name} exited prematurely before ready (code: ${code}, signal: ${signal})`));
-      };
-      const onErr = (err: Error) => {
-        child.removeListener("message", onMsg);
-        child.removeListener("exit", onExit);
-        reject(err);
-      };
-      child.on("message", onMsg);
-      child.once("exit", onExit);
-      child.once("error", onErr);
+      }
+    };
+    child.on("message", (msg: any) => {
+      seen.push(msg);
+      settle();
     });
+    child.once("error", (error: Error) => {
+      ended = `failed: ${error.message}`;
+      settle();
+    });
+    child.once("exit", (code, signal) => {
+      ended = `exited (code: ${code}, signal: ${signal})`;
+      settle();
+    });
+    const awaited = (match: (msg: any) => boolean) =>
+      new Promise<any>((resolve, reject) => {
+        waiting.push({ match, resolve, reject });
+        settle();
+      });
+    return { child, awaited };
+  };
 
-  const waitForRunning = (child: typeof pA, name: string, status = "running"): Promise<void> =>
-    new Promise<void>((resolve, reject) => {
-      const onMsg = (msg: any) => {
-        if (msg?.status === status) {
-          child.removeListener("exit", onExit);
-          child.removeListener("error", onErr);
-          resolve();
-        }
-      };
-      const onExit = (code: number | null, signal: string | null) => {
-        child.removeListener("message", onMsg);
-        child.removeListener("error", onErr);
-        reject(new Error(`Worker ${name} exited before reporting running state (code: ${code}, signal: ${signal})`));
-      };
-      const onErr = (err: Error) => {
-        child.removeListener("message", onMsg);
-        child.removeListener("exit", onExit);
-        reject(err);
-      };
-      child.on("message", onMsg);
-      child.once("exit", onExit);
-      child.once("error", onErr);
-    });
-
-  const waitForResult = (child: typeof pA, name: string): Promise<WorkerResult> =>
-    new Promise<WorkerResult>((resolve, reject) => {
-      let resultReceived: WorkerResult | undefined;
-      child.on("message", (msg: any) => {
-        if (msg?.status === "result") {
-          resultReceived = msg.result;
-        }
-      });
-      child.once("error", (err) => {
-        cleanup();
-        reject(err);
-      });
-      child.once("exit", (code, signal) => {
-        if (resultReceived) {
-          resolve(resultReceived);
-        } else {
-          cleanup();
-          reject(new Error(`Worker ${name} exited without sending result (code: ${code}, signal: ${signal})`));
-        }
-      });
-    });
+  const a = watch(pA, "A");
+  const b = watch(pB, "B");
 
   try {
     const run = async (): Promise<[WorkerResult, WorkerResult]> => {
-      // 1. Wait for both child processes to initialize runtime and declare ready
-      await Promise.all([waitForReady(pA, "A"), waitForReady(pB, "B")]);
+      // 1. Both child processes have read the rules and opened their own connection.
+      await Promise.all([a.awaited((msg) => msg?.status === "ready"), b.awaited((msg) => msg?.status === "ready")]);
 
-      // 2. Acquire a controlled SQLite exclusive write lock before letting workers write
+      // 2. This process holds the only write lock.
       db.exec("BEGIN IMMEDIATE");
       lockAcquired = true;
 
-      // Confirm each independent connection actually encounters the held SQLite write lock.
-      const lockedA = waitForRunning(pA, "A", "locked");
-      const lockedB = waitForRunning(pB, "B", "locked");
-      pA.send({ probe: true });
-      pB.send({ probe: true });
-      await Promise.all([lockedA, lockedB]);
+      // 3. Each independent connection meets that lock before anything is written.
+      const locked = Promise.all([
+        a.awaited((msg) => msg?.status === "locked"),
+        b.awaited((msg) => msg?.status === "locked"),
+      ]);
+      a.child.send({ probe: true });
+      b.child.send({ probe: true });
+      await locked;
 
-      const runningA = waitForRunning(pA, "A");
-      const runningB = waitForRunning(pB, "B");
+      // 4. Both are now inside their operation, with the lock still held.
+      const running = Promise.all([
+        a.awaited((msg) => msg?.status === "running"),
+        b.awaited((msg) => msg?.status === "running"),
+      ]);
+      a.child.send({ start: true, spec: specA });
+      b.child.send({ start: true, spec: specB });
+      await running;
 
-      // 3. Dispatch operations to both workers simultaneously
-      pA.send({ start: true, spec: specA });
-      pB.send({ start: true, spec: specB });
+      const results = Promise.all([
+        a.awaited((msg) => msg?.status === "result").then((msg) => msg.result),
+        b.awaited((msg) => msg?.status === "result").then((msg) => msg.result),
+      ]);
+      // 5. Neither write may finish while the lock is held here: that is what makes them race once it is released.
+      const finishedEarly = await Promise.race([
+        results.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 300)),
+      ]);
+      assert.equal(finishedEarly, false, "a write finished while the write lock was held elsewhere");
 
-      // Both workers have signaled that their operations are about to start.
-      await Promise.all([runningA, runningB]);
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Release the lock; the probes above establish contention, not that both writes are already blocked.
       db.exec("COMMIT");
       lockAcquired = false;
 
-      // 6. Collect results from both processes
-      return await Promise.all([waitForResult(pA, "A"), waitForResult(pB, "B")]);
+      return await results;
     };
 
     const results = await Promise.race([run(), timeoutPromise]);
