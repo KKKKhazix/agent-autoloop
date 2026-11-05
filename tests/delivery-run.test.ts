@@ -1,10 +1,13 @@
-// Failure modes: an owner question with backticks in its title or text cuts the receipt short.
+// Failure modes: an owner question with backticks in its title or text cuts the receipt short; a short commit from the health
+// check can't be fetched, so every change needs a release and a docs-only PR never finishes.
 // Nothing here reaches GitHub: `gh` is a stand-in first on PATH, and the Git remote is a local folder.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { createIO } from "../plugins/delivery/github.ts";
 import { run } from "../plugins/delivery/run.ts";
 import { readMessage } from "../worker/contract.ts";
 
@@ -56,4 +59,51 @@ test("an owner question with backticks reaches the hub whole", async () => {
   const [card] = (receipt as any).ask;
   assert.equal(card.title, title);
   assert.match(card.text, /没收尾的代码块/);
+});
+
+const remote = join(root, "remote");
+const gitConfig = join(root, "gitconfig");
+writeFileSync(
+  gitConfig,
+  `[url "file://${remote}"]\n\tinsteadOf = https://github.com/example/app.git\n[user]\n\tname = t\n\temail = t@t\n`,
+);
+process.env.GIT_CONFIG_GLOBAL = gitConfig;
+process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+const git = (...args: string[]) =>
+  execFileSync("git", args, { cwd: remote, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+function publish(name: string, words: string) {
+  writeFileSync(join(remote, name), words);
+  git("add", "-A");
+  git("commit", "-q", "-m", words);
+  return git("rev-parse", "HEAD");
+}
+mkdirSync(join(remote, "docs"), { recursive: true });
+git("init", "-q", "-b", "main");
+writeFileSync(join(remote, "app.ts"), "1");
+const live = publish("docs/a.md", "first");
+const docsOnly = publish("docs/a.md", "second");
+const code = publish("app.ts", "2");
+const internal = ["docs/*.md"];
+const ioIn = (name: string) => {
+  const folder = join(root, name);
+  mkdirSync(folder);
+  return createIO("example/app", folder);
+};
+
+test("a short commit from the health check is made full before comparing", async () => {
+  const short = live.slice(0, 7);
+  answers({ [`repos/example/app/commits/${short}`]: { sha: live } });
+  const io = ioIn("short");
+  assert.equal(await io.releaseRequired(short, docsOnly, internal), false);
+  assert.equal(await io.releaseRequired(short, code, internal), true);
+});
+test("a full commit is compared as it is, without asking GitHub", async () => {
+  answers({});
+  const io = ioIn("full");
+  assert.equal(await io.releaseRequired(live, docsOnly, internal), false);
+  assert.ok(!readFileSync(calls, "utf8").includes("commits/"));
+});
+test("a short commit GitHub doesn't know means a release", async () => {
+  answers({});
+  assert.equal(await ioIn("unknown").releaseRequired("abcdef0", docsOnly, internal), true);
 });
