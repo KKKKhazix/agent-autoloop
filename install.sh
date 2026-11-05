@@ -1,7 +1,8 @@
 #!/bin/sh
 # Installs Agent 自动化中台: a clone in ~/.agent-autoloop/app, with nothing to build and nothing else to install.
 set -e
-REPO="${AGENT_AUTOLOOP_REPO:-https://github.com/KKKKhazix/agent-autoloop.git}"
+PUBLISHED=https://github.com/KKKKhazix/agent-autoloop.git
+REPO="${AGENT_AUTOLOOP_REPO:-$PUBLISHED}"
 ROOT="${AGENT_AUTOLOOP_HOME:-$HOME/.agent-autoloop}"
 APP="$ROOT/app"
 PROGRAM="$APP/bin/agent-autoloop.ts"
@@ -28,18 +29,22 @@ node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)
 mkdir -p -m 700 "$ROOT"
 chmod 700 "$ROOT"
 
-# The newest release, which has passed every check. A repository given by hand is used as it stands.
+# A copy follows where it came from, and what came from the public repository follows its newest release, which has passed
+# every check. cli/update.ts decides the same way, or an update would fail on a copy this had moved.
+from="$REPO"
+if [ -d "$APP/.git" ]; then from=$(git -C "$APP" config --get remote.origin.url || true); fi
 release=""
-if [ -z "${AGENT_AUTOLOOP_REPO:-}" ]; then
+if [ "$from" = "$PUBLISHED" ]; then
   # On a line of its own: in a pipe, not getting an answer would look like there being no releases.
-  tags=$(git ls-remote --refs --tags "$REPO" 'v*')
-  release=$(printf '%s\n' "$tags" | sed -n 's#.*refs/tags/\(v[0-9]*\.[0-9]*\.[0-9]*\)$#\1#p' |
+  tags=$(git ls-remote --refs --tags "$PUBLISHED" 'v*')
+  # v1.0.0 can only pull a branch, so a copy sent there could never leave.
+  release=$(printf '%s\n' "$tags" | sed -n -e '/refs\/tags\/v1\.0\.0$/d' -e 's#.*refs/tags/\(v[0-9]*\.[0-9]*\.[0-9]*\)$#\1#p' |
     sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n 1)
 fi
 if [ ! -d "$APP/.git" ]; then
-  git clone --quiet --depth 1 ${release:+--branch "$release"} -- "$REPO" "$APP"
+  git -c advice.detachedHead=false clone --quiet --depth 1 ${release:+--branch "$release"} -- "$REPO" "$APP"
 elif [ -n "$release" ]; then
-  git -C "$APP" fetch --quiet --depth 1 "$REPO" "refs/tags/$release:refs/tags/$release"
+  git -C "$APP" fetch --quiet --depth 1 origin "+refs/tags/$release:refs/tags/$release"
   git -C "$APP" checkout --quiet --detach "$release"
 else
   git -C "$APP" pull --ff-only --quiet
