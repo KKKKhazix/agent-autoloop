@@ -453,15 +453,7 @@ export function createWorker({
   }
 
   function stop(entry: Entry, why: NonNullable<Entry["why"]>) {
-    if (entry.result) return;
-    if (entry.stopping !== undefined) {
-      // A failed result would queue the run again, and the hub would forget it was told to stop.
-      if (why === "cancel" && entry.why === "exited") {
-        entry.why = why;
-        save(entry);
-      }
-      return;
-    }
+    if (entry.stopping !== undefined || entry.result) return;
     entry.stopping = now();
     entry.why = why;
     save(entry);

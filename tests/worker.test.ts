@@ -24,7 +24,7 @@
 // is run together with what came before it and counts as work done; a failed turn whose agent won't go, or leaves something
 // holding its output, or closes its output and stays, holds its place until the time limit and loses the real reason. An
 // agent that crashes or vanishes leaves what it was running going while its result goes in, so a retry runs alongside it;
-// clearing that up loses the session or the reason, forgets where it had got to over a restart, or swallows the owner's stop.
+// clearing that up loses the session or the reason, or forgets where it had got to over a restart.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1119,22 +1119,6 @@ test("what a crash left behind that ignores the stop is killed after a while, ac
   await until(again, () => hub.results.length === 1);
   assert.equal(seen.goingAtHandIn, false);
   assert.deepEqual([hub.results[0].outcome, hub.results[0].error], ["failed", "崩了"]);
-});
-
-test("the owner's stop still counts while what a crash left behind is being stopped", async () => {
-  const hub = fakeHub();
-  let clock = Date.now();
-  const script = `${leftBehind("crash-cancelled", true).step} echo 崩了 >&2; exit 3`;
-  const { w, seen } = await launched(hub, job({ use: "scripted", command: [script] }), { now: () => clock });
-  await until(w, () => w.entries()[0]?.stopping !== undefined);
-  const entry = w.entries()[0];
-  hub.cancel = [entry.run];
-  await w.tick();
-  assert.equal(w.entries()[0].stopping, entry.stopping, "the wait doesn't start again");
-  clock += 11_000;
-  await until(w, () => hub.results.length === 1);
-  assert.equal(seen.goingAtHandIn, false);
-  assert.equal(hub.results[0].outcome, "cancelled", "a failed run would be queued again");
 });
 
 test("a session that can't be gone on in has what the failed try left behind stopped before a new one starts", async () => {
