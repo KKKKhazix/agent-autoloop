@@ -185,6 +185,7 @@ export function createWorker({
   let told = false;
   let tries = 0;
   let blind = false;
+  let tidied = -Infinity;
   const said = new Set<string>();
   /** Trouble that lasts comes round every second, and once in the log will do. */
   const sayOnce = (line: string) => {
@@ -303,8 +304,10 @@ export function createWorker({
     } catch (error) {
       sayOnce(`run ${entry.run}: couldn't read its output: ${error}`);
       // One still going goes on, since this says nothing about how it's doing. Whether one that has ended got started isn't
-      // known, and starting it again in a new session could do its work twice: it stays in this one.
-      return { started: true, error: `读不懂这个 Agent 的输出：${(error as Error).message ?? error}` };
+      // known, and starting it again in a new session could do its work twice: it stays in this one, the session last read,
+      // since the one made up at launch may be nothing its CLI knows of.
+      const problem = `读不懂这个 Agent 的输出：${(error as Error).message ?? error}`;
+      return { started: true, error: problem, ...(entry.told && { session: entry.told }) };
     }
   }
 
@@ -505,6 +508,11 @@ export function createWorker({
 
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
+    // Here and not in run: whatever drives the worker comes through here.
+    if (now() - tidied >= TIDY_EVERY) {
+      tidied = now();
+      tidy(tidied);
+    }
     await eachEntry(check);
     await eachEntry(settle);
     const held = entries();
@@ -554,12 +562,7 @@ export function createWorker({
     log(`worker ${name} started`);
     // Started again after trouble, it may be what went: nothing else would bring it back, and every round needs it.
     mkdirSync(RUNS, { recursive: true, mode: 0o700 });
-    let tidied = -Infinity;
     while (!signalled.aborted) {
-      if (now() - tidied >= TIDY_EVERY) {
-        tidied = now();
-        tidy(tidied);
-      }
       if (!(await tick())) await new Promise((resolve) => setTimeout(resolve, PAUSE));
     }
   }
