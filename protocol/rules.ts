@@ -31,6 +31,8 @@ const isSomeWords: Check = (value) => isWords(value) && (value as string[]).leng
 const isId: Check = (value) => typeof value === "string" && ID.test(value);
 const isCount: Check = (value) => Number.isInteger(value) && (value as number) > 0;
 const isTypes: Check = (value) => isSomeWords(value) && (value as string[]).every((type) => TYPE_PATTERN.test(type));
+const isCapabilities: Check = (value) =>
+  Array.isArray(value) && value.length > 0 && value.every(isId) && new Set(value).size === value.length;
 const isCron: Check = (value) => typeof value === "string" && parseCron(value) !== null;
 const isFolder: Check = (value) => typeof value === "string" && /^(~\/|\/)/.test(value);
 const FOLDER = "要是以 ~/ 或 / 开头的目录";
@@ -82,6 +84,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["tell", (value) => TELLS.includes(value as string), `只能是 ${TELLS.join("、")}`, true],
     ["emits", isObject, "要是一个对象", true],
     ["channels", isSomeWords, "要是通道编号的列表", true],
+    ["requires", isCapabilities, `要是不重复的能力名列表，每个${ID_WORDS}`, true],
   ]);
   if (isObject(when) && "source" in when) {
     checkFields(issues, `${where}的 when `, when, [
