@@ -4,7 +4,7 @@
 
 ## 安装
 
-支持 macOS、Linux。Windows 版待定：作者这个周末（11 月 7、8 日）回家后开发并做兼容性测试，进度见 [#17](https://github.com/KKKKhazix/agent-autoloop/issues/17)，现在还不能直接装。在 WSL2 里按 Linux 安装能跑通（有用户实测过），要知道这几件事：系统服务默认不会在没人登录时启动，要的话运行 `loginctl enable-linger`；桌面通知到不了 Windows 桌面，用 `agent-autoloop status` 看卡片，或者接飞书等通道；用 `command` 接的 Agent 不上报用量，Token 和费用显示“没上报”；WSL2 本身要占 1GB 左右内存。
+支持 macOS、Linux。Windows 版待定：作者这个周末（11 月 7、8 日）回家后开发并做兼容性测试，进度见 [#17](https://github.com/KKKKhazix/agent-autoloop/issues/17)，现在还不能直接装。在 WSL2 里按 Linux 安装能跑通（有用户实测过），要知道这几件事：系统服务要发行版开着 systemd（`/etc/wsl.conf` 里 `systemd=true`，没开就加 `--no-service`，自己运行 `agent-autoloop up`），默认也不会在没人登录时启动，要的话运行 `loginctl enable-linger`；桌面通知到不了 Windows 桌面，用 `agent-autoloop status` 看卡片，或者接飞书等通道；用 `command` 接的 Agent 不上报用量，Token 和费用显示“没上报”；WSL2 本身要占 1GB 左右内存。
 
 需要 Node.js 24 或更新、Git、curl，以及一个已经登录的命令行 Agent。
 

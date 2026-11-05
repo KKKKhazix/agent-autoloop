@@ -107,6 +107,11 @@ test("a computer that only takes work joins through the installer, with nothing 
   });
   assert.match(done.stdout, /接活/);
   assert.equal(readlinkSync(join(it.local, "agent-autoloop")), it.program);
+  // A second try, with the key corrected, must say it did nothing rather than that it updated.
+  const again = it.run([it.local], ["join", "https://hub.test", "--worker", "mac", "--key", "other", "--no-service"]);
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /已经配置过了/);
+  assert.equal(JSON.parse(readFileSync(join(it.hub, "config.json"), "utf8")).worker.key, "k");
 });
 
 test("the command goes in ~/.local/bin when that's on PATH, even behind another place it could go", () => {

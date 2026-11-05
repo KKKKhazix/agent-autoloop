@@ -295,7 +295,8 @@ async function join(args: string[]) {
   }
   writeConfig({ url, worker: { name, key } });
   if (!named["no-service"]) installService();
-  console.log(`这台电脑以 ${name} 的身份接活了。`);
+  const next = named["no-service"] ? `运行 ${howToRun()} up 开始。` : "";
+  console.log(`这台电脑以 ${name} 的身份接活了。${next}`);
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

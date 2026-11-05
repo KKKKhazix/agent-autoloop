@@ -22,6 +22,7 @@ export default {
       return { error: `读不懂它的输出：${stdout.slice(0, 200)}` };
     }
   },
-  // With a link the worker reports the session as soon as the run starts, and can ask for a bad receipt to be rewritten.
+  // With a link the worker reports the session as soon as the run starts. A session it reads has to be one `resume` can go on
+  // in: a retry and a bad receipt's rewrite both rely on it.
   link: (session: string) => `hello-agent://sessions/${session}`,
 };
