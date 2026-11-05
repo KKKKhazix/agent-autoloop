@@ -436,3 +436,24 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 `/v1` 单独算：只有 HTTP 接口不兼容时才变，软件到 2.0 不等于协议到 `/v2`。发出去的版本不再改，有问题就发下一个号。
 
 一批改动做完当天发；崩溃、丢数据、安全问题、装不上的修复当天发；其余的每周二发。只改文档、测试、CI 的不发。大改动可以先发试用版（`v1.2.0-rc.1`），安装和 `update` 不会装到它。
+
+## 所有者：显式派发（可选扩展）
+
+复杂路由插件可以先通过来源接口登记事件，再使用 owner 密钥派发已记录的事件：
+```json
+{"id":"task:123:batch:1","rule":"处理告警","lane":"task:123","eventIds":[34],"resumeFrom":12,"context":{"replyTarget":{"messageId":"message-2"}}}
+```
+`POST /v1/dispatch` 返回 `{ "run": 13, "duplicate": false }`。相同 id 和内容重试返回同一 Run（duplicate=true），内容改变返回 409。JSON 对象键顺序不影响幂等；数组顺序有意义。id 最多 200 个 ASCII 标识符字符，lane 使用 subject 字符集、最多 100 字符；eventIds 为 1–100 个唯一正整数。context 是最多 8000 字符的 JSON 对象，通过 Job.context.dispatch 传递，不作为指令解释。
+
+此接口只有 owner 可调用；来源、worker、run token 均不能控制派发。执行配置仍来自已存在的规则，不能注入 model、cwd、access 或 session。resumeFrom 可省略；指定时必须引用已正常结束、保存了 session、Agent 配置及 cwd 与目标一致的 Run。规则在派发时固定，后续规则重载不修改该派发的排队执行配置；规则被删除仍按既有规则停止语义处理。相同组/lane 串行，同一会话不能被两个已领取的 Run 同时使用。失败重试不合并或删除独立派发的 Run。
+
+派发 id 在事实日志中永久记录；取消或完成后重发同 id 也不会重新执行。不同 id 是不同执行请求，即使 eventIds 一样。插件必须稳定保存批次 id，并避免同一事件同时走普通规则与显式派发；内核不猜测 Thread/Task、不做语义去重、不验证插件的业务政策。回复目标与订阅关系由插件维护，context 不自动修改卡片路由。
+
+兼容性：旧接口和旧日志保持有效；旧 Job 无 dispatch 字段。新日志增加 dispatches 投影，降级前必须使用升级前的备份，不应让旧版本读取新日志。没有本扩展的服务返回 404；客户端必须停止显式派发，不能退回创建一个新事件或任意启动 Agent。安装和默认配置不变。
+
+派发查询：owner 的 `GET /v1/dispatch/:id` 返回原 run，不产生新执行。
+派发取消：owner 的 `DELETE /v1/dispatch/:id` 写入永久取消标记。尚未提交时也可取消，
+随后迟到的 POST 返回 409；已排队 Run 标为 cancelled，已领取 Run 记录 cancel_at 并等待
+接单程序实际停止，unknown 仍需核对，不能把取消请求已受理说成已经停止。
+同 id 的重复 DELETE 安全；GET 对取消前从未提交的派发返回 run:null。
+显式派发的 Worker 续接失败时返回失败并保留原 session，不自动新建会话执行；旧派发保持原行为。
