@@ -310,6 +310,13 @@ test("a commit with findings that someone merged by hand still goes on to Ship",
   assert.equal(state.reviewed, 1);
   assert.equal(latest(state, "delivery").state, "success");
 });
+test("findings name the commit they were found on", async () => {
+  const { io, state } = fixture();
+  syncing(io, state);
+  state.pr.head.sha = "behind";
+  io.review = async () => problem;
+  assert.equal((await deliver("example/app", 1, io)).head, "synced-main");
+});
 test("findings replace an earlier attestation of the same commit", async () => {
   const { io, state } = fixture();
   state.statuses.push({ path: "statuses/head", context: "my-review", state: "success", description: "通过" });

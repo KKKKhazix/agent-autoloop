@@ -13,7 +13,7 @@ export type DeliveryIO = {
   live(config: Settings): Promise<Live | null>;
   wait(): Promise<void>;
 };
-export type Delivered = { summary: string; merged?: string; reviewOnly?: boolean; findings?: Finding[] };
+export type Delivered = { summary: string; merged?: string; reviewOnly?: boolean; findings?: Finding[]; head?: string };
 
 const FINDINGS = "审查发现问题，修复后重新交付";
 const labels = (pr: any) => new Set<string>((pr.labels ?? []).map((label: any) => label.name));
@@ -160,7 +160,7 @@ export async function deliver(
     if (findings.length) {
       await status(io, head, config.review.status, "failure", FINDINGS);
       await status(io, head, "delivery", "failure", FINDINGS);
-      return { summary: "审查发现问题，尚未合并", findings };
+      return { summary: "审查发现问题，尚未合并", findings, head };
     }
     if (labels(current).has("deliver-review")) {
       return reviewOnly(current);
