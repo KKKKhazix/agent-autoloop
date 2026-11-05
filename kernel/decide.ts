@@ -114,6 +114,18 @@ function assignQueued(draft: Draft, run: Row) {
   put(draft, "runs", run.id, { agent: rule.to, rules_version: config.version, ...session });
 }
 const threadOf = (run: Row) => ({ rule: run.rule, lane: run.lane, grp: run.grp });
+
+/** With resume, a round that has no session goes on in the one its thread's last round ended in. Rounds on a thread share that
+ * session, so one the hub lost track of may still be running in it: a second process mustn't open it. */
+function resumeThread(draft: Draft, run: Row) {
+  const rule = ruleNamed(draft, run.rule);
+  if (!rule?.resume || run.session || run.resume) return;
+  const ended = { rule: run.rule, lane: run.lane, state: ["done", "nothing", "unknown"] };
+  const [last] = rows(draft.view, "runs", ended, 1, true);
+  if (last?.session && last.state !== "unknown" && last.agent === rule.to) {
+    put(draft, "runs", run.id, { resume: last.session });
+  }
+}
 const hopsOf = (draft: Draft, run: Row) => Math.max(0, ...eventsOf(draft.view, run.id).map((event) => event.hops ?? 0));
 
 function closeCard(draft: Draft, card: Row, result: string, by: string | null = null, note: string | null = null) {
@@ -275,7 +287,10 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   const held = claimed.find((run) => run.claim === claim && workerOf(draft.view, run) === worker);
   const run = held ?? runs.find(claimable);
   if (!run) return null;
-  if (!held) assignQueued(draft, run);
+  if (!held) {
+    assignQueued(draft, run);
+    resumeThread(draft, draft.view.get("runs", run.id)!);
+  }
   const since = held ? { claimed_at: run.claimed_at, link: run.link } : { claimed_at: draft.at, link: null };
   const rules_version = held ? run.rules_version : draft.view.get("config", "rules")!.version;
   const claiming = { state: "claimed", claim, issued: draft.seq, seen_at: draft.at, rules_version, ...since };
