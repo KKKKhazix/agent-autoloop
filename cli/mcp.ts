@@ -122,7 +122,8 @@ export async function mcp() {
     } else if (method === "ping") reply(id, { result: {} });
     else if (!ready) refuse(id, -32600, "先完成 initialize");
     else if (method === "tools/list") reply(id, { result: { tools } });
-    else if (method === "tools/call") await answerCall(id, params);
+    // Each answers by itself, however long it takes: a client's ping has to get through meanwhile.
+    else if (method === "tools/call") void answerCall(id, params);
     else refuse(id, -32601, "没有这个方法");
   }
 }
