@@ -234,6 +234,24 @@ test("a repository given by hand over a copy from elsewhere stops and says so, r
   assert.equal(at(app), release);
 });
 
+test("the same repository written another way is the same repository; another one still stops", () => {
+  const person = join(dir, "written-another-way");
+  mkdirSync(person);
+  const it = install(person, { AGENT_AUTOLOOP_REPO: original });
+  writeFileSync(join(person, "hub", "config.json"), "{}");
+  const link = join(dir, "link-to-published");
+  symlinkSync(original, link);
+  for (const written of [`file://${original}`, `${original}/`, `${dir}/./published`, link, original]) {
+    assert.equal(runInstaller(person, { AGENT_AUTOLOOP_REPO: written }).status, 0, written);
+  }
+  const elsewhere = join(dir, "elsewhere");
+  mkdirSync(elsewhere);
+  git(elsewhere, "init", "-q");
+  const done = runInstaller(person, { AGENT_AUTOLOOP_REPO: elsewhere });
+  assert.notEqual(done.status, 0);
+  assert.equal(at(it.app), at(original));
+});
+
 test("the public address given by hand is the public address", () => {
   const person = join(dir, "by-hand-public");
   mkdirSync(person);
