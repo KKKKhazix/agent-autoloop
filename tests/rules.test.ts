@@ -1,9 +1,10 @@
 // The rules file is what the owner changes by asking an Agent, so a mistake must be caught, say which rule and what is
 // wrong, and leave the old rules running. Failure cases: a rule naming a source or agent that isn't there; two rules with
 // one name; a rule matching no event or with both a source and a schedule; a schedule that is malformed or never comes; an
-// unknown way of telling; an agent without a worker, with an unknown access level, or a command or ACP agent without a
-// command line, which only shows when it runs and then fails ten times; a rule with neither a skill nor a prompt, or
-// without a folder; a misspelt field taken silently; a rule running more than one at a time without saying how many, or
+// unknown way of telling; an agent without a worker, with an unknown access level, or a command without a command line; a
+// rule that sends its work to an ACP agent with no command line, which only shows when it runs and then fails ten times, or
+// an ACP agent like that which no rule uses and which never hurt anyone being refused; a rule with neither a skill nor a
+// prompt, or without a folder; a misspelt field taken silently; a rule running more than one at a time without saying how many, or
 // rules in one group disagreeing on it; an emit naming a source that isn't there; a scheduled task shown on the page naming a source or agent that isn't there or a malformed schedule; a time zone
 // that doesn't exist; the reserved source redefined; a null rule crashes reload instead of keeping the old rules.
 // A good file changing on disk takes effect; a bad one doesn't, and says why. A file that is gone or can't be read
@@ -46,6 +47,13 @@ test("the fixture loads, with defaults filled in", () => {
   acp.agents.a1.use = "acp";
   acp.agents.a1.command = ["acp-program"];
   assert.equal(parseRules(JSON.stringify(acp)).agents.a1.use, "acp", "an ACP agent with its command line is fine");
+  const spare = good();
+  spare.agents.spare = { name: "备用", worker: "w1", use: "acp" };
+  assert.equal(
+    parseRules(JSON.stringify(spare)).agents.spare.use,
+    "acp",
+    "no rule sends it anything, so nothing fails",
+  );
 });
 
 test("a mistake says which rule and what is wrong", () => {
@@ -107,7 +115,7 @@ test("a mistake says which rule and what is wrong", () => {
   }, /Agent a3.*command/);
   problem((r) => {
     r.agents.a1.use = "acp";
-  }, /Agent a1 缺少 command/);
+  }, /规则「意见」用的 Agent a1 缺少 command/);
   problem((r) => {
     r.agents.a1.oops = 1;
   }, /Agent a1 有不认识的字段 oops/);
