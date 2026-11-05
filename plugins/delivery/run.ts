@@ -22,13 +22,15 @@ export async function run(repo: string, context: any, testLocalHealth = false) {
       }
       return `有一件事需要你处理\n${receiptBlock({ ask: [question(issue)] })}`;
     }
-    const result = await deliver(repo, number, io, testLocalHealth);
-    return deliveryReceipt(number, result, hasLabel(issue, "deliver-attended"));
-  } catch (error) {
-    const pr = await io.api(`pulls/${number}`);
-    if (pr.auto_merge) await disableAuto(number, io);
-    await status(io, pr.head.sha, "delivery", "failure", (error as Error).message);
-    throw error;
+    try {
+      const result = await deliver(repo, number, io, testLocalHealth);
+      return deliveryReceipt(number, result, hasLabel(issue, "deliver-attended"));
+    } catch (error) {
+      const pr = await io.api(`pulls/${number}`);
+      if (pr.auto_merge) await disableAuto(number, io);
+      await status(io, pr.head.sha, "delivery", "failure", (error as Error).message);
+      throw error;
+    }
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }

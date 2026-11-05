@@ -1,5 +1,6 @@
 // Failure modes: an owner question with backticks in its title or text cuts the receipt short; a short commit from the health
-// check can't be fetched, so every change needs a release and a docs-only PR never finishes.
+// check can't be fetched, so every change needs a release and a docs-only PR never finishes; a failure on an ordinary issue is
+// covered up by the 404 from looking it up as a PR; one item whose label record can't be read fails the whole poll.
 // Nothing here reaches GitHub: `gh` is a stand-in first on PATH, and the Git remote is a local folder.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -8,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { createIO } from "../plugins/delivery/github.ts";
+import { poll } from "../plugins/delivery/poll.ts";
 import { run } from "../plugins/delivery/run.ts";
 import { readMessage } from "../worker/contract.ts";
 
@@ -106,4 +108,43 @@ test("a full commit is compared as it is, without asking GitHub", async () => {
 test("a short commit GitHub doesn't know means a release", async () => {
   answers({});
   assert.equal(await ioIn("unknown").releaseRequired("abcdef0", docsOnly, internal), true);
+});
+
+test("a failure on an ordinary issue is reported as it happened", async () => {
+  answers({
+    "repos/example/app/issues/5": issue(5),
+    "repos/example/app/issues/5/labels/ask-owner": { fail: "permission denied" },
+  });
+  const answered = { ...about(5), answers: [{ text: "已处理" }] };
+  await assert.rejects(() => run("example/app", answered), /permission denied/);
+  assert.ok(!readFileSync(calls, "utf8").includes("pulls/5"));
+});
+test("a failed delivery still marks the commit it stopped on", async () => {
+  const fork = { number: 7, state: "open", labels: [{ name: "deliver" }], base: { ref: "main" } };
+  const pr = { ...fork, head: { sha: "abc", repo: { full_name: "fork/app" } } };
+  answers({
+    "repos/example/app/issues/7": { ...fork, pull_request: {} },
+    "repos/example/app/pulls/7": pr,
+    "repos/example/app/statuses/abc": {},
+  });
+  await assert.rejects(() => run("example/app", about(7)), /本仓库/);
+  assert.match(readFileSync(calls, "utf8"), /statuses\/abc --method POST/);
+});
+test("an item whose label record can't be read does not hold up the others", async () => {
+  answers({
+    "repos/example/app/issues?state=all&labels=deliver&per_page=100": [
+      { number: 1, pull_request: {} },
+      { number: 2, pull_request: {} },
+    ],
+    "repos/example/app/issues?state=all&labels=ask-owner&per_page=100": [],
+    "repos/example/app/issues/1/events?per_page=100": [],
+    "repos/example/app/issues/2/events?per_page=100": [{ event: "labeled", id: 9, label: { name: "deliver" } }],
+    "repos/example/app/pulls/1": { state: "open", head: { sha: "aaa" } },
+    "repos/example/app/pulls/2": { state: "open", head: { sha: "bbb" } },
+  });
+  const events = await poll("example/app");
+  assert.deepEqual(
+    events.map((event) => event.id),
+    ["example/app#1:0:aaa", "example/app#2:9:bbb"],
+  );
 });
