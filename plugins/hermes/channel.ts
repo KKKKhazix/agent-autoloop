@@ -6,6 +6,7 @@
 // A target is whatever `hermes send --list` printed: a bare platform for its home chat, or platform:chat_id.
 import { spawn } from "node:child_process";
 import type { Card, ChannelContext } from "../../host/channels.ts";
+import { findProgram } from "../../worker/agents.ts";
 
 /** Sends a message as its own program would, with the words on stdin so nothing has to fit in an argument. */
 function send(program: string, args: string[], input: string) {
@@ -33,7 +34,8 @@ function words(card: Card) {
 export default async function hermes({ hub, options, log, signal }: ChannelContext) {
   const target = String(options.target ?? "").trim();
   if (!target) throw new Error("the hermes channel needs a target: what `hermes send --list` calls it");
-  const program = String(options.program ?? "hermes");
+  // Heard through a login shell, the same way an agent is found: a launchd PATH is smaller than a person's.
+  const program = options.program ? String(options.program) : findProgram("hermes");
   while (!signal.aborted) {
     let card: Card | null;
     try {
