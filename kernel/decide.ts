@@ -127,6 +127,9 @@ function closeOpen(draft: Draft, matches: (key: string) => boolean, result: stri
   for (const card of open) closeCard(draft, card, result);
 }
 
+const closeFailing = (draft: Draft, run: number, result: string) =>
+  closeOpen(draft, (key) => key === `run:${run}:failing`, result);
+
 const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
 
@@ -154,9 +157,8 @@ function createCard(draft: Draft, spec: Row) {
 const notify = (draft: Draft, key: string, title: string, text: string, extra: Row = {}) =>
   createCard(draft, { key, kind: "notice", title, text, ...extra });
 
-/** A queued run of this rule and subject takes the event, so what comes in while it waits is handled together. */
-function enqueue(draft: Draft, rule: Rule, event: number, subject: string, resume?: string | null) {
-  const lane = rule.parallel ? subject : "";
+/** A queued run of this rule and thread takes the event, so what comes in while it waits is handled together. */
+function enqueue(draft: Draft, rule: Rule, event: number, lane: string, resume?: string | null) {
   const rulesVersion = draft.view.get("config", "rules")!.version;
   const stamps = { not_before: draft.at, created_at: draft.at, rules_version: rulesVersion };
   const isSameQueued = (run: Row) => run.rule === rule.name && run.lane === lane && run.state === "queued";
@@ -201,7 +203,7 @@ function ingest(draft: Draft, source: string, given: unknown) {
     const words = `同一条处理链已超过 ${MAX_HOPS} 层，后续事件已记录，没有继续派发。`;
     notify(draft, `hops:${source}:${event.id}`, "事件循环已停止", words, { once: true });
   }
-  for (const rule of matched) enqueue(draft, rule, id, event.subject);
+  for (const rule of matched) enqueue(draft, rule, id, rule.parallel ? event.subject : "");
   return { event: id, duplicate: false, routed };
 }
 
@@ -280,6 +282,7 @@ function claimNext(draft: Draft, worker: string, claim: string) {
 /** Ends a run nothing will pick up again, and says so. */
 function stopRun(draft: Draft, run: Row, why: string, summary: string, words: string) {
   put(draft, "runs", run.id, { state: "cancelled", finished_at: draft.at, summary });
+  closeFailing(draft, run.id, summary);
   notify(draft, `run:${run.id}:${why}`, run.rule, words, threadOf(run));
 }
 
@@ -309,7 +312,6 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   if (attempts >= MAX_ATTEMPTS) {
     // Runs queued for this thread stay apart: they came in since, and get their own count and their own go.
     const summary = `连续 ${MAX_ATTEMPTS} 次没跑成，不再自动重试`;
-    closeOpen(draft, (key) => key === `run:${id}:failing`, summary);
     const words = `连续 ${MAX_ATTEMPTS} 次自动处理没跑完（卡在：${error}），不再自动重试。解决后重新触发这件事，它会从头开始。`;
     put(draft, "runs", id, failure);
     stopRun(draft, run, "stopped", summary, words);
@@ -360,7 +362,7 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
   const summary = result.summary ?? "";
   const rejected: Rejected[] = [];
   put(draft, "runs", id, { state: result.outcome, finished_at: draft.at, summary, error: null, cancel_at: null });
-  closeOpen(draft, (key) => key === `run:${id}:failing`, "后来跑成了");
+  closeFailing(draft, id, "后来跑成了");
   closeOpen(draft, (key) => key === `run:${id}:unknown`, "结果回来了");
   const eventIds = eventsOf(draft.view, id).map((event) => event.id);
   const isAnswered = (card: Row) => card.state === "decided" && eventIds.includes(card.answer_event);
@@ -403,15 +405,17 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
     : run.usage;
   put(draft, "runs", id, { last_issued: run.issued, last_result: hash, issued: null, session, usage });
   let rejected: Rejected[] = [];
-  if (result.outcome === "failed") rejected = retryLater(draft, run, result);
-  else if (result.outcome === "cancelled") {
+  // Told to stop, one that failed first has stopped all the same: trying again would start what the owner ended.
+  if (result.outcome === "cancelled" || (result.outcome === "failed" && run.cancel_at)) {
     put(draft, "runs", id, {
       state: "cancelled",
       finished_at: draft.at,
       summary: result.summary ?? "",
       cancel_at: null,
     });
-  } else rejected = applyReceipt(draft, run, result);
+    closeFailing(draft, id, "已停止");
+  } else if (result.outcome === "failed") rejected = retryLater(draft, run, result);
+  else rejected = applyReceipt(draft, run, result);
   put(draft, "runs", id, { last_answer: JSON.stringify(rejected) });
   return { rejected };
 }
@@ -571,8 +575,10 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   cancel(draft, id) {
     const run = draft.view.get("runs", id);
     if (!run) throw new NotFound("没有这一轮");
-    if (run.state === "queued") put(draft, "runs", id, { state: "cancelled", finished_at: draft.at });
-    else if (run.state === "claimed") put(draft, "runs", id, { cancel_at: draft.at });
+    if (run.state === "queued") {
+      put(draft, "runs", id, { state: "cancelled", finished_at: draft.at });
+      closeFailing(draft, id, "已停止");
+    } else if (run.state === "claimed") put(draft, "runs", id, { cancel_at: draft.at });
     else throw new InputError("这一轮已经结束了");
   },
   resolve(draft, id, reason, by) {
