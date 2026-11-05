@@ -66,7 +66,7 @@ type Entry = {
   finishedAt?: number;
   told?: string;
   stopping?: number;
-  why?: "cancel" | "timeout" | "finished";
+  why?: "cancel" | "timeout" | "finished" | "exited";
   result?: Result;
 };
 export type WorkerHub = Pick<Hub, "work" | "started" | "result">;
@@ -398,6 +398,7 @@ export function createWorker({
       }
     }
     const { exit } = files(entry);
+    const exitCode = () => (existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
     if (entry.stopping !== undefined) {
       const going = groupAlive(entry);
       if (going !== false) {
@@ -406,14 +407,18 @@ export function createWorker({
         // Unable to look, the kill is the last we can know of it; waiting to see it gone would hold the run forever.
         if (going || !overdue) return;
       }
-      return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
+      return conclude(entry, adapter, exitCode());
     }
-    if (existsSync(exit)) return conclude(entry, adapter, Number(readFileSync(exit, "utf8").trim()));
+    const ended = () => {
+      const code = exitCode();
+      // What a crash left running would carry on alongside the retry. An agent that exited cleanly meant what it left.
+      if (code !== 0 && groupAlive(entry) !== false) return stop(entry, "exited");
+      return conclude(entry, adapter, code);
+    };
+    if (existsSync(exit)) return ended();
     // The shell can publish its exit between the first file check and ps returning.
     const looking = alive(entry);
-    if (looking === false) {
-      return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
-    }
+    if (looking === false) return ended();
     // Unable to look, the run counts as still going, so its timeout and its finished turn still end it.
     if (looking === null && !blind) log(`couldn't run ps; runs count as going until they end or time out`);
     blind = looking === null;
@@ -447,8 +452,16 @@ export function createWorker({
     }
   }
 
-  function stop(entry: Entry, why: "cancel" | "timeout" | "finished") {
-    if (entry.stopping !== undefined || entry.result) return;
+  function stop(entry: Entry, why: NonNullable<Entry["why"]>) {
+    if (entry.result) return;
+    if (entry.stopping !== undefined) {
+      // A failed result would queue the run again, and the hub would forget it was told to stop.
+      if (why === "cancel" && entry.why === "exited") {
+        entry.why = why;
+        save(entry);
+      }
+      return;
+    }
     entry.stopping = now();
     entry.why = why;
     save(entry);
