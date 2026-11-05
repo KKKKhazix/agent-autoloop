@@ -522,6 +522,20 @@
               "items": {
                 "$ref": "#/$defs/context-decided"
               }
+            },
+            "dispatch": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:-]{1,200}$"
+                },
+                "context": {
+                  "type": "object"
+                }
+              },
+              "required": ["id", "context"],
+              "additionalProperties": true
             }
           },
           "required": ["events", "answers", "timers", "waiting", "open", "decided"],

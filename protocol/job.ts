@@ -17,6 +17,7 @@ export type Job = {
   session: string | null;
   askFirst: string[];
   context: {
+    dispatch?: { id: string; context: Record<string, unknown> };
     events: {
       id: string;
       source: string;
