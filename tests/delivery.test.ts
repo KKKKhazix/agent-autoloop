@@ -9,7 +9,8 @@
 // on a commit with findings reviews it again, and a review that misses them this time merges it; findings leave an earlier
 // attestation of the commit standing; a merged PR without the label is followed and written to, so a later failed release turns
 // a completed delivery into a failure; findings on a PR someone merged during review report it as not merged, and its release
-// is not followed.
+// is not followed; right after ready the newest run is still a draft one and stands for the full check; a matrix job never
+// matches the required name, so a passed check waits forever.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deliver, fullCheck, waitLive, disableAuto, type DeliveryIO } from "../plugins/delivery/delivery.ts";
@@ -78,6 +79,10 @@ function fixture() {
       if (path.startsWith("actions/runs/1/jobs"))
         return { jobs: [{ name: "check", conclusion: "success", status: "completed" }] };
       if (path.startsWith("actions/workflows/ship.yml")) return { workflow_runs: [run()] };
+      if (path === "pulls/1/ready") {
+        state.pr.draft = false;
+        return {};
+      }
       if (path.startsWith("issues/1/labels/")) return {};
       throw new Error(`unexpected ${path}`);
     },
@@ -431,6 +436,61 @@ test("only the latest exact-head full workflow and successful required job count
     const { io } = fixture();
     io.api = async (p) =>
       p.includes("/jobs") ? { jobs: [job] } : { workflow_runs: [{ ...workflow, event: "pull_request" }] };
+    assert.equal(await fullCheck("head", config, io), want);
+  }
+});
+/** A draft whose newest run passed in the draft days: `next` is the run that going ready starts, once a wait has gone by. */
+function draftWithPassedRun(next?: any) {
+  const { io, state } = fixture();
+  state.pr.draft = true;
+  const runs = [{ ...run(1, "head"), event: "pull_request" }];
+  const jobsOf: string[] = [];
+  const { api } = io;
+  io.api = async (path, body, method) => {
+    if (path.startsWith("actions/workflows/check.yml")) return { workflow_runs: runs };
+    if (path.startsWith("actions/runs/")) {
+      jobsOf.push(path);
+      return { jobs: [{ name: "check", conclusion: "success", status: "completed" }] };
+    }
+    return api(path, body, method);
+  };
+  if (next) {
+    io.wait = async () => {
+      if (runs.length === 1) runs.push({ ...next, event: "pull_request" });
+    };
+  }
+  return { io, state, jobsOf };
+}
+test("a run from the draft days does not stand for the full check once ready", async () => {
+  const { io, state } = draftWithPassedRun();
+  await assert.rejects(() => deliver("example/app", 1, io), /still waiting/);
+  assert.ok(state.writes.includes("pulls/1/ready"));
+  assert.equal(state.merges, 0);
+  assert.ok(!state.statuses.some((s: any) => s.context === "my-review"));
+});
+test("the run that going ready starts decides, passed or failed", async () => {
+  const passed = draftWithPassedRun(run(2, "head"));
+  assert.equal((await deliver("example/app", 1, passed.io)).merged, "merged");
+  assert.deepEqual(passed.jobsOf, ["actions/runs/2/jobs?filter=latest&per_page=100"]);
+  const failed = draftWithPassedRun(run(2, "head", "completed", "failure"));
+  await assert.rejects(() => deliver("example/app", 1, failed.io), /检查/);
+  assert.equal(failed.state.merges, 0);
+});
+test("a matrix job counts as the required job, every leg of it", async () => {
+  const done = { conclusion: "success", status: "completed" };
+  const leg = (name: string, fields: object = done) => ({ name, ...fields });
+  for (const [jobs, conclusion, want] of [
+    [[leg("check (ubuntu-latest)"), leg("check (macos-latest)")], "success", "passed"],
+    [[leg("check (ubuntu-latest)"), leg("check (macos-latest)", { status: "in_progress" })], null, "waiting"],
+    [[leg("check (ubuntu-latest)"), leg("check (macos-latest)", { conclusion: "failure" })], "failure", "failed"],
+    [[leg("check-lint"), leg("checkout")], "success", "waiting"],
+  ] as const) {
+    const { io } = fixture();
+    const status = conclusion ? "completed" : "in_progress";
+    io.api = async (p) =>
+      p.includes("/jobs")
+        ? { jobs }
+        : { workflow_runs: [{ ...run(1, "head", status, conclusion), event: "pull_request" }] };
     assert.equal(await fullCheck("head", config, io), want);
   }
 });

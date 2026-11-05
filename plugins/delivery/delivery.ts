@@ -39,18 +39,23 @@ export async function disableAuto(number: number, io: DeliveryIO) {
   throw new Error("无法确认自动合并已关闭");
 }
 
+async function newestCheck(head: string, config: Settings, io: DeliveryIO) {
+  const query = `head_sha=${head}&event=pull_request&per_page=100`;
+  const { workflow_runs: runs } = await io.api(`actions/workflows/${config.check.workflow}/runs?${query}`);
+  return runs.filter((run: any) => run.head_sha === head && run.event === "pull_request").sort(newestFirst)[0];
+}
+
 export async function fullCheck(
   head: string,
   config: Settings,
   io: DeliveryIO,
+  after = 0,
 ): Promise<"passed" | "waiting" | "failed"> {
-  const { workflow, job } = config.check;
-  const query = `head_sha=${head}&event=pull_request&per_page=100`;
-  const { workflow_runs: runs } = await io.api(`actions/workflows/${workflow}/runs?${query}`);
-  const run = runs.filter((run: any) => run.head_sha === head && run.event === "pull_request").sort(newestFirst)[0];
-  if (!run) return "waiting";
+  const { job } = config.check;
+  const run = await newestCheck(head, config, io);
+  if (!run || run.id <= after) return "waiting";
   const jobs = (await io.api(`actions/runs/${run.id}/jobs?filter=latest&per_page=100`)).jobs.filter(
-    (candidate: any) => candidate.name === job,
+    (candidate: any) => candidate.name === job || candidate.name.startsWith(`${job} (`),
   );
   if (!jobs.length) return "waiting";
   if (run.status === "completed" && run.conclusion !== "success") return "failed";
@@ -172,9 +177,14 @@ export async function deliver(
     if (labels(current).has("deliver-review")) {
       return reviewOnly(current);
     }
-    if (current.draft) await io.api(`pulls/${number}/ready`, {}, "POST");
+    let after = 0;
+    if (current.draft) {
+      // Right after going ready the newest run is still a draft one: only a run started by the change can pass.
+      after = (await newestCheck(head, config, io))?.id ?? 0;
+      await io.api(`pulls/${number}/ready`, {}, "POST");
+    }
     for (;;) {
-      const state = await fullCheck(head, config, io);
+      const state = await fullCheck(head, config, io, after);
       if (state === "failed") throw new Error("完整检查没有通过");
       if (state === "passed") break;
       if ((await io.api(`pulls/${number}`)).head.sha !== head) throw new Error("检查期间提交变了");
