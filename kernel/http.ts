@@ -130,6 +130,14 @@ async function cardAtLink(call: Call, linkToken: string) {
   return new Response(null, { status: 303, headers: { location: call.url.pathname, ...NO_STORE } });
 }
 
+/** The channel this request names, if any: one name only, and an empty header means none. */
+function channelNamed(request: Request): string | null {
+  const value = request.headers.get("x-autoloop-channel")?.trim() ?? "";
+  if (!value) return null;
+  if (value.includes(",")) throw new InputError("x-autoloop-channel 只能写一个通道");
+  return value;
+}
+
 async function webhook(call: Call, source: string) {
   if (!call.rules.sources[source]?.adapter) throw new NotFound("这个来源不收 Webhook");
   const events = await call.services.adapt(source, call.request.headers, await readText(call.request));
@@ -258,7 +266,8 @@ async function route(call: Call): Promise<Response> {
   const hook = /^\/v1\/in\/([a-z][a-z0-9-]*)$/.exec(path);
   if (method === "POST" && hook) return webhook(call, hook[1]);
   if (method === "POST" && path === "/v1/events") {
-    return json(act(call, "ingest", requireKey(call, "source"), await readJson(request)));
+    const source = requireKey(call, "source");
+    return json(act(call, "ingest", source, await readJson(request), channelNamed(request)));
   }
   if (method === "POST" && path === "/v1/tell") return tell(call);
   if (method === "GET" && path === "/v1/work") return work(call);

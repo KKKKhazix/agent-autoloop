@@ -246,7 +246,7 @@ function recordEvent(draft: Draft, source: string, event: Row, routed: string[])
   }).id;
 }
 
-function ingest(draft: Draft, source: string, given: unknown) {
+function ingest(draft: Draft, source: string, given: unknown, channel: string | null = null) {
   const event = parseEvent(given);
   const existing = rows(draft.view, "events", { source, key: event.id })[0];
   if (existing) return { event: existing.id, duplicate: true, routed: JSON.parse(existing.routed) };
@@ -254,13 +254,23 @@ function ingest(draft: Draft, source: string, given: unknown) {
   const takes = (rule: Rule) =>
     eventRule(rule) && rule.when.source === source && typeMatches(rule.when.types, event.type);
   const matched = tooDeep ? [] : draft.rules.rules.filter(takes);
+  // A channel named for this request must be one this hub has, and one every rule it would be routed to allows.
+  // Refusing here, before any fact, keeps a caller from believing three handlers are at work when only one is.
+  if (channel !== null) {
+    if (!Object.hasOwn(draft.rules.channels, channel)) throw new InputError("目标通道不存在");
+    const refuses = matched.find((rule) => rule.channels && !rule.channels.includes(channel));
+    if (refuses) throw new InputError(`规则「${refuses.name}」不允许通道 ${channel}`);
+  }
   const routed = matched.map((rule) => rule.name);
   const id = recordEvent(draft, source, event, routed);
   if (tooDeep) {
     const words = `同一条处理链已超过 ${MAX_HOPS} 层，后续事件已记录，没有继续派发。`;
     notify(draft, `hops:${source}:${event.id}`, "事件循环已停止", words, { once: true });
   }
-  for (const rule of matched) enqueue(draft, rule, id, rule.parallel ? event.subject : "");
+  // The name belongs to this request alone: a rule that allows it takes it, and one that lists no channel stays
+  // broadcast rather than being narrowed by a request it never agreed to.
+  const forRule = (rule: Rule) => (channel !== null && rule.channels?.includes(channel) ? channel : undefined);
+  for (const rule of matched) enqueue(draft, rule, id, rule.parallel ? event.subject : "", undefined, forRule(rule));
   return { event: id, duplicate: false, routed };
 }
 

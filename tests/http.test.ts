@@ -505,6 +505,38 @@ test("someone else's webhook goes through its source's adapter: signed, or not t
   assert.equal((await call("/v1/in/nowhere", { raw: items })).status, 404);
 });
 
+test("a request may name a channel, and only /v1/events listens", async () => {
+  const event = (channel?: string) => ({
+    body: note(70 + Math.floor(Math.random() * 1000)),
+    ...(channel !== undefined && { headers: { "x-autoloop-channel": channel } }),
+  });
+  // A name the rules do not know is a mistake: the header was read, and nothing was taken.
+  assert.equal((await call("/v1/events", { key: keys.app, ...event("nowhere") })).status, 400);
+  assert.equal((await call("/v1/events", { key: keys.app, ...event("chat,plain") })).status, 400);
+  // No header and an empty header route the same event the same way.
+  const named = note(901);
+  const bare = await call("/v1/events", { key: keys.app, body: named });
+  const blank = await call("/v1/events", {
+    key: keys.app,
+    body: note(902),
+    headers: { "x-autoloop-channel": "   " },
+  });
+  assert.deepEqual([bare.status, blank.status], [200, 200]);
+  assert.deepEqual(blank.json.routed, bare.json.routed);
+  // Only a source key reaches the door, with or without the header.
+  for (const key of [keys.w1, keys.chat, keys.owner, "made-up"]) {
+    assert.equal((await call("/v1/events", { key, ...event("chat") })).status, 401, key);
+  }
+  // A webhook's body is what is signed, so the header is not read there: an unregistered name is not refused.
+  const items = JSON.stringify({ items: [{ id: "h9", type: "push.done" }] });
+  const sign = "sha256=" + createHmac("sha256", "hook-secret").update(items).digest("hex");
+  const hooked = await call("/v1/in/hooks", {
+    raw: items,
+    headers: { "x-sign": sign, "x-autoloop-channel": "nowhere" },
+  });
+  assert.equal(hooked.status, 200, "the webhook door does not read the channel header");
+});
+
 test("there's no other page: what's going on is read through the doors", async () => {
   for (const path of ["/", "/index.html", "/app.js", "/style.css", "/../package.json"])
     assert.equal((await call(path)).status, 404, path);

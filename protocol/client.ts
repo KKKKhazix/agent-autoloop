@@ -13,11 +13,20 @@ export function hubClient(url: string, key: string) {
   async function call(
     method: string,
     path: string,
-    { token = key, body, timeout = 30 }: { token?: string; body?: unknown; timeout?: number } = {},
+    {
+      token = key,
+      body,
+      timeout = 30,
+      headers = {},
+    }: { token?: string; body?: unknown; timeout?: number; headers?: Record<string, string> } = {},
   ) {
     const response = await fetch(base + path, {
       method,
-      headers: { authorization: `Bearer ${token}`, ...(body !== undefined && { "content-type": "application/json" }) },
+      headers: {
+        authorization: "Bearer " + token,
+        ...(body !== undefined && { "content-type": "application/json" }),
+        ...headers,
+      },
       ...(body !== undefined && { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeout * 1000),
     });
@@ -49,7 +58,8 @@ export function hubClient(url: string, key: string) {
       body: { choice?: number; text?: string; by?: string; ref?: string; expectedVersion?: number },
     ) => call("POST", `/v1/cards/${card}/answer`, { body }),
     // Sources, the owner and tasks elsewhere.
-    event: (body: unknown) => call("POST", "/v1/events", { body }),
+    event: (body: unknown, channel?: string | null) =>
+      call("POST", "/v1/events", { body, headers: channel ? { "x-autoloop-channel": channel } : {} }),
     tell: (body: unknown) => call("POST", "/v1/tell", { body }),
     why: (id: number) => call("GET", `/v1/runs/${id}/why`),
     removeKey: (kind: string, name: string) =>

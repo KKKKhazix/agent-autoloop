@@ -32,8 +32,8 @@ const HELP = `Agent 自动化中台
   agent-autoloop doctor                  查哪里没配好
   agent-autoloop check                   检查 rules.json
   agent-autoloop rules explain           按本机 rules.json 说明生效的规则、Agent、通道和下次定时
-  agent-autoloop emit <类型> [--dry-run] [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]
-                                    发一条事件；--dry-run 只预演会派给谁，不连接中台
+  agent-autoloop emit <类型> [--dry-run] [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥] [--to 通道]
+                                    发一条事件；--dry-run 只预演会派给谁，不连接中台；--to 只作用于允许该通道的规则
   agent-autoloop tell <编号> [--task 定时任务名] [--to 通道]
                                     直接告诉你一件事，内容从标准输入读；--to 只发给那个通道
   agent-autoloop stop <第几轮>           停掉一轮
@@ -94,7 +94,7 @@ const TAKES: Record<string, { flags: string[]; usage: string }> = {
   conformance: { flags: ["config"], usage: "用法：agent-autoloop conformance <测试中台地址> --config <测试凭据文件>" },
   doctor: { flags: [], usage: "用法：agent-autoloop doctor" },
   emit: {
-    flags: ["dry-run", "subject", "summary", "detail", "link", "id", "key"],
+    flags: ["dry-run", "subject", "summary", "detail", "link", "id", "key", "to"],
     usage:
       "用法：agent-autoloop emit <类型> [--dry-run] [--subject x] [--summary x] [--detail x] [--link x] [--id x] [--key 来源密钥]",
   },
@@ -577,7 +577,7 @@ async function emit(args: string[]) {
     return;
   }
   const secret = text(named.key) ?? config.source?.key ?? fail("这台电脑上没有来源的密钥：用 --key");
-  const answer = await client(secret, config).event(event);
+  const answer = await client(secret, config).event(event, text(named.to));
   console.log(answer.routed.length ? `交给了：${answer.routed.join("、")}` : "记下了，没有规则接它。");
 }
 

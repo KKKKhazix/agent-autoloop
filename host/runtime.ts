@@ -163,8 +163,8 @@ if (!rules) throw new Error(initial.problem ?? "缺少规则");
 export const ruleNamed = (name: string) => rules.rules.find((rule) => rule.name === name);
 
 type EventAck = { event: number; duplicate: boolean; routed: string[] };
-export const ingest = (source: string, input: unknown, now = Date.now()): EventAck =>
-  execute("ingest", [source, input], now);
+export const ingest = (source: string, input: unknown, now = Date.now(), channel: string | null = null): EventAck =>
+  execute("ingest", [source, input, channel], now);
 export const claimNext = (worker: string, claim: string, now = Date.now()): Job | null =>
   execute("claimNext", [worker, claim], now);
 export const heartbeat = (worker: string, running: number[], now = Date.now()) =>
