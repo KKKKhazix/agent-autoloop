@@ -10,7 +10,6 @@ const CODEX_IN_THE_APP = [
   "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
   "/Applications/Codex.app/Contents/Resources/codex",
 ];
-const COMMIT = /^[a-f0-9]{40}$/;
 const PLAIN_FILE_MODES = ["000000", "100644"];
 
 export type Finding = { title: string; text: string };
@@ -67,11 +66,10 @@ export async function reviewSnapshot(bare: string, snapshot: string, main: strin
   }
   // No checkout: hooks, filters, AGENTS.md and program/config files from the PR never become executable inputs here.
   const branchLog = ["--diff-merges=remerge", "--no-renames"];
-  const changes = git(bare, "log", ...branchLog, "--format=%H", "--name-only", head, "--not", main)
+  const paths = git(bare, "log", ...branchLog, "--format=", "--name-only", head, "--not", main)
     .split("\n")
     .filter(Boolean);
-  const paths = changes.filter((line) => !COMMIT.test(line));
-  const commits = changes.filter((line) => COMMIT.test(line));
+  const commits = git(bare, "rev-list", head, "--not", main).split("\n").filter(Boolean);
   const diff = commits
     .map((sha) =>
       git(bare, "show", "--remerge-diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--text", sha, "--"),

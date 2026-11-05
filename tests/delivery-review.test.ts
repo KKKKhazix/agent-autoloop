@@ -1,6 +1,7 @@
 // Failure modes: empty/failed reviews pass; findings are unhandled but attested; Codex reads developer
 // config or memories, writes files, sees credentials, or executes a PR's programs/settings. Review receives a text snapshot;
-// what an octopus merge brings or a file Git calls binary holds never reaches the reviewer, so it passes unseen.
+// what an octopus merge brings or a file Git calls binary holds never reaches the reviewer, so it passes unseen; Git escapes a
+// Chinese path so it matches no pattern; a root file named like a commit is taken for one and the review can't finish.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseReview, codexCommand, reviewSnapshot } from "../plugins/delivery/review.ts";
@@ -146,4 +147,17 @@ test("a file with a NUL byte shows its text in the snapshot", async () => {
   assert.deepEqual(await p.review(p.commit()), []);
   assert.ok(p.reviewed());
   assert.match(p.changes(), /visible-to-review/);
+});
+test("a Chinese path still matches the settings", async () => {
+  using p = project();
+  p.write("docs/说明.md", "docs");
+  assert.deepEqual(await p.review(p.commit()), []);
+  assert.ok(!p.reviewed());
+});
+test("a root file named like a commit is reviewed as a file", async () => {
+  using p = project();
+  p.write("a".repeat(40), "named like a commit");
+  assert.deepEqual(await p.review(p.commit()), []);
+  assert.ok(p.reviewed());
+  assert.match(p.changes(), /named like a commit/);
 });
