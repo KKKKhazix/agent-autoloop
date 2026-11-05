@@ -10,7 +10,9 @@
 // writing through it lands outside. A permission request that gives only the tool call's id is judged as if it had no kind;
 // what an earlier message said of the call hides what this one says, or a field left empty wipes what was known. A thought
 // in the middle of a message loses its first half; a finished tool call between two messages with no id runs them together,
-// so a "没跑成" after it reads as work done; a blank or unreadable line on the agent's stdout ends the turn.
+// so a "没跑成" after it reads as work done; a blank or unreadable line on the agent's stdout ends the turn. A failed turn
+// doesn't say so until the agent and its stdout are gone, which may be never; its half-written answer counts; or what the
+// agent itself said on stderr is lost from the reason.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "node:fs";
@@ -195,13 +197,25 @@ test("ACP finds where the last message starts", async () => {
   for (const [why, steps, expected] of [
     ["a thought doesn't split a message with an id", [say("前半", "m1"), thought, say("后半", "m1")], "前半后半"],
     ["a tool call doesn't split one either", [say("前半", "m1"), tool("tool_call"), say("后半", "m1")], "前半后半"],
-    ["nor does a finished one", [say("前半", "m1"), tool("tool_call_update", "completed"), say("后半", "m1")], "前半后半"],
+    [
+      "nor does a finished one",
+      [say("前半", "m1"), tool("tool_call_update", "completed"), say("后半", "m1")],
+      "前半后半",
+    ],
     ["a new id is a new message", [say("旧的", "m1"), say("新的", "m2")], "新的"],
     ["an id after none is a new message", [say("旧的"), say("新的", "m2")], "新的"],
     ["with no id, a thought is a boundary", [say("旧的"), thought, say("新的")], "新的"],
     ["with no id, a tool call is a boundary", [say("旧的"), tool("tool_call"), say("新的")], "新的"],
-    ["with no id, a completed tool call is a boundary", [say("旧的"), tool("tool_call_update", "completed"), say("新的")], "新的"],
-    ["with no id, a failed tool call is a boundary", [say("旧的"), tool("tool_call_update", "failed"), say("新的")], "新的"],
+    [
+      "with no id, a completed tool call is a boundary",
+      [say("旧的"), tool("tool_call_update", "completed"), say("新的")],
+      "新的",
+    ],
+    [
+      "with no id, a failed tool call is a boundary",
+      [say("旧的"), tool("tool_call_update", "failed"), say("新的")],
+      "新的",
+    ],
     ["a tool call still going isn't", [say("前半"), tool("tool_call_update", "in_progress"), say("后半")], "前半后半"],
     ["nor is one that only reports", [say("前半"), tool("tool_call_update"), say("后半")], "前半后半"],
     ["chunks with no boundary are one message", [say("一"), say("二"), say("三")], "一二三"],
@@ -243,6 +257,50 @@ test("ACP skips blank and unreadable lines on the agent's stdout, and says so on
   assert.match(result.err, /这不是 JSON/);
   assert.match(result.err, /null/);
   assert.ok(!result.out.includes("这不是 JSON"), "stdout stays what the adapter reads");
+});
+
+test("ACP says a turn has failed and why as soon as it has, so nothing has to wait for the agent to go", async () => {
+  const result = await launch(
+    "max-tokens",
+    `on['session/prompt'] = (m) => { say('写了一半'); send({ id: m.id, result: { stopReason: 'max_tokens' } }); };`,
+  );
+  assert.notEqual(result.code, 0);
+  const why = "ACP 没有完成这一轮：max_tokens";
+  assert.deepEqual(JSON.parse(result.out.trim().split("\n").at(-1)!), {
+    session: "agent-session",
+    finished: true,
+    error: why,
+  });
+  const going = acp.read(result.out, null, "");
+  assert.deepEqual([going.finished, going.error, going.text], [true, why, undefined], "said while it's still there");
+  // A run the worker had to stop after that counts as having ended by itself: it gets a code of 0.
+  for (const reading of [
+    acp.read(result.out, 0, ""),
+    acp.read(result.out, 0, result.err),
+    acp.read(result.out, 1, result.err),
+  ]) {
+    assert.deepEqual([reading.error, reading.session, reading.started], [why, "agent-session", true]);
+    assert.equal(reading.text, undefined, "half an answer isn't an answer");
+  }
+  const talkative = acp.read(result.out, 0, `${result.err}${"它还在写日志\n".repeat(100)}`);
+  assert.ok(talkative.error!.endsWith(why), "an agent that goes on talking doesn't push out the reason");
+});
+
+test("ACP's reason for a failure keeps what the agent itself said", async () => {
+  const result = await launch(
+    "says-why",
+    `on['session/prompt'] = () => { console.error('登录过期了'); process.exit(1); };`,
+  );
+  const reading = acp.read(result.out, result.code, result.err);
+  assert.match(reading.error!, /登录过期了/);
+  assert.match(reading.error!, /ACP 在交回结果前退出：1/);
+});
+
+test("ACP doesn't make up a session for a turn that failed before it had one", async () => {
+  const result = await launch("no-session", `on['session/new'] = ${refusing("开不了")};`);
+  assert.deepEqual(JSON.parse(result.out.trim()), { finished: true, error: "开不了" });
+  const bad = await launch("bad-session", `on['session/new'] = (m) => send({ id: m.id, result: { sessionId: 7 } });`);
+  assert.deepEqual(JSON.parse(bad.out.trim()), { finished: true, error: "ACP 没有返回会话编号" });
 });
 
 test("ACP chooses only a one-time permission and respects structured kinds and resolved paths", () => {
@@ -308,7 +366,12 @@ test("ACP doesn't take a link that goes nowhere for a new file in the folder", (
 test("ACP judges a permission on all that's been said of the tool call, the request's own fields first", async () => {
   const inside = join(home, "inside.txt");
   const outside = join(tmpdir(), "outside.txt");
-  const call = (toolCallId: string, fields: object) => ({ sessionUpdate: "tool_call", toolCallId, title: "工具", ...fields });
+  const call = (toolCallId: string, fields: object) => ({
+    sessionUpdate: "tool_call",
+    toolCallId,
+    title: "工具",
+    ...fields,
+  });
   const change = (toolCallId: string, fields: object) => ({ sessionUpdate: "tool_call_update", toolCallId, ...fields });
   const location = (path: string) => ({ locations: [{ path }] });
   for (const [why, access, updates, request, expected] of [

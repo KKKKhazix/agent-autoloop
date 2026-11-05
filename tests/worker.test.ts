@@ -21,7 +21,8 @@
 // folder it can't write to, holds up the others, ends the worker or fills the log; a worker started again after trouble
 // needs the folder it lost. Over ACP, a retry in a session a turn already started in that breaks before the prompt redoes the
 // work in a new one, and one the agent refuses or can't go on in doesn't get a new one; a "没跑成" after a finished tool call
-// is run together with what came before it and counts as work done.
+// is run together with what came before it and counts as work done; a failed turn whose agent won't go, or leaves something
+// holding its output, or closes its output and stays, holds its place until the time limit and loses the real reason.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1010,3 +1011,51 @@ test("over ACP, a last message after a finished tool call is read by itself, so 
   await until(worker(hub), () => hub.results.length === 1);
   assert.deepEqual([hub.results[0].outcome, hub.results[0].error], ["failed", "网络断了"]);
 });
+
+/** Whether anything in a run's process group is still going. Zombies have already stopped. */
+const groupGoing = (pid: number) =>
+  execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
+    .trim()
+    .split("\n")
+    .some((line) => {
+      const [group, state] = line.trim().split(/\s+/);
+      return Number(group) === pid && !state.startsWith("Z");
+    });
+
+const STUBBORN = "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 30_000);";
+for (const [what, script, why] of [
+  [
+    "won't go",
+    `${STUBBORN} on['session/prompt'] = (m) => send({ id: m.id, result: { stopReason: 'max_tokens' } });`,
+    /max_tokens/,
+  ],
+  [
+    "left something holding its output",
+    `on['session/prompt'] = () => { spawn('sleep', ['30'], { stdio: 'inherit' }); process.exit(9); };`,
+    /退出：9/,
+  ],
+  ["closed its output and stayed", `${STUBBORN} on['session/prompt'] = () => closeSync(1);`, /关掉了输出/],
+] as const) {
+  test(`over ACP, a failed turn whose agent ${what} is ended after a while, with the real reason`, async () => {
+    const hub = fakeHub();
+    let clock = Date.now();
+    const agent = acp(what.replaceAll(" ", "-"), script);
+    // A limit far off, by a clock that stands still until it's moved: it's what ends such a run if nothing else does.
+    hub.jobs.push(job({ use: "acp", command: agent.command, timeout: 180 }));
+    const w = worker(hub, { now: () => clock });
+    await until(w, () => Boolean(w.entries()[0]?.finishedAt));
+    const pid = w.entries()[0].pid!;
+    await w.tick();
+    assert.equal(hub.results.length, 0, "it gets a while to go by itself");
+    clock += 31_000;
+    await until(
+      w,
+      () => hub.results.length === 1,
+      () => (clock += 1000),
+    );
+    assert.equal(hub.results[0].outcome, "failed");
+    assert.match(hub.results[0].error, why);
+    assert.equal(hub.results[0].session, "agent-session");
+    assert.equal(groupGoing(pid), false, "and nothing of it is left");
+  });
+}

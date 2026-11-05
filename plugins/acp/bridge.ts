@@ -115,14 +115,19 @@ export async function bridge(turn: Turn) {
     }
   };
   let over = false;
-  eachLine(child.stdout, (line) => {
-    if (over) return;
-    try {
-      onLine(line);
-    } catch (error) {
-      fail(error as Error);
-    }
-  });
+  eachLine(
+    child.stdout,
+    (line) => {
+      if (over) return;
+      try {
+        onLine(line);
+      } catch (error) {
+        fail(error as Error);
+      }
+    },
+    // An agent that dies ends its output first, and its exit says more. One still there after this can't hand anything in.
+    () => setTimeout(() => fail(new Error("ACP 在交回结果前关掉了输出")), 1000).unref(),
+  );
 
   const rpc = (method: string, params: object) =>
     new Promise<any>((resolve, reject) => {
@@ -149,8 +154,11 @@ export async function bridge(turn: Turn) {
     if (turn.resume) {
       session = turn.resume;
       await goOn(init.agentCapabilities);
-    } else session = (await rpc("session/new", { cwd: turn.cwd, mcpServers: [] })).sessionId;
-    if (typeof session !== "string" || !session) throw new Error("ACP 没有返回会话编号");
+    } else {
+      const { sessionId } = await rpc("session/new", { cwd: turn.cwd, mcpServers: [] });
+      if (typeof sessionId !== "string" || !sessionId) throw new Error("ACP 没有返回会话编号");
+      session = sessionId;
+    }
     // Before the prompt goes: the agent can start on it at once, and this has to be there if the bridge is killed then.
     console.log(JSON.stringify({ session, started: true }));
     collecting = true;
@@ -158,6 +166,11 @@ export async function bridge(turn: Turn) {
     const result = await rpc("session/prompt", { sessionId: session, prompt });
     if (result.stopReason !== "end_turn" || !text.trim()) throw new Error(`ACP 没有完成这一轮：${result.stopReason}`);
     console.log(JSON.stringify({ session, text, finished: true }));
+  } catch (error) {
+    // Now and not on the way out: the agent, or what it left holding its output, can keep this process here for good, and
+    // this is what lets the worker end it.
+    console.log(JSON.stringify({ session: session || undefined, finished: true, error: (error as Error).message }));
+    throw error;
   } finally {
     over = true;
     process.removeListener("SIGTERM", stop);
