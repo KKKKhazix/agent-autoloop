@@ -255,3 +255,5 @@ Start reading at `bin/agent-autoloop.ts` → `cli/main.ts`, then follow the feat
 [MIT License](LICENSE)
 
 Advanced routing plugins can use the optional owner-only explicit dispatch API for idempotent recorded-event batches, compatible completed-session continuation and cancellation. See [the protocol](docs/protocol.md#所有者显式派发可选扩展); ordinary source and worker integrations remain compatible.
+
+This lets an external SuperAgent router keep execution-session bindings for each business Thread: new work takes a Slow Path to select a worker, while follow-up events take a Fast Path to continue the bound session, reducing repeated routing and context reconstruction. Thread and subscription policies remain in the router; the kernel provides reliable dispatch semantics.
