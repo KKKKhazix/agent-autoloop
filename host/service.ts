@@ -16,6 +16,27 @@ const plistFile = () => path.join(homedir(), "Library/LaunchAgents", `${label()}
 const unitFile = () => path.join(homedir(), ".config/systemd/user", `${label()}.service`);
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
+export type UpIdentity = {
+  pid: number;
+  started: string;
+  command: string;
+};
+
+const psField = (pid: number, field: "lstart" | "command") => {
+  const value = execFileSync("ps", ["-ww", "-p", String(pid), "-o", `${field}=`], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C" },
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  if (!value) throw new Error(`读不到进程 ${pid} 的 ${field}`);
+  return value;
+};
+
+export function upIdentity(pid = process.pid): UpIdentity {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`无效的进程号：${pid}`);
+  return { pid, started: psField(pid, "lstart"), command: psField(pid, "command") };
+}
+
 export function plist() {
   const logs = path.join(HOME, "logs");
   const systemPaths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
@@ -89,29 +110,67 @@ export function removeService() {
   }
 }
 
-/** The process that left its number in up.pid, if it still is that process: the number may be someone else's by now. */
-export function runningUp() {
+type RunningUp = { identity: UpIdentity; verified: boolean };
+const isUp = ({ command }: UpIdentity) => /agent-autoloop(\.ts)? up\b/.test(command);
+const sameIdentity = (left: UpIdentity, right: UpIdentity) =>
+  left.pid === right.pid && left.started === right.started && left.command === right.command;
+
+function runningUpProcess(): RunningUp | null {
   const file = path.join(HOME, "up.pid");
   if (!existsSync(file)) return null;
-  const pid = readFileSync(file, "utf8").trim();
-  let command = "";
+  const saved = readFileSync(file, "utf8").trim();
+  const legacy = /^[1-9]\d*$/.test(saved);
+  let expected: UpIdentity | null = null;
+  let pid = legacy ? Number(saved) : 0;
+  if (!legacy) {
+    try {
+      const parsed: unknown = JSON.parse(saved);
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Number.isSafeInteger((parsed as UpIdentity).pid) ||
+        (parsed as UpIdentity).pid <= 0 ||
+        typeof (parsed as UpIdentity).started !== "string" ||
+        !(parsed as UpIdentity).started ||
+        typeof (parsed as UpIdentity).command !== "string" ||
+        !(parsed as UpIdentity).command
+      )
+        return null;
+      expected = parsed as UpIdentity;
+      pid = expected.pid;
+    } catch {
+      return null;
+    }
+  }
+  let current: UpIdentity;
   try {
-    command = execFileSync("ps", ["-p", pid, "-o", "command="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {}
-  return /agent-autoloop(\.ts)? up\b/.test(command) ? Number(pid) : null;
+    current = upIdentity(pid);
+  } catch {
+    return null;
+  }
+  if (!isUp(current)) return null;
+  if (expected && !sameIdentity(current, expected)) return null;
+  return { identity: current, verified: expected !== null };
+}
+
+/** The process recorded in up.pid, if that number still belongs to the same Agent Autoloop process. */
+export function runningUp() {
+  return runningUpProcess()?.identity.pid ?? null;
 }
 
 /** Stopping a service returns before its process is gone, and one started by hand has no service to stop it. */
 export function stopUp() {
-  const pid = runningUp();
-  if (pid === null) return;
+  const running = runningUpProcess();
+  if (!running?.verified) return;
+  const { identity } = running;
   try {
-    process.kill(pid, "SIGTERM");
+    process.kill(identity.pid, "SIGTERM");
   } catch {}
-  for (let tries = 0; tries < 50 && runningUp() !== null; tries++) pause(100);
+  for (let tries = 0; tries < 50; tries++) {
+    const current = runningUpProcess();
+    if (!current?.verified || !sameIdentity(current.identity, identity)) break;
+    pause(100);
+  }
 }
 
 export function serviceRunning() {

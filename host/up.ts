@@ -1,12 +1,12 @@
 // Everything this machine does, in one process: the hub, the worker and its channels, whichever config.json says. They
 // speak the same protocol to each other here as they would across the world. A stop leaves agents running: they're
 // detached, and the worker finds them again when it's back.
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadChannel } from "./channels.ts";
 import { readConfig, type ChannelConfig } from "./config.ts";
 import { HOME } from "./home.ts";
-import { runningUp } from "./service.ts";
+import { runningUp, upIdentity } from "./service.ts";
 import { commitOf } from "./version.ts";
 import { hubClient } from "../protocol/client.ts";
 import { createWorker } from "../worker/worker.ts";
@@ -18,10 +18,11 @@ function lock() {
   const running = runningUp();
   if (running !== null) throw new Error(`已经在跑了（进程 ${running}）`);
   const file = path.join(HOME, "up.pid");
-  writeFileSync(file, String(process.pid));
+  const identity = JSON.stringify(upIdentity());
+  writeFileSync(file, identity);
   return () => {
     try {
-      unlinkSync(file);
+      if (readFileSync(file, "utf8") === identity) unlinkSync(file);
     } catch {}
   };
 }
