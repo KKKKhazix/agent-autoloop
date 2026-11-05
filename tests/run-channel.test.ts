@@ -27,6 +27,7 @@ const rule = (name: string, extra: Record<string, unknown> = {}) => ({
   to: "a1",
   cwd: "~/x",
   prompt: "做。",
+  group: name,
   ...extra,
 });
 
