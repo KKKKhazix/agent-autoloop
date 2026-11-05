@@ -73,6 +73,8 @@ export function parseEvent(input: unknown): EventInput {
     link: field("link"),
     hops: hops as number,
   };
+  // Half a Unicode character is stored and looked up as different bytes, so the same id would never be recognised again.
+  if (!event.id.isWellFormed()) throw new InputError("id 里有不完整的字符");
   if (!EVENT_TYPE.test(event.type)) throw new InputError("type 只能用小写字母、数字和 . _ -，以字母开头");
   // The subject and link go into the Agent's prompt, so neither may carry words: a subject is an identifier, a link a
   // web address in plain ASCII (anything else percent-encoded).
