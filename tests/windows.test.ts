@@ -203,11 +203,18 @@ test("Windows notification text remains data in PowerShell", { skip: !windows },
   const title = "中文 '; throw 'injected' & <tag> %PATH%\nsecond line";
   const [program, args] = notifyCommand(title, "win32");
   assert.equal(program, "powershell.exe");
-  const script = Buffer.from(args.at(-1)!, "base64").toString("utf16le")
+  const script = Buffer.from(args.at(-1)!, "base64")
+    .toString("utf16le")
     .replace("$icon.Visible = $true", "$icon.Visible = $false")
     .replace("$icon.ShowBalloonTip(5000)", "$words | ConvertTo-Json -Compress")
     .replace("Start-Sleep -Seconds 5", "");
-  const result = spawnSync(program, [...args.slice(0, -1), Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync(program, [...args.slice(0, -1), Buffer.from(script, "utf16le").toString("base64")], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout.trim()), { title: "Agent 问你一个问题", body: `${title}\n运行 agent-autoloop status 查看` });
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    title: "Agent 问你一个问题",
+    body: `${title}\n运行 agent-autoloop status 查看`,
+  });
 });

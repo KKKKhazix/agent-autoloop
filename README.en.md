@@ -14,15 +14,21 @@ Most of us use command-line agents like Claude Code or Codex by babysitting a te
 
 **Agent Autoloop** turns your command-line agents into a background loop. At the center is a deterministic **kernel** with zero runtime dependencies. Around it, event sources, agents, notification channels, and even CI/CD delivery pipelines are all swappable **plugins**.
 
-- **One machine, one install command.** Runs on your Mac or Linux machine. No cloud server or inbound ports required.
+- **One machine, one install command.** Runs on Windows, macOS, or Linux. No cloud server or inbound ports required.
 - **Connect a new agent in one line.** No SDK, no agent source code to fork. Any CLI tool that takes a prompt and prints a final reply can plug in.
 - **No web dashboard.** Cards reach you on Feishu, DingTalk, WeCom, Slack, Discord, or desktop notifications when you are needed. Everything else is one command away.
 
 ## Get started
 
-Works on macOS and Linux. You need Node 24, Git, curl, and at least one command-line agent already signed in; no GitHub account required. You can also hand the [installation guide](INSTALL.md) to your agent and let it install everything for you.
+Works on Windows, macOS, and Linux. You need Node 24 or newer, Git, and a command-line agent already signed in; macOS/Linux also use curl. No GitHub account required. You can hand the [installation guide](INSTALL.md) to your agent.
 
-> **Windows: pending.** Many of you have asked for a Windows version, and I've seen every request. I'm away on a work trip without a Windows machine, so I can't build or test it on real hardware, and it doesn't run on Windows yet. When I get home this weekend (November 7–8), I'll finish it, run compatibility tests, and then release it properly. Progress will be posted in [#17](https://github.com/KKKKhazix/agent-autoloop/issues/17). If you can't wait, WSL2 works for now; see [INSTALL](INSTALL.md) for what to expect.
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
+```
+
+macOS / Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
@@ -180,6 +186,8 @@ The kernel is about 1,650 lines with zero runtime dependencies. It reads no cloc
 
 ### Check it yourself
 
+On Windows use `npm run test:windows` and `node scripts/install-smoke-windows.ts`. These run the common behavior tests and native process/install checks; Unix shell fixtures remain on Linux/macOS.
+
 Run these from `~/.agent-autoloop/app`:
 
 | What it checks | Command |
@@ -247,7 +255,7 @@ For automated workloads, providers generally recommend using API keys rather tha
 | `skills/agent-autoloop/` | The hub's configuration and operation manual, also made available to agents during installation |
 | `docs/` | Protocol, plugin guide, and Chinese / English architecture diagrams |
 | `tests/`, `sim/` | Everyday behavior tests, simulation, enumeration, crash tests, and mutation checks |
-| `scripts/`, `.github/workflows/` | Performance and real-agent checks, installation smoke scripts, and Linux / macOS CI |
+| `scripts/`, `.github/workflows/` | Performance and real-agent checks, installation smoke scripts, and Windows / Linux / macOS CI |
 | Root documents and `install.sh` | Chinese / English READMEs, installation, security, development guidelines, license, and installer |
 
 Start reading at `bin/agent-autoloop.ts` → `cli/main.ts`, then follow the feature into `host/`, `worker/`, or `plugins/`. Read the [protocol](docs/protocol.md) for kernel design. Similarly named files serve different layers: `host/http.ts` adapts Node requests while `kernel/http.ts` defines endpoint behavior; `protocol/rules.ts` validates input while `kernel/rules.ts` defines rule types and matching.

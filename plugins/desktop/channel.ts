@@ -31,7 +31,16 @@ export function notifyCommand(title: string, platform: string = process.platform
         [Windows.Forms.Application]::DoEvents()
         Start-Sleep -Seconds 5
       } finally { $icon.Dispose() }`;
-    return ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]];
+    return [
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(script, "utf16le").toString("base64"),
+      ],
+    ];
   }
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
   return ["notify-send", ["--", TITLE, body]];
@@ -39,7 +48,11 @@ export function notifyCommand(title: string, platform: string = process.platform
 
 function hasDesktop() {
   if (process.platform === "win32") {
-    return powershell("$session=(Get-Process -Id $PID).SessionId; [string][bool](@(Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session }).Count)") === "True";
+    return (
+      powershell(
+        "$session=(Get-Process -Id $PID).SessionId; [string][bool](@(Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session }).Count)",
+      ) === "True"
+    );
   }
   if (process.platform === "darwin") {
     return spawnSync("launchctl", ["print", `gui/${process.getuid!()}`], { stdio: "ignore" }).status === 0;

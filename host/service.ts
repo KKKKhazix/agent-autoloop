@@ -1,4 +1,4 @@
-// Keeping it running: launchd on a Mac, systemd on Linux. Both start it at login and restart it if it stops.
+// Login services: launchd on macOS, systemd on Linux, Task Scheduler on Windows.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -21,6 +21,8 @@ const windowsArgument = (word: string) => `"${word.replace(/(\\*)"/g, '$1$1\\"')
 const task = () => `Get-ScheduledTask | Where-Object { $_.TaskName -eq ${psQuote(label())} -and $_.TaskPath -eq '\\' }`;
 
 function installWindowsService() {
+  removeService();
+  stopUp();
   const args = ["--disable-warning=ExperimentalWarning", BACKGROUND, HOME].map(windowsArgument).join(" ");
   powershell(`
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name

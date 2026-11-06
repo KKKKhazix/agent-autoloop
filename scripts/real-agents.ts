@@ -103,7 +103,7 @@ try {
   for (const entry of worker.entries())
     if (entry.pid) {
       try {
-        process.kill(-entry.pid, "SIGKILL");
+        process.kill(process.platform === "win32" ? entry.pid : -entry.pid, "SIGKILL");
       } catch {}
     }
   server.closeAllConnections();

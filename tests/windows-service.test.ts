@@ -1,4 +1,4 @@
-// Failure modes: the Windows login task does not start the installed hub, its status is wrong, or removal leaves the task running.
+// Failure modes: the Windows login task does not start the installed hub, its status is wrong, an update keeps the old process, or removal leaves the task running.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 test(
-  "Windows login task starts and removes a private install",
+  "Windows login task starts, restarts and removes a private install",
   { skip: process.platform !== "win32" || !!process.env.CI },
   async () => {
     const home = mkdtempSync(join(tmpdir(), "agent-autoloop-service-"));
@@ -49,6 +49,17 @@ test(
       }
       assert.ok(healthy, "the scheduled task did not start the hub");
       assert.ok(service.serviceRunning());
+      const previous = service.runningUp();
+      assert.ok(previous);
+      service.restartService();
+      const restarted = Date.now() + 20_000;
+      let current = service.runningUp();
+      while (Date.now() < restarted && (!current || current === previous)) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        current = service.runningUp();
+      }
+      assert.ok(current, readFileSync(join(home, "logs/up.log"), "utf8"));
+      assert.notEqual(current, previous, "update kept the old process");
       service.removeService();
       service.stopUp();
       assert.equal(service.serviceRunning(), false);
