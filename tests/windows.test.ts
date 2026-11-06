@@ -177,6 +177,20 @@ test("Windows init prints a working native command", { skip: !windows }, () => {
   assert.match(initialized.stdout, /先运行/);
 });
 
+// Agent discovery builds a command before any turn, so it has no context file to share with the Codex sandbox.
+test("Windows init discovers Codex before a task has a context file", { skip: !windows }, (t) => {
+  if (spawnSync("where.exe", ["codex"], { windowsHide: true }).status !== 0) return t.skip("Codex is not installed");
+  const home = join(scratch, "codex init");
+  const initialized = spawnSync(
+    process.execPath,
+    [join(import.meta.dirname, "../bin/agent-autoloop.ts"), "init", "--no-service", "--agent", "codex"],
+    { env: { ...process.env, AGENT_AUTOLOOP_HOME: home }, encoding: "utf8" },
+  );
+  assert.equal(initialized.status, 0, initialized.stderr);
+  const rules = JSON.parse(readFileSync(join(home, "rules.json"), "utf8"));
+  assert.equal(rules.agents.codex.use, "codex");
+});
+
 test("Windows init keeps its keys private even inside a shared directory", { skip: !windows }, () => {
   const parent = join(scratch, "shared");
   const home = join(parent, "private");

@@ -13,7 +13,7 @@ export const IN_THE_APP = [
 export default {
   command: (turn) => {
     // The elevated Windows sandbox runs as CodexSandboxUsers. Share only the supplied data, never the run token or key.
-    if (process.platform === "win32")
+    if (process.platform === "win32" && turn.contextFile)
       powershell(`
       try { $sid = ([Security.Principal.NTAccount]::new($env:COMPUTERNAME, 'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]) }
       catch [Security.Principal.IdentityNotMappedException] { return }
