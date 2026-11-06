@@ -91,6 +91,8 @@ test("its question comes with options, and your answer goes on where rules.json 
   assert.deepEqual(row, { state: "done", result: "已回复原因并关闭" });
   const later = hub.ask("每周清理", { ...question, key: "pr-12" }, at(5));
   assert.equal(later.duplicate, false, "once it's been answered, asking again is a new question");
+  // The same matter told afterwards under the same key is news, not a repeat of the question.
+  assert.equal(hub.tell("elsewhere:每周清理:pr-12", "每周清理", "已关闭", at(6)).duplicate, false);
 });
 
 test("only a task that says where it goes on can ask, and only as itself; a message and a question don't mix", async () => {

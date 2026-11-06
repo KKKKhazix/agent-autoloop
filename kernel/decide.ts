@@ -557,7 +557,8 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     const { key, ...question } = given;
     const matter = key ?? digest(`${question.title}\n${question.text}`).slice(0, 32);
     const thread = { rule: name, lane: "", grp: name, source: task.source, agent: task.to };
-    return createCard(draft, { ...question, key: `elsewhere:${name}:${matter}`, kind: "ask", ...thread });
+    // A key of its own: told once for good, a notice under the same key would never get through after a question.
+    return createCard(draft, { ...question, key: `elsewhere-ask:${name}:${matter}`, kind: "ask", ...thread });
   },
   tell(draft, key, title, text) {
     const told = createCard(draft, { key, title, text, kind: "notice", fyi: true, once: true });
