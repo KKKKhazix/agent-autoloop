@@ -12,7 +12,7 @@ Windows PowerShell：
 irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
 ```
 
-默认安装在 `$env:USERPROFILE\.agent-autoloop`，命令目录加入当前进程及用户 PATH。Windows 服务在本人登录后启动，注销后停止；SSH 或 CI 没有桌面会话时用 `--no-service`，再运行安装器打印的完整命令启动 `up`。桌面通知只在同一登录会话显示；SSH 中台可用 CLI 或其他通道收取卡片。
+默认安装在 `$env:USERPROFILE\.agent-autoloop`，命令目录加入当前进程及用户 PATH。Windows 服务在本人登录后启动，注销后停止；通过 SSH 管理时也可用 `service install`，任务会在 Windows 已登录的会话中运行；Codex 0.167 的原生沙箱在 OpenSSH 会话中会出现 runner pipe-in 超时，本机登录会话正常，见 [Codex 已知问题](https://github.com/openai/codex/issues/37722)。CI 或普通命令测试用 `--no-service`，再运行安装器打印的完整命令启动 `up`。桌面通知只在同一登录会话显示。
 
 本地仓库安装示例：
 
