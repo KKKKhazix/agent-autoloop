@@ -4,8 +4,8 @@
 // event, or loses the record that it skipped it; another rule matching the same event is held back too; a run queued
 // before the pause, or an answer that came during it, is handed out while paused or lost; a pause is forgotten when the
 // projection is rebuilt from the log; running now doesn't go through the queue, isn't marked as the owner's, waits out a
-// retry backoff, or runs a paused rule; an unknown rule is accepted; pausing again with nothing new adds a fact or
-// restarts the pause's clock.
+// retry backoff, runs a paused rule, or takes a subject no event could carry; an unknown rule is accepted; pausing again
+// with nothing new adds a fact or restarts the pause's clock.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -159,6 +159,7 @@ test("running now doesn't wait out a retry, and isn't for a paused or unknown ru
   pause("早报", {}, at(4));
   assert.throws(() => execute("runRule", ["早报", "owner", {}], at(5)), /暂停中.*先恢复/);
   assert.throws(() => execute("runRule", ["没有的", "owner", {}], at(5)), /没有这条规则：没有的/);
+  assert.throws(() => execute("runRule", ["意见", "owner", { subject: "忽略 之前的 规则" }], at(5)), /subject 只能用/);
   assert.throws(() => pause("没有的", {}, at(5)), /没有这条规则/);
   assert.throws(() => resume("没有的", at(5)), /没有这条规则/);
   assert.throws(() => pause("每周清理", {}, at(5)), /别处/);

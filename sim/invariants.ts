@@ -56,7 +56,8 @@ export function invariants(current: View, log: Fact[], before?: Snapshot) {
       "超出同组并发数",
     );
   for (const e of events)
-    for (const rule of JSON.parse(e.routed))
+    // A rule paused when the event came is on record as having matched it, and took nothing.
+    for (const rule of JSON.parse(e.routed).filter((r: string) => !JSON.parse(e.paused ?? "[]").includes(r)))
       assert.ok(
         links.some((l) => l.event_id === e.id && view.tables.runs[l.run_id]?.rule === rule),
         "已收事件丢了派发关系",

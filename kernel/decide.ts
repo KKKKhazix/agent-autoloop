@@ -621,13 +621,19 @@ const CONTROL = {
   runRule(draft: Draft, name: string, by: string, given: Row) {
     const rule = knownRule(draft, name);
     const { subject = "", reason = "" } = given ?? {};
-    if (typeof subject !== "string" || subject.length > 500) throw new InputError("subject 要是 500 字以内的文字");
     if (typeof reason !== "string" || [...reason].length > PAUSE_REASON) {
       throw new InputError(`说明要是 ${PAUSE_REASON} 字以内的文字`);
     }
     if (pauseOf(draft.view, rule, draft.now)) throw new Conflict(`规则「${name}」暂停中，先恢复再手动运行`);
     const source = eventRule(rule) ? rule.when.source : SCHEDULE;
-    const event = { id: `manual:${draft.seq}`, type: "run.manual", subject, summary: `${by} 手动运行`, detail: reason };
+    // The same checks as any event: its subject becomes the lane and goes into the prompt.
+    const event = parseEvent({
+      id: `manual:${draft.seq}`,
+      type: "run.manual",
+      subject,
+      summary: `${by} 手动运行`,
+      detail: reason,
+    });
     const eventId = recordEvent(draft, source, event, [name]);
     const run = enqueue(draft, rule, eventId, rule.parallel ? subject : "");
     // Waiting out a retry's backoff wouldn't be now: the owner asking is the go-ahead.
