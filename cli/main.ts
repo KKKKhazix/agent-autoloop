@@ -99,7 +99,7 @@ const TAKES: Record<string, { flags: string[]; usage: string }> = {
 rules.json 里这个定时任务要写 cwd；你答了，中台叫醒它的 Agent 在 cwd 照 skill、prompt 接着做。`,
   },
   backup: { flags: [], usage: "用法：agent-autoloop backup [目录]" },
-  check: { flags: [], usage: "用法：agent-autoloop check" },
+  check: { flags: [], usage: "用法：agent-autoloop check [文件]" },
   conformance: { flags: ["config"], usage: "用法：agent-autoloop conformance <测试中台地址> --config <测试凭据文件>" },
   doctor: { flags: [], usage: "用法：agent-autoloop doctor" },
   emit: {
