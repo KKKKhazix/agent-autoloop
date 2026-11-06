@@ -35,8 +35,7 @@ function systemctl({ system = false, user = false, manager = true }) {
 echo "$*" >> "${calls}"
 case "$1 $2" in
   "is-active "*) exit ${system ? 0 : 3} ;;
-  "--user is-active") exit ${user ? 0 : 3} ;;
-  "--user show") ${user ? "echo loaded" : "echo not-found"} ;;
+  "--user is-active") ${user ? "echo active; exit 0" : "echo inactive; exit 3"} ;;
   --user*) exit ${manager ? 0 : 1} ;;
 esac
 `,

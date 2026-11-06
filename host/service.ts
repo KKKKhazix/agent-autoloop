@@ -184,13 +184,11 @@ export function serviceRunning() {
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
 }
 
-/** Whether its manager has the service, running or about to start: a fake or absent manager has nothing to wait for. */
-function serviceLoaded() {
+/** Whether its manager has the service going or starting: one stopped by hand, or no manager at all, isn't waited for. */
+function serviceStarting() {
   if (process.platform !== "linux") return serviceRunning();
-  const shown = spawnSync("systemctl", ["--user", "show", "--property", "LoadState", "--value", label()], {
-    encoding: "utf8",
-  });
-  return shown.stdout?.trim() === "loaded";
+  const state = spawnSync("systemctl", ["--user", "is-active", label()], { encoding: "utf8" }).stdout?.trim();
+  return state === "active" || state === "activating" || state === "reloading";
 }
 
 /**
@@ -198,7 +196,7 @@ function serviceLoaded() {
  * it while its manager has it: true once it answers, false if it doesn't in time, null when there's nothing to wait for.
  */
 export async function untilAnswering(url: string, patience = 20_000) {
-  if (!serviceLoaded()) return null;
+  if (!serviceStarting()) return null;
   const end = Date.now() + patience;
   for (;;) {
     const answered = await fetch(`${url.replace(/\/$/, "")}/healthz`, { signal: AbortSignal.timeout(2_000) }).then(
