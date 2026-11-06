@@ -17,7 +17,7 @@ import {
   workerOf,
   workers,
 } from "./query.ts";
-import { cronOf, eventRule, SCHEDULE, typeMatches, type Rule, type Rules } from "./rules.ts";
+import { cronOf, eventRule, ruleOf, SCHEDULE, typeMatches, type Rule, type Rules } from "./rules.ts";
 import {
   addUsage,
   ANSWER_BY,
@@ -105,10 +105,10 @@ function add(draft: Draft, table: Table, fields: Row) {
   return put(draft, table, id, { ...fields, id });
 }
 
-const ruleNamed = (draft: Draft, name: string) => draft.rules.rules.find((rule) => rule.name === name);
+const ruleNamed = (draft: Draft, name: string) => ruleOf(draft.rules, name);
 function assignQueued(draft: Draft, run: Row) {
   const config = draft.view.get("config", "rules")!;
-  const rule = (config.value as Rules).rules.find((rule) => rule.name === run.rule);
+  const rule = ruleOf(config.value as Rules, run.rule);
   if (!rule) return;
   const session = rule.to === run.agent ? {} : nulls("session", "resume");
   put(draft, "runs", run.id, { agent: rule.to, rules_version: config.version, ...session });
@@ -534,9 +534,8 @@ function tick(draft: Draft) {
 const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   rules(draft, rules) {
     put(draft, "config", "rules", { value: rules, version: draft.seq });
-    const named = new Set(rules.rules.map((rule: Rule) => rule.name));
     for (const run of rows(draft.view, "runs", { state: "queued" })) {
-      if (named.has(run.rule)) assignQueued(draft, run);
+      if (ruleOf(rules, run.rule)) assignQueued(draft, run);
       else stopRun(draft, run, "rule-gone", ...ruleGone(run));
     }
     closeOpen(draft, (key) => key.startsWith("rules:"), "改好了");
@@ -551,6 +550,15 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   },
   ingest,
   createCard,
+  /** A task elsewhere asks you; your answer goes on like a round of a rule, where its cwd says. */
+  ask(draft, name, given) {
+    const task = draft.rules.elsewhere.find((task) => task.name === name)!;
+    if (!task.cwd) throw new InputError(`定时任务「${name}」没写 cwd，回答了没人接着做：只能 tell`);
+    const { key, ...question } = given;
+    const matter = key ?? digest(`${question.title}\n${question.text}`).slice(0, 32);
+    const thread = { rule: name, lane: "", grp: name, source: task.source, agent: task.to };
+    return createCard(draft, { ...question, key: `elsewhere:${name}:${matter}`, kind: "ask", ...thread });
+  },
   tell(draft, key, title, text) {
     const told = createCard(draft, { key, title, text, kind: "notice", fyi: true, once: true });
     if (!told.duplicate) return told;

@@ -32,6 +32,8 @@ const isId: Check = (value) => typeof value === "string" && ID.test(value);
 const isCount: Check = (value) => Number.isInteger(value) && (value as number) > 0;
 const isTypes: Check = (value) => isSomeWords(value) && (value as string[]).every((type) => TYPE_PATTERN.test(type));
 const isCron: Check = (value) => typeof value === "string" && parseCron(value) !== null;
+const isFolder: Check = (value) => typeof value === "string" && /^(~\/|\/)/.test(value);
+const FOLDER = "要是以 ~/ 或 / 开头的目录";
 
 function isKeyOf(table: object): Check {
   return (value) => typeof value === "string" && value in table;
@@ -71,7 +73,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["name", isText, NOT_EMPTY],
     ["when", isObject, "要是一个对象"],
     ["to", isKeyOf(rules.agents), `不是已登记的 Agent：${isObject(rule) ? rule.to : ""}`],
-    ["cwd", (value) => typeof value === "string" && /^(~\/|\/)/.test(value), "要是以 ~/ 或 / 开头的目录"],
+    ["cwd", isFolder, FOLDER],
     ["skill", isText, NOT_EMPTY, true],
     ["prompt", isText, NOT_EMPTY, true],
     ["group", isText, NOT_EMPTY, true],
@@ -183,7 +185,17 @@ export function parseRules(json: string, now: number, timezone: string): Rules {
       ["to", isKeyOf(rules.agents), "不是已登记的 Agent"],
       ["cron", isCron, "不是有效的 cron"],
       ["where", isText, NOT_EMPTY],
+      ["cwd", isFolder, FOLDER, true],
+      ["skill", isText, NOT_EMPTY, true],
+      ["prompt", isText, NOT_EMPTY, true],
     ]);
+    if (!isObject(task)) continue;
+    // Its answers go on like a round of a rule, so they need what a rule needs.
+    const words = task.skill !== undefined || task.prompt !== undefined;
+    if (words && task.cwd === undefined) issues.push(`定时任务「${name}」写了回答后照什么做，还要写 cwd：在哪接着做`);
+    if (task.cwd !== undefined && !words && rules.agents[task.to]?.use !== "command") {
+      issues.push(`定时任务「${name}」写了 cwd，skill 和 prompt 至少写一个：回答后照什么做`);
+    }
   }
   if (issues.length) throw new RulesError(issues);
   return rules;

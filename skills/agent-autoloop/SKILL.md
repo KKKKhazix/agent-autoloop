@@ -29,7 +29,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 - 同一个对象的事件要分开处理、互不等待，就写 `parallel`。一台接单程序同时跑几轮还受 `config.json` 的 `worker.capacity` 限制，默认 2，要多跑就一起调大。
 - 同一个对象的新事件要接着上一轮的会话（比如同一个对话的后续消息），就写 `"resume": true`；默认每次开新会话。上一轮被停掉、可能还在跑或者换了 Agent 时开新的。不写 `parallel` 时整条规则的事件都接同一个会话。
 - 默认的先问清单是 `askFirst`，用户说什么事必须先问他，就改这里。
-- 用户在别的地方定时跑的任务（Claude、Codex 应用里），写进 `elsewhere`，只在 `agent-autoloop status` 里列出来；它们要找用户时运行 `agent-autoloop tell <编号> --task <任务名>`，内容从标准输入传。
+- 用户在别的地方定时跑的任务（Claude、Codex 应用里），写进 `elsewhere`，只在 `agent-autoloop status` 里列出来；它们要找用户时运行 `agent-autoloop tell <编号> --task <任务名>`，内容从标准输入传。要用户拍板的，给这个任务写上 `cwd` 和 `skill` 或 `prompt`，任务里运行 `agent-autoloop ask --task <任务名>`，标准输入传回执那样的 `ask`：卡片带选项，用户点了，中台叫醒它的 Agent 在 `cwd` 照 `skill`、`prompt` 接着做，回答在这一轮资料文件的 `answers` 里。
 
 现成场景和内置插件从 [README](../../README.md#拿来即用的场景模板)进入，开发示例见[写插件](../../docs/plugins.md)。用户想接自动化时先从例子改，不要从零写：`examples/recipes/` 里有早报（`morning-brief`）、处理 GitHub issue（`github-issues`）、线上报错（`ops-alerts`）、反馈处理（`feedback`）、网站巡检（`website-watch`）、飞书周报与业务摘要（`feishu-brief`）和 Claude 浏览器交接（`browser-handoff`），每个都有规则、Skill 和写明权限原因的 README。反馈、巡检、飞书摘要和浏览器交接默认飞书本人私聊；按模板说明替换虚构标识，业务资料留在私有目录，读取用本人身份，通知用机器人身份。要写新的 Agent、通道或事件插件，看教程 `docs/plugins.md` 和最小例子 `examples/plugins/`。
 
@@ -105,7 +105,12 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
   "check": { "workflow": "check.yml", "job": "check" },
   "ship": { "workflow": "ship.yml" },
   "review": { "points": "AGENTS.md", "status": "agent-review", "xhigh": ["src/auth/*"] },
-  "health": { "url": "https://app.example/health", "field": "commit", "pattern": "(?P<sha>[0-9a-f]{40})", "require": { "ok": true } }
+  "health": {
+    "url": "https://app.example/health",
+    "field": "commit",
+    "pattern": "(?P<sha>[0-9a-f]{40})",
+    "require": { "ok": true }
+  }
 }
 ```
 
@@ -119,13 +124,32 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 {
   "sources": { "github": { "name": "GitHub" } },
   "agents": {
-    "poll": { "name": "查看交付标签", "worker": "mac-mini", "use": "command", "command": ["node", "/绝对路径/agent-autoloop/plugins/delivery/poll.ts", "owner/app"] },
+    "poll": {
+      "name": "查看交付标签",
+      "worker": "mac-mini",
+      "use": "command",
+      "command": ["node", "/绝对路径/agent-autoloop/plugins/delivery/poll.ts", "owner/app"]
+    },
     "delivery": { "name": "交付", "worker": "mac-mini", "use": "delivery", "command": ["owner/app"], "timeout": 35 }
   },
   "channels": {},
   "rules": [
-    { "name": "查看待交付", "when": { "cron": "*/2 * * * *" }, "to": "poll", "cwd": "/已有的工作目录", "prompt": "查看项目交付标签", "emits": { "source": "github", "types": ["pull_request.labeled", "issues.labeled"] } },
-    { "name": "交付", "when": { "source": "github", "types": ["pull_request.*", "issues.labeled"] }, "to": "delivery", "cwd": "/已有的工作目录", "parallel": 2, "prompt": "按 main 的项目设置完成交付" }
+    {
+      "name": "查看待交付",
+      "when": { "cron": "*/2 * * * *" },
+      "to": "poll",
+      "cwd": "/已有的工作目录",
+      "prompt": "查看项目交付标签",
+      "emits": { "source": "github", "types": ["pull_request.labeled", "issues.labeled"] }
+    },
+    {
+      "name": "交付",
+      "when": { "source": "github", "types": ["pull_request.*", "issues.labeled"] },
+      "to": "delivery",
+      "cwd": "/已有的工作目录",
+      "parallel": 2,
+      "prompt": "按 main 的项目设置完成交付"
+    }
   ]
 }
 ```

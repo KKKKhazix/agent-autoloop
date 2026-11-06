@@ -49,7 +49,10 @@ export function explainRules(text: string, now = Date.now(), zone = localZone())
     );
   lines.push("规则：");
   for (const rule of rules.rules) lines.push(`  ${rule.name}：${details(rule, rules, now)}`);
-  for (const task of rules.elsewhere) lines.push(`  ${task.name}：在别处（${task.where}）${describeCron(task.cron)}`);
+  for (const task of rules.elsewhere) {
+    const answers = task.cwd ? `；问你的，回答后交给 ${rules.agents[task.to].name} 在 ${task.cwd} 接着做` : "";
+    lines.push(`  ${task.name}：在别处（${task.where}）${describeCron(task.cron)}${answers}`);
+  }
   return lines;
 }
 

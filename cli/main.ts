@@ -36,6 +36,8 @@ const HELP = `Agent 自动化中台
                                     发一条事件；--dry-run 只预演会派给谁，不连接中台
   agent-autoloop tell <编号> [--task 定时任务名]
                                     直接告诉你一件事，内容从标准输入读
+  agent-autoloop ask --task <定时任务名>
+                                    定时任务问你一件事：标准输入传回执那样的 ask；你答了，它的 Agent 在 cwd 接着做
   agent-autoloop stop <第几轮>           停掉一轮
   agent-autoloop key new <source|worker|channel|owner> <名字>
                                     新建一把密钥（只显示这一次）
@@ -89,6 +91,12 @@ const RESTORE_USAGE = `用法：agent-autoloop restore <目录> [--yes]
 const TAKES: Record<string, { flags: string[]; usage: string }> = {
   add: { flags: [], usage: "用法：agent-autoloop add <git 地址>" },
   answer: { flags: ["text"], usage: "用法：agent-autoloop answer <卡片> [序号] [--text 别的想法]" },
+  ask: {
+    flags: ["task"],
+    usage: `用法：agent-autoloop ask --task <定时任务名>，问题从标准输入读：
+  { "title": "…", "text": "…", "options": ["…", "…"], "recommend": 0, "about": "留给接着做的", "key": "这件事的固定名字" }
+rules.json 里这个定时任务要写 cwd；你答了，中台叫醒它的 Agent 在 cwd 照 skill、prompt 接着做。`,
+  },
   backup: { flags: [], usage: "用法：agent-autoloop backup [目录]" },
   check: { flags: [], usage: "用法：agent-autoloop check" },
   conformance: { flags: ["config"], usage: "用法：agent-autoloop conformance <测试中台地址> --config <测试凭据文件>" },
@@ -623,6 +631,22 @@ async function tell(args: string[]) {
   console.log(answer.duplicate ? "这件事已经说过了，这次没再发。" : "说了。");
 }
 
+async function ask(args: string[]) {
+  const { named, rest } = flags(args);
+  const task = text(named.task);
+  if (!task || rest.length) return fail(TAKES.ask.usage);
+  let question: unknown;
+  try {
+    question = JSON.parse(readFileSync(0, "utf8"));
+  } catch {
+    return fail("问题从标准输入传，是一段 JSON：和回执里的 ask 一样");
+  }
+  const config = readConfig();
+  if (!config.worker) return fail("这台电脑不是接单程序");
+  const answer = await client(config.worker.key, config).tell({ task, ask: question });
+  console.log(answer.duplicate ? "同一件事还在等你回答，这次没再问。" : "问了。");
+}
+
 /** A run is named by its number; anything else would reach the hub as /v1/runs/NaN and come back as "没有这个地址". */
 function runOf(word: string | undefined, usage: string) {
   const id = Number(word);
@@ -717,6 +741,7 @@ const commands: Record<string, () => unknown> = {
   key: () => key(args),
   emit: () => emit(args),
   tell: () => tell(args),
+  ask: () => ask(args),
   stop: () => stop(args),
   backup: () => backupCommand(args),
   restore: () => restoreCommand(args),

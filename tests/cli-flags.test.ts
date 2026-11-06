@@ -119,6 +119,7 @@ test("a flag uninstall does not read stops it instead of uninstalling", async ()
 const EVERY_OTHER_COMMAND = [
   "add",
   "answer",
+  "ask",
   "backup",
   "check",
   "conformance",
