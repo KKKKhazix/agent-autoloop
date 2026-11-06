@@ -11,7 +11,15 @@ import { CONFIG_FILE, readConfig, writeConfig, type Config } from "../host/confi
 import { HOME, RULES_FILE } from "../host/home.ts";
 import { findOnPath, psQuote } from "../host/command.ts";
 import { privateDirectory } from "../host/files.ts";
-import { installService, removeService, restartService, serviceRunning, systemUnit } from "../host/service.ts";
+import {
+  installService,
+  removeService,
+  restartService,
+  serviceLogs,
+  serviceRunning,
+  systemUnit,
+  untilAnswering,
+} from "../host/service.ts";
 import { versionLine } from "../host/version.ts";
 import { spendLine } from "./spend.ts";
 import { attemptsOf, newFailure, waitingRetry } from "./try.ts";
@@ -302,7 +310,10 @@ async function init(args: string[]) {
   };
   writeConfig(config);
   linkSkill();
-  if (!named["no-service"]) installService();
+  if (!named["no-service"]) {
+    installService();
+    await waitForHub();
+  }
   const names = Object.values(agents).map((agent) => agent.name);
   const reach = ownRules ? "  通道：桌面通知\n" : "";
   const run = howToRun();
@@ -544,7 +555,7 @@ async function doctor() {
     const health = await (await fetch(`${config.url}/healthz`, { signal: AbortSignal.timeout(5000) })).json();
     say(health.ok === true, `中台 ${config.url}（${String(health.commit).slice(0, 12)}）`);
   } catch (error) {
-    say(false, `连不上中台 ${config.url}：${(error as Error).message}`);
+    say(false, `连不上中台 ${config.url}：${(error as any).cause?.code ?? (error as Error).message}`);
   }
   if (config.owner) {
     try {
@@ -734,11 +745,35 @@ async function stop(args: string[]) {
   console.log("通知它停了。");
 }
 
-function service(args: string[]) {
+/** A command run right after starting the service would find no hub yet: this machine's is waited for, if it has one. */
+async function waitForHub() {
+  const config = readConfig();
+  if (config.hub && (await untilAnswering(config.url)) === false) {
+    console.error(`系统服务起了，但中台 20 秒内没有应答。看看日志：${serviceLogs()}`);
+  }
+}
+
+/** fetch says only "fetch failed" when no hub answers; which hub, why and what to do are what a person can act on. */
+function plainly(error: any): string {
+  if (!(error instanceof TypeError && error.message === "fetch failed")) return error?.message ?? String(error);
+  let url = "";
+  try {
+    url = readConfig().url;
+  } catch {}
+  const cause = (error as { cause?: { code?: string; message?: string } }).cause;
+  const why = cause?.code ?? cause?.message;
+  return (
+    `连不上中台 ${url}${why ? `（${why}）` : ""}：中台没在运行，或者刚启动还没好。` +
+    "在中台那台电脑上运行 agent-autoloop service install 启动它；刚装好、刚更新的等几秒再试。"
+  );
+}
+
+async function service(args: string[]) {
   if (args[0] === "install") {
     // Installing over kept data comes here and not to init, and uninstalling took the links away.
     linkSkill();
-    return installService();
+    installService();
+    return waitForHub();
   }
   if (args[0] === "remove") return removeService();
   fail(TAKES.service.usage);
@@ -767,6 +802,7 @@ async function update() {
   const version = to ? `（${to}）` : "";
   if (!changed) return console.log(`已经是最新的${version}。`);
   const told = restartService();
+  if (told === undefined) await waitForHub();
   console.log(`更新好了${version}。${told ?? ""}`);
 }
 
@@ -821,5 +857,5 @@ if (!command || !commands[command]) {
   if (TAKES[command]) refuseUnknownFlags(command === "resolve" ? args.slice(0, 1) : args, TAKES[command]);
   Promise.resolve()
     .then(commands[command])
-    .catch((error) => fail(error.message ?? String(error)));
+    .catch((error) => fail(plainly(error)));
 }

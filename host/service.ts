@@ -184,6 +184,37 @@ export function serviceRunning() {
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
 }
 
+/** Whether its manager has the service, running or about to start: a fake or absent manager has nothing to wait for. */
+function serviceLoaded() {
+  if (process.platform !== "linux") return serviceRunning();
+  const shown = spawnSync("systemctl", ["--user", "show", "--property", "LoadState", "--value", label()], {
+    encoding: "utf8",
+  });
+  return shown.stdout?.trim() === "loaded";
+}
+
+/**
+ * A manager says it has started the hub before the hub can answer, and whatever runs next finds nothing there. Waits for
+ * it while its manager has it: true once it answers, false if it doesn't in time, null when there's nothing to wait for.
+ */
+export async function untilAnswering(url: string, patience = 20_000) {
+  if (!serviceLoaded()) return null;
+  const end = Date.now() + patience;
+  for (;;) {
+    const answered = await fetch(`${url.replace(/\/$/, "")}/healthz`, { signal: AbortSignal.timeout(2_000) }).then(
+      (response) => response.ok,
+      () => false,
+    );
+    if (answered) return true;
+    if (Date.now() > end) return false;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+/** Where the service's own output goes. */
+export const serviceLogs = () =>
+  process.platform === "linux" ? `journalctl --user -u ${label()}` : path.join(HOME, "logs", "up.log");
+
 /** The name of a system-level unit running this, as a server run by root might have. It's its owner's to restart. */
 export function systemUnit() {
   if (process.platform === "win32") return null;
