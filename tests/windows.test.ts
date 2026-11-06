@@ -1,14 +1,15 @@
 // Failure modes: a native Windows install cannot launch an Agent; shell metacharacters alter its arguments; restarting
 // the worker loses a running turn or its answer; cancelling a turn leaves its child processes running; a program in a
-// folder whose name the console code page can't write (a Chinese user name) isn't found, so nothing installs or runs.
+// folder whose name the console code page can't write (a Chinese user name) isn't found, so nothing installs or runs; a
+// powershell.exe an Agent left in the turn's folder runs, outside its sandbox, in place of the system's.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
-import { powershell, psQuote } from "../host/command.ts";
+import { POWERSHELL, powershell, psQuote } from "../host/command.ts";
 
 const windows = process.platform === "win32";
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-windows-"));
@@ -173,6 +174,31 @@ test(
   },
 );
 
+// Windows looks for a bare program name in its working folder first, and an Agent can write to the turn's folder.
+test(
+  "a powershell.exe left in the turn's folder doesn't run in place of the system's",
+  { skip: !windows },
+  async () => {
+    const folder = join(scratch, "planted");
+    mkdirSync(folder);
+    copyFileSync(
+      join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"),
+      join(folder, "powershell.exe"),
+    );
+    const agent = join(scratch, "planted-agent.mjs");
+    writeFileSync(agent, "process.stdout.write('ran');");
+    const input = job(6, [process.execPath, agent]);
+    input.rule.cwd = folder;
+    waiting.push(input);
+    const running = worker();
+    await until(
+      () => results.has(6),
+      () => running.tick(),
+    );
+    assert.equal(results.get(6).outcome, "done", JSON.stringify(results.get(6)));
+  },
+);
+
 test("Windows ACP edit access rejects a sibling folder", { skip: !windows }, async () => {
   const { permission } = await import("../plugins/acp/bridge.ts");
   const answer = permission(
@@ -270,7 +296,7 @@ test("Windows notification text remains data in PowerShell", { skip: !windows },
   const { notifyCommand } = await import("../plugins/desktop/channel.ts");
   const title = "中文 '; throw 'injected' & <tag> %PATH%\nsecond line";
   const [program, args] = notifyCommand(title, "win32");
-  assert.equal(program, "powershell.exe");
+  assert.equal(program, POWERSHELL);
   const script = Buffer.from(args.at(-1)!, "base64")
     .toString("utf16le")
     .replace("$icon.Visible = $true", "$icon.Visible = $false")

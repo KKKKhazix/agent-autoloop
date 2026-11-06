@@ -3,6 +3,15 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+/** Windows looks for a bare program name in its working folder first, and an Agent can write to a turn's folder. */
+export const POWERSHELL = path.join(
+  process.env.SystemRoot ?? "C:\\Windows",
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+);
+
 /**
  * The file Windows runs for `name` from PATH, trying extensions in PATHEXT's order. Not where.exe: it prints in the console's
  * code page, so a folder outside it (a Chinese user name) came back as a path that isn't there. The current folder isn't
@@ -42,7 +51,7 @@ export function commandLine(argv: string[]): [string, string[]] {
     ];
   }
   if (/\.ps1$/i.test(program))
-    return ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", program, ...argv.slice(1)]];
+    return [POWERSHELL, ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", program, ...argv.slice(1)]];
   if (/\.bat$/i.test(program))
     throw new Error(`不能直接运行 ${program}：请在 command 写可执行文件，或用 node 运行脚本。`);
   return [program, argv.slice(1)];
@@ -50,7 +59,7 @@ export function commandLine(argv: string[]): [string, string[]] {
 
 export function powershell(script: string) {
   return execFileSync(
-    "powershell.exe",
+    POWERSHELL,
     [
       "-NoLogo",
       "-NoProfile",

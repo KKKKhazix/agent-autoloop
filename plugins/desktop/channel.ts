@@ -4,7 +4,7 @@
 //   "channels": { "desktop": { "name": "桌面通知" } } in rules.json
 import { execFile, spawnSync } from "node:child_process";
 import type { Card, ChannelContext } from "../../host/channels.ts";
-import { powershell } from "../../host/command.ts";
+import { POWERSHELL, powershell } from "../../host/command.ts";
 
 const WORDS = "运行 agent-autoloop status 查看";
 const TITLE = "Agent 问你一个问题";
@@ -32,7 +32,7 @@ export function notifyCommand(title: string, platform: string = process.platform
         Start-Sleep -Seconds 5
       } finally { $icon.Dispose() }`;
     return [
-      "powershell.exe",
+      POWERSHELL,
       [
         "-NoLogo",
         "-NoProfile",
