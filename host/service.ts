@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "./home.ts";
 import { stablePath } from "./node-path.ts";
+import { powershell, processCommand, psQuote } from "./command.ts";
 
 const PROGRAM = path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 /** Another install on this machine (another AGENT_AUTOLOOP_HOME) has a service of its own. */
@@ -15,6 +16,22 @@ const label = () =>
     : `agent-autoloop-${createHash("sha256").update(HOME).digest("hex").slice(0, 8)}`;
 const plistFile = () => path.join(homedir(), "Library/LaunchAgents", `${label()}.plist`);
 const unitFile = () => path.join(homedir(), ".config/systemd/user", `${label()}.service`);
+const BACKGROUND = path.join(import.meta.dirname, "background.ts");
+const windowsArgument = (word: string) => `"${word.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
+const task = () => `Get-ScheduledTask | Where-Object { $_.TaskName -eq ${psQuote(label())} -and $_.TaskPath -eq '\\' }`;
+
+function installWindowsService() {
+  const args = ["--disable-warning=ExperimentalWarning", BACKGROUND, HOME].map(windowsArgument).join(" ");
+  powershell(`
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action = New-ScheduledTaskAction -Execute ${psQuote(process.execPath)} -Argument ${psQuote(args)} -WorkingDirectory ${psQuote(HOME)}
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName ${psQuote(label())} -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Start-ScheduledTask -TaskName ${psQuote(label())}
+  `);
+}
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 export type UnitOptions = {
@@ -80,6 +97,7 @@ const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(
 
 export function installService() {
   mkdirSync(path.join(HOME, "logs"), { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") return installWindowsService();
   if (process.platform === "darwin") {
     mkdirSync(path.dirname(plistFile()), { recursive: true });
     writeFileSync(plistFile(), plist());
@@ -97,6 +115,13 @@ export function installService() {
 }
 
 export function removeService() {
+  if (process.platform === "win32") {
+    powershell(`$task = ${task()}; if ($task -and $task.Actions.Arguments.Contains(${psQuote(windowsArgument(BACKGROUND))})) {
+      $task | Stop-ScheduledTask
+      $task | Unregister-ScheduledTask -Confirm:$false
+    }`);
+    return;
+  }
   const file = process.platform === "darwin" ? plistFile() : unitFile();
   if (!existsSync(file)) return;
   const service = readFileSync(file, "utf8");
@@ -121,12 +146,9 @@ export function runningUp() {
   const pid = readFileSync(file, "utf8").trim();
   let command = "";
   try {
-    command = execFileSync("ps", ["-p", pid, "-o", "command="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    command = processCommand(Number(pid));
   } catch {}
-  return /agent-autoloop(\.ts)? up\b/.test(command) ? Number(pid) : null;
+  return /agent-autoloop(\.ts)?"? up\b/.test(command) ? Number(pid) : null;
 }
 
 /** Stopping a service returns before its process is gone, and one started by hand has no service to stop it. */
@@ -141,12 +163,15 @@ export function stopUp() {
 
 /** The service this program installs and can restart. */
 export function serviceRunning() {
+  if (process.platform === "win32")
+    return powershell(`$task = ${task()}; [string]($task -and $task.State -eq 'Running')`) === "True";
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
 }
 
 /** The name of a system-level unit running this, as a server run by root might have. It's its owner's to restart. */
 export function systemUnit() {
+  if (process.platform === "win32") return null;
   if (process.platform === "darwin") return null;
   return spawnSync("systemctl", ["is-active", "--quiet", label()], { stdio: "ignore" }).status === 0 ? label() : null;
 }

@@ -17,7 +17,7 @@ await once(server, "listening");
 after(() => {
   server.closeAllConnections();
   server.close();
-  hub.db.close();
+  if (hub.db.isOpen) hub.db.close();
 });
 writeFileSync(
   join(home, "config.json"),

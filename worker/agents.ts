@@ -62,15 +62,19 @@ const found = new Map<string, string | null>();
 /** Where a program is: on the login shell's PATH (launchd and systemd start with a bare one), or in one of these. */
 export function findProgram(name: string, elsewhere: () => string[] = () => []) {
   if (!found.has(name)) {
-    const shell = process.env.SHELL ?? "/bin/sh";
     let onPath: string | null = null;
     try {
-      const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
+      const shell = process.platform === "win32" ? "where.exe" : (process.env.SHELL ?? "/bin/sh");
+      const args = process.platform === "win32" ? [name] : ["-lc", `command -v ${name}`];
+      const printed = execFileSync(shell, args, {
         encoding: "utf8",
         timeout: 15_000,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      onPath = printed.trim().split("\n").at(-1) || null;
+      const paths = printed.trim().split(/\r?\n/);
+      onPath =
+        (process.platform === "win32" ? paths.find((file) => /\.(exe|com|cmd|ps1)$/i.test(file)) : paths.at(-1)) ||
+        null;
     } catch {}
     found.set(name, onPath ?? elsewhere().find(existsSync) ?? null);
   }

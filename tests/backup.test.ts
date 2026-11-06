@@ -31,7 +31,7 @@ const { backup, restore } = await import("../cli/backup.ts");
 
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-backup-"));
 after(() => {
-  hub.db.close();
+  if (hub.db.isOpen) hub.db.close();
   rmSync(scratch, { recursive: true, force: true });
 });
 let folders = 0;

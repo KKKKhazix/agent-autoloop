@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { HubError, type Hub } from "../protocol/client.ts";
 import { HOME } from "../host/home.ts";
+import { commandLine, processCommand } from "../host/command.ts";
 import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
@@ -113,7 +114,7 @@ const files = (entry: Entry) => ({
   out: path.join(entry.dir, `stdout-${entry.turn}.log`),
   err: path.join(entry.dir, `stderr-${entry.turn}.log`),
   exit: path.join(entry.dir, `exit-${entry.turn}`),
-  command: path.join(entry.dir, `command-${entry.turn}.sh`),
+  command: path.join(entry.dir, `command-${entry.turn}.${process.platform === "win32" ? "json" : "sh"}`),
 });
 const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attempt}:${entry.turn}`;
@@ -122,20 +123,20 @@ const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attemp
 function alive(entry: Entry): boolean | null {
   if (!entry.pid) return false;
   try {
-    const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
+    const command = processCommand(entry.pid);
     return command.includes(marker(entry));
   } catch (error) {
     // A process that is gone makes ps exit with status 1; anything else (EPERM, EACCES, a spawn
     // failure) means we could not look, which is not the same as it being gone.
     const status = (error as { status?: number | null }).status;
-    if (status === 1) return false;
+    if (process.platform !== "win32" && status === 1) return false;
     return null;
   }
 }
 
 function signal(entry: Entry, name: NodeJS.Signals) {
   try {
-    if (entry.pid) process.kill(-entry.pid, name);
+    if (entry.pid) process.kill(process.platform === "win32" ? entry.pid : -entry.pid, name);
   } catch {}
 }
 
@@ -143,6 +144,7 @@ function signal(entry: Entry, name: NodeJS.Signals) {
 function groupAlive(entry: Entry): boolean | null {
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
   if (!entry.pid) return false;
+  if (process.platform === "win32") return alive(entry);
   try {
     return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
       .trim()
@@ -222,7 +224,7 @@ export function createWorker({
     delete entry.why;
     save(entry);
     const { rule, agent } = entry.job;
-    const cwd = rule.cwd.replace(/^~(?=\/)/, homedir());
+    const cwd = rule.cwd.replace(/^~(?=[/\\])/, homedir());
     const turn: Turn = {
       prompt,
       session: entry.session,
@@ -238,6 +240,39 @@ export function createWorker({
     if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
     const argv = adapter.command(turn);
     const { out, err, exit, command } = files(entry);
+    if (process.platform === "win32") {
+      writeFileSync(command, JSON.stringify({ argv, cwd, exit }), { mode: 0o600 });
+      const output = openSync(out, "w");
+      const errors = openSync(err, "w");
+      try {
+        const child = spawn(
+          process.execPath,
+          [
+            "--disable-warning=ExperimentalWarning",
+            path.join(import.meta.dirname, "run.ts"),
+            "--supervise",
+            command,
+            marker(entry),
+          ],
+          {
+            cwd,
+            env: { ...agentEnvironment(entry), AGENT_AUTOLOOP_NODE: process.execPath },
+            detached: true,
+            windowsHide: true,
+            stdio: ["ignore", output, errors],
+          },
+        );
+        child.on("error", (error) => log(`run ${entry.run}: ${error}`));
+        child.unref();
+        entry.pid = child.pid;
+      } finally {
+        closeSync(output);
+        closeSync(errors);
+      }
+      save(entry);
+      log(`run ${entry.run} (${rule.name}) turn ${entry.turn} started, pid ${entry.pid}`);
+      return;
+    }
     // Login shells don't agree on how a command reads its arguments (fish has no $0 or $@), so the command waits in a
     // file for /bin/sh. Its path travels by environment because the install path can hold any character.
     writeFileSync(command, `unset AGENT_AUTOLOOP_COMMAND\nexec ${argv.map(quoted).join(" ")}\n`, { mode: 0o600 });
@@ -434,7 +469,7 @@ export function createWorker({
     const looking = alive(entry);
     if (looking === false) return conclude(entry, adapter, exitCode());
     // Unable to look, the run counts as still going, so its timeout and its finished turn still end it.
-    if (looking === null && !blind) log(`couldn't run ps; runs count as going until they end or time out`);
+    if (looking === null && !blind) log(`couldn't inspect processes; runs count as going until they end or time out`);
     blind = looking === null;
     const seen = read(entry, adapter, null);
     // Kept as soon as it's read: if the end can't be read, the one made up at launch may be nothing its CLI knows of.
@@ -504,13 +539,9 @@ export function createWorker({
     tries += 1;
     const minutes = Math.floor((moment - unreachableSince) / 60_000);
     const text = `${name} 连不上中台已经 ${minutes} 分钟了，派给它的活暂时没人接；它还在一直重试。`;
-    const [program, ...args] = unreachable;
+    const [program, args] = commandLine(unreachable.map((part) => part.replaceAll("{text}", text)));
     try {
-      execFileSync(
-        program,
-        args.map((part) => part.replaceAll("{text}", text)),
-        { timeout: 60_000, stdio: "ignore" },
-      );
+      execFileSync(program, args, { timeout: 60_000, stdio: "ignore" });
       told = true;
     } catch (error) {
       log(`couldn't tell anyone the hub is gone: ${error}`);

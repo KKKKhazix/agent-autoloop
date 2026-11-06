@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { setup } from "./helpers.ts";
+import { setup, beforeCleanup } from "./helpers.ts";
 
 const home = setup("pause-http");
 const rulesFile = join(home, "rules.json");
@@ -17,7 +17,10 @@ fixture.elsewhere.push({ ...fixture.elsewhere[0], name: "会问的清理", cwd: 
 writeFileSync(rulesFile, JSON.stringify(fixture));
 process.env.AGENT_AUTOLOOP_RULES = rulesFile;
 const { serve } = await import("../host/http.ts");
-const { addKey } = await import("../host/runtime.ts");
+const { addKey, db } = await import("../host/runtime.ts");
+beforeCleanup.push(() => {
+  if (db.isOpen) db.close();
+});
 
 const owner = addKey("owner", "owner");
 const worker = addKey("worker", "w1");

@@ -62,7 +62,7 @@ test("without a file it checks the installed rules; a bad or missing file fails 
   const installed = join(home, "installed");
   const plain = cli({ AGENT_AUTOLOOP_HOME: installed }, "check");
   assert.equal(plain.status, 1);
-  assert.match(plain.stderr, new RegExp(`读不到 ${join(installed, "rules.json")}`));
+  assert.ok(plain.stderr.includes(`读不到 ${join(installed, "rules.json")}`));
   const bad = JSON.parse(fixture);
   bad.rules[0].colour = "red";
   const badFile = join(home, "bad.json");
