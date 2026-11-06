@@ -147,8 +147,16 @@ export function cardByToken(token: string) {
 export const view = (card: Row, ref: string | null = null, links = false) =>
   query.cardView(card, environment, ref, links);
 export const unrouted = (limit = 20) => query.unrouted(getView(), limit);
-export const stateOf = (now = Date.now(), before?: number) =>
-  state(now, before, query.configuration(getView()), { all, view, unrouted });
+/** Read in one snapshot: its seq is where the log stood for all of it, for a client to go on in /v1/stream from. */
+export function stateOf(now = Date.now(), before?: number) {
+  db.exec("BEGIN");
+  try {
+    const latest = getView();
+    return { seq: latest.seq, ...state(now, before, query.configuration(latest), { all, view, unrouted }) };
+  } finally {
+    db.exec("COMMIT");
+  }
+}
 
 export type KeyKind = "source" | "worker" | "channel" | "owner";
 export const keepKeyHash = (kind: KeyKind, name: string, hash: string, now = Date.now()) =>

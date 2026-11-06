@@ -129,8 +129,9 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     timezone: rules.timezone,
     spending: spendingOf(all, now, rules.timezone),
     totals: { ...tally(counts), attention: openCards.length },
-    cards: openCards.map((card) => view(card)),
-    recentCards: recentCards.map((card) => view(card)),
+    // The owner's own: which matter a card is about, and what its asker left for whoever carries on. Channels don't get them.
+    cards: openCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
+    recentCards: recentCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
     timers: timers.map(({ rule, lane, key, about, at }) => ({ rule, lane, key, about, at })),
     sources: Object.entries(rules.sources).map(([id, { name }]) => {
       const events = all<Row>("SELECT COUNT(*) AS n FROM events WHERE source = ?", [id])[0].n as number;
