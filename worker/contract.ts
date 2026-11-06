@@ -18,7 +18,13 @@ function describeEvent({ sourceName, type, subject, link }: Job["context"]["even
 }
 
 export function promptFor(job: Job, contextFile: string) {
-  const { rule, context, askFirst } = job;
+  const { rule, context, askFirst, session } = job;
+  // A session carried on has the skill it read before in its history, and goes by that copy unless told it may be stale.
+  const skill = !rule.skill
+    ? ""
+    : session
+      ? `重新加载 Skill ${rule.skill}：它可能改过，照现在的版本做。`
+      : `加载 Skill ${rule.skill}。`;
   const happened = unique(context.events.map(describeEvent));
   const emits = rule.emits
     ? `,\n "events":[{"id":"这件事的固定编号","type":"${rule.emits.types.join(" 或 ")}",` +
@@ -28,7 +34,7 @@ export function promptFor(job: Job, contextFile: string) {
     `Agent 自动化中台按规则「${rule.name}」把这件活派给你。发生了：`,
     ...(happened.length ? happened : ["- 定时到了"]),
     "",
-    [rule.skill ? `加载 Skill ${rule.skill}。` : "", rule.prompt ?? ""].join("").trim(),
+    [skill, rule.prompt ?? ""].join("").trim(),
     "",
     `这一轮的资料在 ${contextFile}：events 是事件的详情，answers 是人对你之前的问题的回答，` +
       "timers 是这一轮到期的复查，waiting 是这件事还没到期的复查，open 是同一组还没收尾的卡片，" +

@@ -3,7 +3,8 @@
 // couldn't work, or that there was nothing to do, is taken as work done; a heading or a receipt ends up in the summary; a
 // receipt that doesn't parse, has unknown fields or breaks the protocol's limits is applied rather than sent back to be
 // rewritten; the receipt isn't found when the message says something after it, or a code block of another kind is taken for
-// one; a result longer than the hub takes is sent as it is; a browser/login block is reported as retryable failure.
+// one; a result longer than the hub takes is sent as it is; a browser/login block is reported as retryable failure; a session
+// carried on keeps to the copy of its skill it read before, though the skill has changed since.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "../worker/contract.ts";
@@ -86,6 +87,13 @@ test("the prompt mentions what this run is carrying on, and what it may emit", (
   assert.match(text, /timers/);
   assert.match(text, /"events"/);
   assert.match(text, /feedback\.new/);
+});
+
+test("a session carried on reads its skill again, as it may have changed", () => {
+  assert.doesNotMatch(promptFor(job() as any, "/tmp/ctx.json"), /重新/);
+  const text = promptFor(job({ session: "s1" }) as any, "/tmp/ctx.json");
+  assert.match(text, /重新加载 Skill handle-notes/);
+  assert.match(text, /改过/);
 });
 
 test("a block needing the owner is handed off without restarting completed work", () => {
