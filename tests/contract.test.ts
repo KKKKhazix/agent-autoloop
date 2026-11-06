@@ -3,8 +3,9 @@
 // couldn't work, or that there was nothing to do, is taken as work done; a heading or a receipt ends up in the summary; a
 // receipt that doesn't parse, has unknown fields or breaks the protocol's limits is applied rather than sent back to be
 // rewritten; the receipt isn't found when the message says something after it, or a code block of another kind is taken for
-// one; a result longer than the hub takes is sent as it is; a browser/login block is reported as retryable failure; a session
-// carried on keeps to the copy of its skill it read before, though the skill has changed since.
+// one; a code fence inside one of the receipt's strings cuts it short; a result longer than the hub takes is sent as it is;
+// a browser/login block is reported as retryable failure; a session carried on keeps to the copy of its skill it read
+// before, though the skill has changed since.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "../worker/contract.ts";
@@ -169,6 +170,30 @@ test("the receipt is the last code block of its kind, wherever it sits", () => {
     '做完了\n```agent-autoloop\n{"notice":[]}\n```\n改一下：\n```agent-autoloop\n{"later":[{"key":"k","cancel":true}]}\n```\n以上。';
   assert.deepEqual(readMessage(twice).receipt, { later: [{ key: "k", cancel: true }] });
   assert.equal(readMessage("```agent-autoloop\n{}\n```").summary, "");
+});
+
+test("a code fence inside the receipt's strings is part of the text, not where the receipt ends", () => {
+  const detail = "步骤：\n```sh\nls\n```\n```agent-autoloop\n{}\n```";
+  const events = [
+    { id: "issue-1", type: "issues.opened", subject: "#1", summary: "没有代码块", detail: "正文" },
+    { id: "issue-2", type: "issues.opened", subject: "#2", summary: "有代码块", detail },
+  ];
+  const watched = readMessage(`看了最近的 issue\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events })}\n\`\`\`\n`);
+  assert.equal(watched.problem, undefined);
+  assert.deepEqual(watched.receipt, { events });
+  const ask = [
+    { title: "要不要重启", text: "卡住了", options: ["重启", "不动"], about: "用：\n```bash\nrestart x\n```" },
+  ];
+  assert.deepEqual(readMessage(`要你定\n\`\`\`agent-autoloop\n${JSON.stringify({ ask }, null, 2)}\n\`\`\``).receipt, {
+    ask,
+  });
+  const unmarked = readMessage(
+    `完成计划\n\`\`\`json\n${JSON.stringify({ later: [{ key: "k", about: "跑 ```ls```" }] })}\n\`\`\``,
+  );
+  assert.match(unmarked.problem!, /agent-autoloop/);
+  const unclosed = readMessage('做完了\n```agent-autoloop\n{"notice":[{"title":"看","text":"这个"}]}```');
+  assert.equal(unclosed.receipt, undefined);
+  assert.match(unclosed.problem!, /单独/, "a receipt whose closing fence isn't on a line of its own is sent back");
 });
 
 test("a receipt that can't be read says why, and keeps how the run ended", () => {

@@ -9,8 +9,11 @@ import { parseResult, type Result } from "../protocol/validate.ts";
 const FAILED = ["没跑成", "FAILED"];
 const NOTHING = ["没事可做", "NOTHING"];
 const RECEIPT_FIELDS = ["ask", "notice", "resolve", "later", "events"];
-const BLOCK = /```agent-autoloop[ \t]*\r?\n([\s\S]*?)```/g;
-const JSON_BLOCK = /```json[ \t]*\r?\n([\s\S]*?)```/g;
+// A fence closes only on a line of its own. A JSON string can't hold a raw newline, so a ``` inside one, as in an issue
+// body carried in an event's detail, is never the end of the block.
+const BLOCK = /(?<=^|\n)[ \t]*```agent-autoloop[ \t]*\r?\n((?:[^\n]*\n)*?)[ \t]*```[ \t]*(?=\r?\n|$)/g;
+const JSON_BLOCK = /(?<=^|\n)[ \t]*```json[ \t]*\r?\n((?:[^\n]*\n)*?)[ \t]*```[ \t]*(?=\r?\n|$)/g;
+const OPENED = /(?<=^|\n)[ \t]*```agent-autoloop[ \t]*\r?\n/;
 const unique = <T>(items: T[]) => [...new Set(items)];
 
 function describeEvent({ sourceName, type, subject, link }: Job["context"]["events"][number]) {
@@ -112,6 +115,9 @@ export function readMessage(said: string): Message {
   if (failed) message = { outcome: "failed", error: rest(failed) || "没说原因" };
   else if (nothing) message = { outcome: "nothing", summary: rest(nothing) };
   const block = blocks.at(-1)?.[1];
+  if (block === undefined && OPENED.test(said)) {
+    return { ...message, problem: "回执的代码块没有结尾：结尾的 ``` 要单独占一行" };
+  }
   if (block === undefined) {
     const candidate = [...said.matchAll(JSON_BLOCK)].at(-1)?.[1];
     if (candidate !== undefined) {
