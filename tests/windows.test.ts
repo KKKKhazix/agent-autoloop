@@ -193,7 +193,7 @@ test("Windows init keeps its keys private even inside a shared directory", { ski
   );
   assert.equal(initialized.status, 0, initialized.stderr);
   const sids = powershell(
-    `(Get-Acl -LiteralPath ${psQuote(join(home, "master.key"))}).Access.IdentityReference | ForEach-Object { $_.Translate([Security.Principal.SecurityIdentifier]).Value }`,
+    `[IO.File]::GetAccessControl(${psQuote(join(home, "master.key"))}).Access.IdentityReference | ForEach-Object { $_.Translate([Security.Principal.SecurityIdentifier]).Value }`,
   );
   assert.ok(!sids.includes("S-1-1-0"), "Everyone can read the install's master key");
 });
