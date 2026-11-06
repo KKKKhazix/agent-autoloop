@@ -12,8 +12,7 @@ import {
   eventsOf,
   jobOf,
   openInScope,
-  pauseKey,
-  pausesOf,
+  pauseOf,
   sourceOf,
   waitingOn,
   workerOf,
@@ -226,7 +225,7 @@ function ingest(draft: Draft, source: string, given: unknown) {
     eventRule(rule) && rule.when.source === source && typeMatches(rule.when.types, event.type);
   const matched = tooDeep ? [] : draft.rules.rules.filter(takes);
   // A paused rule doesn't take the event, and nothing is kept back for it: the event is recorded as skipped for it.
-  const isPaused = (rule: Rule) => pausesOf(draft.view, rule, draft.now).length > 0;
+  const isPaused = (rule: Rule) => !!pauseOf(draft.view, rule, draft.now);
   const paused = matched.filter(isPaused).map((rule) => rule.name);
   const taking = matched.filter((rule) => !isPaused(rule));
   const id = recordEvent(
@@ -302,7 +301,7 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   // What was queued before a pause, or an answer that came in during one, waits for the resume.
   const unpaused = (name: string) => {
     const rule = ruleNamed(draft, name);
-    return !!rule && !pausesOf(draft.view, rule, draft.now).length;
+    return !!rule && !pauseOf(draft.view, rule, draft.now);
   };
   const claimable = (run: Row) =>
     run.state === "queued" &&
@@ -528,8 +527,8 @@ function tick(draft: Draft) {
   const { rules, timezone } = draft.rules;
   for (const pause of rows(draft.view, "pauses")) {
     if (pause.until === null || Date.parse(pause.until) > now) continue;
-    set(draft, "pauses", pauseKey(pause.kind, pause.name), null);
-    reopen(draft, pausedBy(draft, pause.kind, pause.name), Date.parse(pause.until));
+    set(draft, "pauses", pause.name, null);
+    reopen(draft, pause.name, Date.parse(pause.until));
   }
   for (const rule of rules) {
     if (eventRule(rule)) continue;
@@ -544,7 +543,7 @@ function tick(draft: Draft) {
     if (now < Date.parse(schedule.next_at)) continue;
     const slot = iso(latestBefore(cron, Date.parse(schedule.next_at), now, timezone));
     // Paused, the moment passes without a run, and the next one is the next one: a resume owes nothing.
-    if (pausesOf(draft.view, rule, now).length) {
+    if (pauseOf(draft.view, rule, now)) {
       put(draft, "schedules", rule.name, { next_at: nextAt(), skipped_at: slot });
       continue;
     }
@@ -565,22 +564,14 @@ function tick(draft: Draft) {
   sweep(draft);
 }
 
-/** The rules a pause covers: the one it names, or every rule that requires what it names. */
-function pausedBy(draft: Draft, kind: string, name: string) {
-  return kind === "rule"
-    ? draft.rules.rules.filter((rule) => rule.name === name)
-    : draft.rules.rules.filter((rule) => rule.requires?.includes(name));
-}
-
 /** A schedule whose next moment passed while paused starts again at the first moment from `from`, not with a backlog. */
-function reopen(draft: Draft, rules: Rule[], from: number) {
-  for (const rule of rules) {
-    if (eventRule(rule) || pausesOf(draft.view, rule, draft.now).length) continue;
-    const schedule = draft.view.get("schedules", rule.name);
-    if (!schedule || Date.parse(schedule.next_at) >= from) continue;
-    const next = nextRun(parseCron(cronOf(rule))!, from - 1, draft.rules.timezone);
-    put(draft, "schedules", rule.name, { next_at: iso(next!) });
-  }
+function reopen(draft: Draft, name: string, from: number) {
+  const rule = draft.rules.rules.find((rule) => rule.name === name);
+  if (!rule || eventRule(rule)) return;
+  const schedule = draft.view.get("schedules", rule.name);
+  if (!schedule || Date.parse(schedule.next_at) >= from) return;
+  const next = nextRun(parseCron(cronOf(rule))!, from - 1, draft.rules.timezone);
+  put(draft, "schedules", rule.name, { next_at: iso(next!) });
 }
 
 function knownRule(draft: Draft, name: string) {
@@ -604,56 +595,27 @@ function pauseFields(draft: Draft, given: Row) {
   return { reason: reason.trim(), until: until === null ? null : iso(ends) };
 }
 
-function pause(draft: Draft, kind: "rule" | "requires", name: string, by: string, given: Row) {
-  const fields = pauseFields(draft, given);
-  const key = pauseKey(kind, name);
-  const existing = draft.view.get("pauses", key);
-  const same = existing && existing.reason === fields.reason && existing.until === fields.until;
-  if (!same) put(draft, "pauses", key, { kind, name, by, since: existing?.since ?? draft.at, ...fields });
-  return !same;
-}
+const pauseView = ({ by, reason, since, until }: Row) => ({ by, reason, since, until });
 
-function resume(draft: Draft, kind: "rule" | "requires", name: string) {
-  const key = pauseKey(kind, name);
-  if (!draft.view.get("pauses", key)) return false;
-  set(draft, "pauses", key, null);
-  reopen(draft, pausedBy(draft, kind, name), draft.now);
-  return true;
-}
-
-const pauseView = (row: Row) => {
-  const { kind, name, by, reason, since, until } = row;
-  return { kind, name, by, reason, since, until };
-};
-const stillPaused = (draft: Draft, rules: Rule[]) =>
-  rules.filter((rule) => pausesOf(draft.view, rule, draft.now).length).map((rule) => rule.name);
-
-/** Owner actions on one rule or on every rule that requires something. They are facts in the log, not edits to rules.json. */
+/** Owner actions on one rule. They are facts in the log, not edits to rules.json. */
 const CONTROL = {
   pauseRule(draft: Draft, name: string, by: string, given: Row) {
     knownRule(draft, name);
-    const changed = pause(draft, "rule", name, by, given);
-    return { changed, rule: name, paused: pausesOf(draft.view, ruleNamed(draft, name)!, draft.now).map(pauseView) };
+    const fields = pauseFields(draft, given);
+    const existing = draft.view.get("pauses", name);
+    const same = existing && existing.reason === fields.reason && existing.until === fields.until;
+    if (!same) put(draft, "pauses", name, { name, by, since: existing?.since ?? draft.at, ...fields });
+    return { changed: !same, rule: name, paused: pauseView(draft.view.get("pauses", name)!) };
   },
   resumeRule(draft: Draft, name: string) {
-    const rule = draft.view.get("pauses", pauseKey("rule", name)) ? ruleNamed(draft, name) : knownRule(draft, name);
-    const changed = resume(draft, "rule", name);
-    // Still held by a capability pause: that one is lifted on its own.
-    return { changed, rule: name, paused: rule ? pausesOf(draft.view, rule, draft.now).map(pauseView) : [] };
-  },
-  pauseRequires(draft: Draft, name: string, by: string, given: Row) {
-    const rules = pausedBy(draft, "requires", name);
-    if (!rules.length) throw new NotFound(`没有规则写了 requires「${name}」`);
-    const changed = pause(draft, "requires", name, by, given);
-    return { changed, requires: name, rules: rules.map((rule) => rule.name) };
-  },
-  resumeRequires(draft: Draft, name: string) {
-    const rules = pausedBy(draft, "requires", name);
-    if (!rules.length && !draft.view.get("pauses", pauseKey("requires", name))) {
-      throw new NotFound(`没有规则写了 requires「${name}」`);
+    // A rule taken out of rules.json while paused can still have its pause lifted.
+    if (!draft.view.get("pauses", name)) {
+      knownRule(draft, name);
+      return { changed: false, rule: name };
     }
-    const changed = resume(draft, "requires", name);
-    return { changed, requires: name, rules: rules.map((rule) => rule.name), stillPaused: stillPaused(draft, rules) };
+    set(draft, "pauses", name, null);
+    reopen(draft, name, draft.now);
+    return { changed: true, rule: name };
   },
   /** One run now, through the usual queue, from an event of its own that says the owner asked for it. */
   runRule(draft: Draft, name: string, by: string, given: Row) {
@@ -663,11 +625,7 @@ const CONTROL = {
     if (typeof reason !== "string" || [...reason].length > PAUSE_REASON) {
       throw new InputError(`说明要是 ${PAUSE_REASON} 字以内的文字`);
     }
-    const paused = pausesOf(draft.view, rule, draft.now);
-    if (paused.length) {
-      const why = paused.map((row) => (row.kind === "rule" ? "这条规则" : `requires「${row.name}」`)).join("、");
-      throw new Conflict(`规则「${name}」暂停中（${why}），先恢复再手动运行`);
-    }
+    if (pauseOf(draft.view, rule, draft.now)) throw new Conflict(`规则「${name}」暂停中，先恢复再手动运行`);
     const source = eventRule(rule) ? rule.when.source : SCHEDULE;
     const event = { id: `manual:${draft.seq}`, type: "run.manual", subject, summary: `${by} 手动运行`, detail: reason };
     const eventId = recordEvent(draft, source, event, [name]);

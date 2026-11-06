@@ -40,7 +40,7 @@ export function deadlines(view: View, now: number) {
     if (scheduled(schedule.rule)) add("cron", schedule.rule, Date.parse(schedule.next_at));
   }
   for (const pause of rows(view, "pauses")) {
-    if (pause.until !== null) add("pause", `${pause.kind}:${pause.name}`, Date.parse(pause.until));
+    if (pause.until !== null) add("pause", pause.name, Date.parse(pause.until));
   }
   for (const timer of rows(view, "timers", { event_id: null })) add("later", String(timer.id), Date.parse(timer.at));
   for (const run of rows(view, "runs", { state: "queued" })) {

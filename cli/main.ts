@@ -35,9 +35,7 @@ const HELP = `Agent 自动化中台
   agent-autoloop rules explain           按本机 rules.json 说明生效的规则、Agent、通道和下次定时
   agent-autoloop pause <规则> [--reason 原因] [--until 时间]
                                     暂停一条规则：到点不跑、来事件不接，直到恢复
-  agent-autoloop pause --requires <能力> [--reason 原因] [--until 时间]
-                                    暂停写了 requires 这项能力的所有规则
-  agent-autoloop resume <规则> | --requires <能力>
+  agent-autoloop resume <规则>
                                     恢复；错过的时段不补跑
   agent-autoloop run <规则> [--subject 对象] [--reason 说明]
                                     立即运行一轮，照常排队派活
@@ -128,13 +126,13 @@ rules.json 里这个定时任务要写 cwd；你答了，中台叫醒它的 Agen
   },
   mcp: { flags: [], usage: "用法：agent-autoloop mcp" },
   pause: {
-    flags: ["requires", "reason", "until"],
-    usage: "用法：agent-autoloop pause <规则> | --requires <能力> [--reason 原因] [--until 时间]",
+    flags: ["reason", "until"],
+    usage: "用法：agent-autoloop pause <规则> [--reason 原因] [--until 时间]",
   },
   // Only its first word is read as anything: the rest is a result in someone's own words, dashes and all.
   resolve: { flags: [], usage: "用法：agent-autoloop resolve <卡片> <结果>" },
   restore: { flags: ["yes"], usage: RESTORE_USAGE },
-  resume: { flags: ["requires"], usage: "用法：agent-autoloop resume <规则> | --requires <能力>" },
+  resume: { flags: [], usage: "用法：agent-autoloop resume <规则>" },
   rules: { flags: [], usage: "用法：agent-autoloop rules explain" },
   run: { flags: ["subject", "reason"], usage: "用法：agent-autoloop run <规则> [--subject 对象] [--reason 说明]" },
   service: { flags: [], usage: "用法：agent-autoloop service install|remove" },
@@ -424,9 +422,9 @@ async function status(named: Flags) {
   console.log(`${spendLine(state.spending)}\n`);
   for (const agent of state.agents) console.log(`${agent.online ? "●" : "○"} ${agent.name}（${agent.worker}）`);
   for (const channel of state.channels) console.log(`${channel.online ? "●" : "○"} ${channel.name}`);
-  const paused = state.lines.filter((line: { paused?: unknown[] }) => line.paused?.length);
+  const paused = state.lines.filter((line: { paused?: unknown }) => line.paused);
   if (paused.length) console.log("\n暂停中（恢复：agent-autoloop resume <规则>）");
-  for (const line of paused) console.log(`  ${line.name}：${pausedWords(line.paused)}`);
+  for (const line of paused) console.log(`  ${line.name}${line.paused.reason ? `：${line.paused.reason}` : ""}`);
   for (const card of state.cards) {
     showCard(card);
     console.log(howToAnswer(card));
@@ -479,39 +477,22 @@ async function resolve(args: string[]) {
   console.log(changed ? "结案了。" : "这张卡片已经处理过了，这次没有改动。");
 }
 
-const pausedWords = (paused: { kind: string; name: string; reason: string }[]) =>
-  paused
-    .map((p) => `${p.kind === "rule" ? "单独暂停" : `能力 ${p.name} 暂停`}${p.reason ? `：${p.reason}` : ""}`)
-    .join("；");
-
 async function pause(args: string[]) {
   const { named, rest } = flags(args);
   const body = {
     ...(text(named.reason) && { reason: text(named.reason) }),
     ...(text(named.until) && { until: text(named.until) }),
   };
-  const capability = text(named.requires);
-  if (capability) {
-    const done = await ownerClient().pauseRequires(capability, body);
-    return console.log(`${done.changed ? "暂停了" : "本来就暂停着"}：${done.rules.join("、")}`);
-  }
   if (!rest[0]) return fail(TAKES.pause.usage);
   const done = await ownerClient().pause(rest[0], body);
   console.log(done.changed ? `暂停了「${done.rule}」。` : `「${done.rule}」本来就暂停着。`);
 }
 
 async function resume(args: string[]) {
-  const { named, rest } = flags(args);
-  const capability = text(named.requires);
-  if (capability) {
-    const done = await ownerClient().resumeRequires(capability);
-    const still = done.stillPaused.length ? `；还暂停着（单独暂停或别的能力）：${done.stillPaused.join("、")}` : "";
-    return console.log(`${done.changed ? "恢复了" : "本来就没暂停"}能力 ${capability}${still}`);
-  }
+  const { rest } = flags(args);
   if (!rest[0]) return fail(TAKES.resume.usage);
   const done = await ownerClient().resume(rest[0]);
-  const still = done.paused.length ? `，但还暂停着：${pausedWords(done.paused)}` : "";
-  console.log(`${done.changed ? `恢复了「${done.rule}」` : `「${done.rule}」本来就没单独暂停`}${still}。`);
+  console.log(done.changed ? `恢复了「${done.rule}」。` : `「${done.rule}」本来就没暂停。`);
 }
 
 async function runNow(args: string[]) {

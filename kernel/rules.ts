@@ -9,13 +9,7 @@ export type Tell = "always" | "needed" | "never";
 type EventFilter = { source: string; types: string[] };
 type When = EventFilter | { cron: string };
 type RuleWords = { skill?: string; prompt?: string };
-/** requires names what a rule depends on, say "egress", so the owner can pause every rule that needs it at once. */
-type RuleOptions = RuleWords & {
-  parallel?: number;
-  resume?: boolean;
-  emits?: EventFilter;
-  requires?: string[];
-};
+type RuleOptions = RuleWords & { parallel?: number; resume?: boolean; emits?: EventFilter };
 /** Without channels a rule's cards reach every channel; with them, only those. */
 type Reach = { channels?: string[] };
 /** Without parallel a rule's group runs one at a time; with it, each subject is its own thread, that many at once. */

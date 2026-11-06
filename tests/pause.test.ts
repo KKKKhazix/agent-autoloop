@@ -4,20 +4,13 @@
 // event, or loses the record that it skipped it; another rule matching the same event is held back too; a run queued
 // before the pause, or an answer that came during it, is handed out while paused or lost; a pause is forgotten when the
 // projection is rebuilt from the log; running now doesn't go through the queue, isn't marked as the owner's, waits out a
-// retry backoff, or runs a paused rule; an unknown rule is accepted; a capability pause doesn't cover every rule that
-// requires it, takes more than one fact, or its resume lifts a rule's own pause.
+// retry backoff, or runs a paused rule; an unknown rule is accepted; pausing again with nothing new adds a fact or
+// restarts the pause's clock.
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
 
-const home = setup("pause");
-const rulesFile = join(home, "rules.json");
-const fixture = JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_RULES!, "utf8"));
-for (const rule of fixture.rules) if (["意见", "巡检"].includes(rule.name)) rule.requires = ["egress"];
-writeFileSync(rulesFile, JSON.stringify(fixture));
-process.env.AGENT_AUTOLOOP_RULES = rulesFile;
+setup("pause");
 const { execute, getView, tick, ingest, claimNext, heartbeat, finish, stateOf, logAfter, db } =
   await import("./hub.ts");
 const { rebuild } = await import("../kernel/store.ts");
@@ -46,18 +39,14 @@ test("a paused schedule lets its moments pass, and a resume runs only the next o
   assert.deepEqual(ticks(), [], "nothing ran while paused");
   assert.deepEqual(runsOf("巡检"), []);
   const shown = line("巡检", at(11));
-  assert.deepEqual(
-    shown.paused.map((p: any) => [p.kind, p.name, p.by, p.reason, p.until]),
-    [["rule", "巡检", "owner", "上游在修", null]],
-  );
+  assert.deepEqual([shown.paused?.by, shown.paused?.reason, shown.paused?.until], ["owner", "上游在修", null]);
   assert.equal(shown.skippedAt, "2026-10-18T02:10:00.000Z");
-  assert.deepEqual(shown.requires, ["egress"]);
   assert.equal(resume("巡检", at(12)).changed, true);
   tick(at(12));
   assert.deepEqual(ticks(), [], "no moment from the pause is owed");
   tick(at(15));
   assert.deepEqual(ticks(), ["巡检@2026-10-18T02:15:00.000Z"]);
-  assert.deepEqual(line("巡检", at(16)).paused, []);
+  assert.equal(line("巡检", at(16)).paused, null);
 });
 
 test("a hub asleep through the whole pause owes nothing for it on resume", () => {
@@ -176,36 +165,16 @@ test("running now doesn't wait out a retry, and isn't for a paused or unknown ru
   resume("早报", at(6));
 });
 
-test("a capability pause covers every rule that requires it, in one fact, and keeps apart from a rule's own", () => {
+test("pausing again with nothing new adds no fact and keeps when it started", () => {
   clean();
-  tick(at(0));
+  const first = pause("意见", { reason: "先停" }, at(1));
   const before = logAfter().length;
-  const paused = execute("pauseRequires", ["egress", "owner", { reason: "出口断了" }], at(1));
-  assert.deepEqual(paused.rules.sort(), ["巡检", "意见"].sort());
-  assert.equal(logAfter().length, before + 1, "one fact for the lot");
-  assert.equal(logAfter().at(-1)!.type, "pauseRequires");
-  pause("意见", { reason: "单独停" }, at(2));
-  assert.deepEqual(ingest("app", { id: "f2", type: "feedback.new" }, at(3)).paused, ["意见"]);
-  tick(at(5));
-  assert.deepEqual(ticks(), []);
-  const state = stateOf(at(6));
-  const egress = state.pauses.find((p: any) => p.kind === "requires")!;
-  assert.deepEqual([egress.name, egress.reason, egress.rules.sort()], ["egress", "出口断了", ["巡检", "意见"].sort()]);
-  assert.deepEqual(
-    state.lines
-      .find((l: any) => l.name === "意见")!
-      .paused.map((p: any) => p.kind)
-      .sort(),
-    ["requires", "rule"],
-  );
-  const lifted = execute("resumeRequires", ["egress"], at(7));
-  assert.deepEqual([lifted.changed, lifted.stillPaused], [true, ["意见"]]);
-  tick(at(10));
-  assert.deepEqual(ticks(), ["巡检@2026-10-18T02:10:00.000Z"], "only the next moment after the lift");
-  assert.deepEqual(ingest("app", { id: "f3", type: "feedback.new" }, at(11)).paused, ["意见"], "its own pause holds");
-  assert.deepEqual(resume("意见", at(12)).paused, []);
-  assert.throws(() => execute("pauseRequires", ["nothing", "owner", {}], at(13)), /没有规则写了 requires「nothing」/);
-  assert.equal(execute("resumeRequires", ["egress"], at(13)).changed, false, "lifting twice changes nothing");
+  assert.equal(pause("意见", { reason: "先停" }, at(2)).changed, false);
+  assert.equal(logAfter().length, before, "nothing new, nothing written");
+  const moved = pause("意见", { reason: "还在修" }, at(3));
+  assert.deepEqual([moved.changed, moved.paused.reason, moved.paused.since], [true, "还在修", first.paused.since]);
+  assert.equal(resume("意见", at(4)).changed, true);
+  assert.equal(resume("意见", at(5)).changed, false, "lifting twice changes nothing");
 });
 
 // Last: a rebuild replays the whole log, including what the fixture resets above only cleared from the projection.
@@ -214,5 +183,5 @@ test("a pause survives the projection being rebuilt from the log", () => {
   rebuild(db, "throwaway");
   getView();
   assert.deepEqual(ingest("app", { id: "after-rebuild", type: "feedback.new" }, at(31)).paused, ["意见"]);
-  assert.equal(line("意见", at(32)).paused[0].reason, "重启后也停着");
+  assert.equal(line("意见", at(32)).paused?.reason, "重启后也停着");
 });

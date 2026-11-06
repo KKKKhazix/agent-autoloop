@@ -182,7 +182,7 @@ export function keyOf(table: Table, row: Row): string {
   if (table === "schedules") return row.rule;
   if (table === "seen" || table === "keys") return `${row.kind}:${row.name}`;
   if (table === "due") return `${row.kind}:${row.key}`;
-  if (table === "pauses") return `${row.kind}:${row.name}`;
+  if (table === "pauses") return row.name;
   return "rules";
 }
 export function empty(db = new DatabaseSync(":memory:")) {
