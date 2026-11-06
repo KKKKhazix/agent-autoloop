@@ -45,7 +45,7 @@ const folder = () => {
 const privateMode = (file: string, expected: number) => {
   if (process.platform !== "win32") return assert.equal(statSync(file).mode & 0o777, expected);
   const allowed = powershell(
-    `$acl = Get-Acl -LiteralPath ${psQuote(file)}; ($acl.Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }) -join ','`,
+    `$acl = [IO.${statSync(file).isDirectory() ? "Directory" : "File"}]::GetAccessControl(${psQuote(file)}); ($acl.Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }) -join ','`,
   ).split(",");
   const owner = powershell("[Security.Principal.WindowsIdentity]::GetCurrent().User.Value");
   assert.ok(allowed.length && allowed.every((sid) => sid === owner || sid === "S-1-5-18"), allowed.join(","));
