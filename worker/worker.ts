@@ -142,6 +142,7 @@ function signal(entry: Entry, name: NodeJS.Signals) {
 /** Whether anything in the run's group is still going, null when we could not look. */
 function groupAlive(entry: Entry): boolean | null {
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
+  if (!entry.pid) return false;
   try {
     return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
       .trim()
@@ -151,7 +152,14 @@ function groupAlive(entry: Entry): boolean | null {
         return Number(group) === entry.pid && !state.startsWith("Z");
       });
   } catch {
-    return null;
+    // ps itself may be missing or blocked in a sandbox. This group was started here, so it can be asked about
+    // directly: no such group is gone, anything else means it couldn't be looked at.
+    try {
+      process.kill(-entry.pid, 0);
+      return true;
+    } catch (failure) {
+      return (failure as NodeJS.ErrnoException).code === "ESRCH" ? false : null;
+    }
   }
 }
 
@@ -401,11 +409,23 @@ export function createWorker({
     const exitCode = () => (existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
     if (entry.stopping !== undefined) {
       const going = groupAlive(entry);
-      if (going !== false) {
-        const overdue = now() - entry.stopping > STOP_GRACE;
+      const overdue = now() - entry.stopping > STOP_GRACE;
+      if (going === true) {
         if (overdue) signal(entry, "SIGKILL");
-        // Unable to look, the kill is the last we can know of it; waiting to see it gone would hold the run forever.
-        if (going || !overdue) return;
+        return;
+      }
+      if (going === null) {
+        // The forced kill is the last thing that can be done to it, and whether it worked can't be seen.
+        if (!overdue) return;
+        signal(entry, "SIGKILL");
+        // A turn that was over, or a timeout, ends on what it said: `failed` there is tried again, redoing work done.
+        if (entry.why !== "cancel") return conclude(entry, adapter, exitCode());
+        // Reporting `cancelled` would release the item while a process may still be in it, which the protocol forbids
+        // (docs/protocol.md: 确认组内没有活进程后才交 cancelled). A cancelled run's `failed` isn't tried again.
+        return endWith(entry, {
+          outcome: "failed",
+          error: "停止信号发出后没能确认进程组已结束：这一轮按没跑成记，不再重试，进程可能还在。",
+        });
       }
       return conclude(entry, adapter, exitCode());
     }

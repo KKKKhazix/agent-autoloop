@@ -4,7 +4,7 @@
 
 | 模板 | 已经演示了什么 | 你要替换什么 |
 |---|---|---|
-| [Agent 模板](../examples/plugins/hello-agent/agent.ts) | 用 `echo` 模拟执行，读取输出与会话编号 | 新 Agent 的启动命令和输出解析 |
+| [Agent 模板](../examples/plugins/hello-agent/agent.ts) | 用 `printf` 模拟执行，读取输出、会话编号和「收下了提示词」 | 新 Agent 的启动命令和输出解析 |
 | [通道模板](../examples/plugins/hello-channel/channel.ts) | 领卡片、写到文件、报告送达；通过命令行回答 | 目标平台的发送、更新和回答回调 |
 | [事件插件模板](../examples/plugins/hello-source/source.ts) | 验证 HMAC-SHA256 签名，把模拟订单转换成事件 | 业务系统的验签方式和字段映射 |
 
@@ -24,7 +24,7 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 
 ## Agent 插件
 
-从 [hello-agent/agent.ts](../examples/plugins/hello-agent/agent.ts) 开始。它用 `echo` 代替模型，克隆到别处也能运行。
+从 [hello-agent/agent.ts](../examples/plugins/hello-agent/agent.ts) 开始。它用 `printf` 代替模型，克隆到别处也能运行。收下提示词和结束时各打一行，`read` 从第一行就知道这一轮接上了原会话，第二行是它的最后一条消息。
 
 | 导出对象的方法 | 作用 |
 |---|---|
