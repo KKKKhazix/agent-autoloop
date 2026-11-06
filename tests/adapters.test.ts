@@ -8,7 +8,8 @@
 // turn that won't exit; the raw messages of a broken Claude run become the reason it failed. A line of output that's JSON
 // but no message, like `null`, stops a plugin reading anything. A command line's placeholder pass rewrites the prompt
 // itself — a `{cwd}` or a `$&` the person wrote arrives as the folder or as `{prompt}` — so the program is asked
-// something other than what the event said.
+// something other than what the event said. A built-in agent starts the program it finds, not the one its rules name,
+// so a wrapper that sends Claude Code to another service is never run.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,6 +54,14 @@ const stubbed = (adapter: Adapter, t: object) => {
     return null;
   }
 };
+
+test("a built-in agent starts the program its rules name, with its own arguments after it", () => {
+  for (const adapter of [claude, codex, dsh]) {
+    const argv = adapter.command({ ...turn, program: "/opt/bin/via-gateway" });
+    assert.equal(argv[0], "/opt/bin/via-gateway");
+    assert.ok(argv.includes("做这件事") || argv.some((part) => part.includes("做这件事")), "the prompt still goes in");
+  }
+});
 
 test("Claude Code: access, new and going on, model", { skip: !stubbed(claude, {}) }, () => {
   const argv = stubbed(claude, {})!;

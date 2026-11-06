@@ -234,6 +234,7 @@ export function createWorker({
       effort: agent.effort,
       access: agent.access as Turn["access"],
       command: agent.command,
+      program: agent.program,
       contextFile: path.join(entry.dir, "context.json"),
       folder: entry.dir,
     };

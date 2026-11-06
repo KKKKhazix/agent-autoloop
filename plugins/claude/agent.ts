@@ -26,7 +26,7 @@ export function inTheApp() {
 
 export default {
   command: (turn) => [
-    findProgram("claude", inTheApp),
+    turn.program ?? findProgram("claude", inTheApp),
     "-p",
     turn.prompt,
     ...(turn.resume ? ["--resume", turn.resume] : ["--session-id", turn.session]),
@@ -88,9 +88,9 @@ export default {
     return { text: said, ...known, usage, sessionUsage, finished: true };
   },
   link: (session) => `claude://resume?session=${session}`,
-  check() {
+  check(given) {
     try {
-      const program = findProgram("claude", inTheApp);
+      const program = given ?? findProgram("claude", inTheApp);
       const status = JSON.parse(
         execFileSync(...commandLine([program, "auth", "status"]), { encoding: "utf8", timeout: 20_000 }),
       );

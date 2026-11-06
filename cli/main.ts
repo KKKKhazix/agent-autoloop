@@ -554,7 +554,7 @@ async function doctor() {
         if (agent.worker === config.worker?.name) {
           const { adapterFor } = await import("../worker/agents.ts");
           const problem = await adapterFor(agent.use).then(
-            (adapter) => adapter.check?.() ?? null,
+            (adapter) => adapter.check?.(agent.program) ?? null,
             (error) => String(error.message),
           );
           say(!problem, problem ?? `${agent.name} 可以用`);

@@ -21,6 +21,8 @@ export type Turn = {
   effort?: string;
   access: Access;
   command?: string[];
+  /** The program a built-in plugin starts instead of the one it finds: a wrapper that sets things up and runs it. */
+  program?: string;
   contextFile: string;
   folder: string;
 };
@@ -44,8 +46,8 @@ export type Adapter = {
   read(stdout: string, code: number | null, stderr: string): Reading;
   /** Where a person can open this session. */
   link?(session: string): string;
-  /** Whether it's installed and signed in: what's wrong, in words a person can act on, or nothing. */
-  check?(): string | null;
+  /** Whether it's installed and signed in, as `program` if its rules name one: what's wrong, in words a person can act on, or nothing. */
+  check?(program?: string): string | null;
 };
 
 const adapters = new Map<string, Adapter>();

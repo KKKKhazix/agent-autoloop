@@ -23,7 +23,7 @@ export default {
       [IO.File]::SetAccessControl($file, $acl)
     `);
     return [
-      findProgram("codex", () => IN_THE_APP),
+      turn.program ?? findProgram("codex", () => IN_THE_APP),
       "exec",
       ...(turn.resume ? ["resume"] : []),
       "--json",
@@ -81,9 +81,9 @@ export default {
     return reading;
   },
   link: (session) => `codex://threads/${session}`,
-  check() {
+  check(program) {
     try {
-      execFileSync(...commandLine([findProgram("codex", () => IN_THE_APP), "login", "status"]), {
+      execFileSync(...commandLine([program ?? findProgram("codex", () => IN_THE_APP), "login", "status"]), {
         encoding: "utf8",
         timeout: 20_000,
         stdio: ["ignore", "pipe", "pipe"],

@@ -52,6 +52,7 @@
       "model": "…",
       "effort": "high",
       "access": "edit",
+      "program": "…", // 可选：内置插件启动这个程序，代替自动找到的那个，比如设好环境变量再 exec claude 的脚本
     },
     "cursor": {
       "name": "Cursor",

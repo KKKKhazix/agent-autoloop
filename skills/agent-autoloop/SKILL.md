@@ -63,6 +63,12 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 `access` 默认 `edit`，专用插件翻译成对应 CLI 的权限；`command` 只传参数，不替任意程序限制权限，按该 CLI 文档配置。要完整权限、不审批的话写 `full`，先和用户说清楚。
 
+内置的 Claude Code、Codex、DeepSeek Harness 要走第三方网关、代理，或者启动前要先设好环境变量：写一个小脚本，设好变量再 `exec claude "$@"`（Codex、DSH 照此换成 `codex`、`dsh`），Agent 里写 `"program": "脚本的绝对路径"`。插件照旧解析输出、续接会话、统计用量，只是启动的是这个脚本；不用改成 `use: "command"`。令牌放在脚本读的文件里，不写进 `rules.json`。接单程序启动 Agent 前会去掉继承来的 `CLAUDE_CODE_*` 变量，要用的写在脚本里。`agent-autoloop doctor` 也用这个脚本检查登录。
+
+```json
+"deepseek": { "name": "Claude Code（DeepSeek）", "worker": "my-mac", "use": "claude", "program": "/Users/me/.agent-autoloop/bin/claude-deepseek.sh" }
+```
+
 第三方仓库根目录放 `agent.ts`、`channel.ts` 或 `source.ts`，用 `agent-autoloop add <git 地址>` 安装到 `~/.agent-autoloop/plugins/<仓库名>`。仓库名转成小写就是插件名，规则的 `use` 写它；只能有小写字母、数字和 `-`，不合要求的 `add` 会拒绝。同名本机插件优先于内置插件，不自动更新。插件是可信代码，先读再装。
 
 Windows 的 `cwd` 可写 `C:/code/project`、JSON 转义后的 `C:\\code\\project`、UNC 路径或 `~/code/project`，以接单电脑为准。`command` 支持可执行文件、PowerShell 脚本和 npm 的 JS 入口包装；其他 `.bat`/`.cmd` 请换成可执行文件或 `node script.js`。Windows 按 PATH 找程序，不加载 Unix 登录 shell。
