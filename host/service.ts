@@ -1,4 +1,5 @@
-// Login services: launchd on macOS, systemd on Linux, Task Scheduler on Windows.
+// Login services: launchd on macOS, systemd on Linux, Task Scheduler on Windows. Each starts the hub at login and again if
+// it stops.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -17,16 +18,24 @@ const label = () =>
 const plistFile = () => path.join(homedir(), "Library/LaunchAgents", `${label()}.plist`);
 const unitFile = () => path.join(homedir(), ".config/systemd/user", `${label()}.service`);
 const BACKGROUND = path.join(import.meta.dirname, "background.ts");
+const LAUNCHER = path.join(import.meta.dirname, "background.js");
 const windowsArgument = (word: string) => `"${word.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
 const task = () => `Get-ScheduledTask | Where-Object { $_.TaskName -eq ${psQuote(label())} -and $_.TaskPath -eq '\\' }`;
 
 function installWindowsService() {
   removeService();
   stopUp();
-  const args = ["--disable-warning=ExperimentalWarning", BACKGROUND, HOME].map(windowsArgument).join(" ");
+  // Started straight from the task, node gets a console window on the desktop, and the task doesn't start it again when it
+  // exits. wscript has no console: background.js starts the hub hidden and again when it stops.
+  const args = ["//B", "//Nologo", "//E:JScript"]
+    .concat(
+      [LAUNCHER, process.execPath, "--disable-warning=ExperimentalWarning", BACKGROUND, HOME].map(windowsArgument),
+    )
+    .join(" ");
   powershell(`
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $action = New-ScheduledTaskAction -Execute ${psQuote(process.execPath)} -Argument ${psQuote(args)} -WorkingDirectory ${psQuote(HOME)}
+    $wscript = Join-Path ([Environment]::SystemDirectory) 'wscript.exe'
+    $action = New-ScheduledTaskAction -Execute $wscript -Argument ${psQuote(args)} -WorkingDirectory ${psQuote(HOME)}
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
@@ -118,10 +127,14 @@ export function installService() {
 
 export function removeService() {
   if (process.platform === "win32") {
-    powershell(`$task = ${task()}; if ($task -and $task.Actions.Arguments.Contains(${psQuote(windowsArgument(BACKGROUND))})) {
+    const removed =
+      powershell(`$task = ${task()}; if ($task -and $task.Actions.Arguments.Contains(${psQuote(windowsArgument(BACKGROUND))})) {
       $task | Stop-ScheduledTask
       $task | Unregister-ScheduledTask -Confirm:$false
+      'removed'
     }`);
+    // Stopping the task ends wscript, not the hub it started, and nothing starts that again now.
+    if (removed === "removed") stopUp();
     return;
   }
   const file = process.platform === "darwin" ? plistFile() : unitFile();

@@ -9,7 +9,7 @@ import { hubClient } from "../protocol/client.ts";
 import { parseRules } from "../protocol/rules.ts";
 import { CONFIG_FILE, readConfig, writeConfig, type Config } from "../host/config.ts";
 import { HOME, RULES_FILE } from "../host/home.ts";
-import { psQuote } from "../host/command.ts";
+import { findOnPath, psQuote } from "../host/command.ts";
 import { privateDirectory } from "../host/files.ts";
 import { installService, removeService, restartService, serviceRunning, systemUnit } from "../host/service.ts";
 import { versionLine } from "../host/version.ts";
@@ -225,9 +225,7 @@ function linkSkill() {
 /** What to type to run this program: its name if that's what a shell finds, otherwise where it is. */
 function howToRun() {
   if (process.platform === "win32") {
-    const found = spawnSync("where.exe", ["agent-autoloop"], { encoding: "utf8", windowsHide: true })
-      .stdout?.trim()
-      .split(/\r?\n/)[0];
+    const found = findOnPath("agent-autoloop");
     if (found && realpathSync(found) === realpathSync(path.join(ROOT, "bin", "agent-autoloop.cmd")))
       return "agent-autoloop";
     return `& ${psQuote(process.execPath)} ${psQuote(PROGRAM)}`;

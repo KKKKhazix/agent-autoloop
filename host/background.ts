@@ -1,4 +1,5 @@
-// Task Scheduler keeps this process alive; output goes straight to files, without PowerShell changing its encoding.
+// The hub as the Windows login task runs it, through background.js: output goes straight to files, without PowerShell
+// changing its encoding, and the hub's exit is this one's, so background.js starts both again.
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";

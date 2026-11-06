@@ -3,16 +3,34 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+/**
+ * The file Windows runs for `name` from PATH, trying extensions in PATHEXT's order. Not where.exe: it prints in the console's
+ * code page, so a folder outside it (a Chinese user name) came back as a path that isn't there. The current folder isn't
+ * searched, so a project can't put its own program in place of the one installed.
+ */
+export function findOnPath(name: string, extensions = [".exe", ".com", ".cmd", ".bat", ".ps1"]) {
+  if (/[\\/]/.test(name)) return null;
+  const listed = (process.env.PATHEXT ?? "").toLowerCase().split(";");
+  const order = [
+    ...listed.filter((ext) => extensions.includes(ext)),
+    ...extensions.filter((ext) => !listed.includes(ext)),
+  ];
+  const names = [
+    ...(extensions.includes(path.extname(name).toLowerCase()) ? [name] : []),
+    ...order.map((ext) => name + ext),
+  ];
+  for (const entry of (process.env.PATH ?? "").split(";")) {
+    const folder = entry.trim().replace(/^"(.*)"$/, "$1");
+    if (!folder) continue;
+    for (const file of names.map((each) => path.join(folder, each))) if (existsSync(file)) return file;
+  }
+  return null;
+}
+
 export function commandLine(argv: string[]): [string, string[]] {
   if (process.platform !== "win32") return [argv[0], argv.slice(1)];
   let program = argv[0];
-  if (!path.isAbsolute(program)) {
-    program =
-      execFileSync("where.exe", [program], { encoding: "utf8", windowsHide: true })
-        .trim()
-        .split(/\r?\n/)
-        .find((file) => /\.(exe|com|cmd|bat|ps1)$/i.test(file)) ?? program;
-  }
+  if (!path.isAbsolute(program)) program = findOnPath(program) ?? program;
   if (/\.cmd$/i.test(program)) {
     const shim = readFileSync(program, "utf8");
     const entry = /"%(?:dp0%|~dp0)\\?([^"\r\n]+\.(?:[cm]?js))"\s+%\*/i.exec(shim);

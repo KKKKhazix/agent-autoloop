@@ -1,5 +1,6 @@
 // Failure modes: a native Windows install cannot launch an Agent; shell metacharacters alter its arguments; restarting
-// the worker loses a running turn or its answer; cancelling a turn leaves its child processes running.
+// the worker loses a running turn or its answer; cancelling a turn leaves its child processes running; a program in a
+// folder whose name the console code page can't write (a Chinese user name) isn't found, so nothing installs or runs.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,6 +13,9 @@ import { powershell, psQuote } from "../host/command.ts";
 const windows = process.platform === "win32";
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-windows-"));
 process.env.AGENT_AUTOLOOP_HOME = join(scratch, "安装 ' & % 目录");
+// init links its manual into the user's Agents' folders; tests give it a profile of its own.
+const person = join(scratch, "person");
+mkdirSync(person);
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const { createWorker } = await import("../worker/worker.ts");
 const waiting: any[] = [];
@@ -119,6 +123,56 @@ test("an npm command shim preserves a multiline prompt on Windows", { skip: !win
   assert.equal(readFileSync(join(process.env.AGENT_AUTOLOOP_HOME!, "worker/runs/3-1/stdout-1.log"), "utf8"), argument);
 });
 
+// where.exe prints in the console's code page; a Chinese folder name came back as a path that doesn't exist.
+test(
+  "an Agent on PATH under a folder the console code page can't write is found and runs",
+  { skip: !windows },
+  async () => {
+    const folder = join(scratch, "张三 的工具");
+    mkdirSync(folder);
+    writeFileSync(join(folder, "cjk-agent.js"), "process.stdout.write('ran: ' + process.argv[2]);");
+    writeFileSync(join(folder, "cjk-agent.cmd"), '@ECHO off\r\nnode "%~dp0\\cjk-agent.js" %*\r\n');
+    const path = process.env.PATH;
+    process.env.PATH = `${folder};${path}`;
+    try {
+      const { findProgram } = await import("../worker/agents.ts");
+      const found = findProgram("cjk-agent");
+      assert.ok(found && existsSync(found), `found ${found}`);
+      waiting.push(job(5, ["cjk-agent", "参数"]));
+      const running = worker();
+      await until(
+        () => results.has(5),
+        () => running.tick(),
+      );
+      assert.equal(results.get(5).outcome, "done", JSON.stringify(results.get(5)));
+      assert.equal(results.get(5).summary, "ran: 参数");
+    } finally {
+      process.env.PATH = path;
+    }
+  },
+);
+
+test(
+  "init finishes when PATH has an agent-autoloop under a folder the console code page can't write",
+  { skip: !windows },
+  () => {
+    const folder = join(scratch, "李四 的命令");
+    mkdirSync(folder);
+    writeFileSync(join(folder, "agent-autoloop.cmd"), "@ECHO off\r\n");
+    const home = join(scratch, "cjk init home");
+    const initialized = spawnSync(
+      process.execPath,
+      [join(import.meta.dirname, "../bin/agent-autoloop.ts"), "init", "--no-service", "--command", "node"],
+      {
+        env: { ...process.env, AGENT_AUTOLOOP_HOME: home, USERPROFILE: person, PATH: `${folder};${process.env.PATH}` },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(initialized.status, 0, initialized.stderr);
+    assert.match(initialized.stdout, /先运行/);
+  },
+);
+
 test("Windows ACP edit access rejects a sibling folder", { skip: !windows }, async () => {
   const { permission } = await import("../plugins/acp/bridge.ts");
   const answer = permission(
@@ -169,7 +223,7 @@ test("Windows init prints a working native command", { skip: !windows }, () => {
   const home = join(scratch, "init home");
   const cli = join(import.meta.dirname, "../bin/agent-autoloop.ts");
   const initialized = spawnSync(process.execPath, [cli, "init", "--no-service", "--command", "node"], {
-    env: { ...process.env, AGENT_AUTOLOOP_HOME: home },
+    env: { ...process.env, AGENT_AUTOLOOP_HOME: home, USERPROFILE: person },
     encoding: "utf8",
   });
   assert.equal(initialized.status, 0, initialized.stderr);
@@ -184,7 +238,7 @@ test("Windows init discovers Codex before a task has a context file", { skip: !w
   const initialized = spawnSync(
     process.execPath,
     [join(import.meta.dirname, "../bin/agent-autoloop.ts"), "init", "--no-service", "--agent", "codex"],
-    { env: { ...process.env, AGENT_AUTOLOOP_HOME: home }, encoding: "utf8" },
+    { env: { ...process.env, AGENT_AUTOLOOP_HOME: home, USERPROFILE: person }, encoding: "utf8" },
   );
   assert.equal(initialized.status, 0, initialized.stderr);
   const rules = JSON.parse(readFileSync(join(home, "rules.json"), "utf8"));
@@ -201,7 +255,7 @@ test("Windows init keeps its keys private even inside a shared directory", { ski
     process.execPath,
     [join(import.meta.dirname, "../bin/agent-autoloop.ts"), "init", "--no-service", "--command", "node"],
     {
-      env: { ...process.env, AGENT_AUTOLOOP_HOME: home },
+      env: { ...process.env, AGENT_AUTOLOOP_HOME: home, USERPROFILE: person },
       encoding: "utf8",
     },
   );

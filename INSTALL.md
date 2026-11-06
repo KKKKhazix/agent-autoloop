@@ -4,7 +4,7 @@
 
 ## 安装
 
-支持原生 Windows、macOS 和 Linux。需要 Node.js 24 或更新、Git，以及一个已经登录的命令行 Agent；macOS/Linux 还需要 curl。Windows 使用系统自带的 PowerShell 5.1 和任务计划程序。
+支持原生 Windows、macOS 和 Linux。需要 Node.js 24 或更新、Git，以及一个已经登录的命令行 Agent；macOS/Linux 还需要 curl。Windows 使用系统自带的 PowerShell 5.1、任务计划程序和 Windows Script Host（wscript）。
 
 Windows PowerShell：
 
@@ -12,7 +12,7 @@ Windows PowerShell：
 irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
 ```
 
-默认安装在 `$env:USERPROFILE\.agent-autoloop`，命令目录加入当前进程及用户 PATH。Windows 服务在本人登录后启动，注销后停止；通过 SSH 管理时也可用 `service install`，任务会在 Windows 已登录的会话中运行；Codex 0.167 的原生沙箱在 OpenSSH 会话中会出现 runner pipe-in 超时，本机登录会话正常，见 [Codex 已知问题](https://github.com/openai/codex/issues/37722)。CI 或普通命令测试用 `--no-service`，再运行安装器打印的完整命令启动 `up`。桌面通知只在同一登录会话显示。
+默认安装在 `$env:USERPROFILE\.agent-autoloop`，命令目录加入当前进程及用户 PATH。Windows 服务在本人登录后于后台常驻、不开窗口，退出 10 秒后自动重启，注销后停止；通过 SSH 管理时也可用 `service install`，任务会在 Windows 已登录的会话中运行；Codex 0.167 的原生沙箱在 OpenSSH 会话中会出现 runner pipe-in 超时，本机登录会话正常，见 [Codex 已知问题](https://github.com/openai/codex/issues/37722)。CI 或普通命令测试用 `--no-service`，再运行安装器打印的完整命令启动 `up`。桌面通知只在同一登录会话显示。
 
 本地仓库安装示例：
 
@@ -49,7 +49,7 @@ AGENT_AUTOLOOP_REPO=/path/to/agent-autoloop sh /path/to/agent-autoloop/install.s
 
 程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。macOS/Linux 的命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；没有位置时使用安装器打印的完整路径。
 
-安装器和中台启动时在 macOS/Linux 把数据目录设为 `0700`，Windows 则用 ACL 只允许本人和 SYSTEM 访问，包括已有目录，阻止其他系统用户读取数据库、事件和运行输出。Codex 的 Windows 专用沙箱账号仅额外获得每轮任务资料 `context.json` 的读权限，主密钥和轮次 token 仍不开放。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
+安装器和中台启动时在 macOS/Linux 把数据目录设为 `0700`，Windows 则用 ACL 只允许本人和 SYSTEM 访问，包括已有目录，阻止其他系统用户读取数据库、事件和运行输出。Codex 的 Windows 沙箱会给用户目录下的文件夹加上它的账号的读权限，数据目录也在内；中台启动时收回，在那之前沙箱里的命令能读到主密钥和配置里的密钥。插件另外给每轮的 `context.json` 加这个读权限。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
 
