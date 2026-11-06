@@ -76,7 +76,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 
 <!-- 内核核心职责 -->
 <rect class="duty" x="268" y="116" width="424" height="52" rx="10"/>
-<text x="480" y="139" class="cn" text-anchor="middle">按你的规则分派任务</text>
+<text x="480" y="139" class="cn" text-anchor="middle">按规则优先级分派任务</text>
 <text x="480" y="158" class="cd" text-anchor="middle">决定交给哪个 Agent、去哪个目录干 · 同一件事自动合并</text>
 
 <!-- 4 个内核机制标签 -->

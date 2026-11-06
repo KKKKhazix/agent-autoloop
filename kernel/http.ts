@@ -159,13 +159,18 @@ async function work(call: Call) {
   const worker = requireKey(call, "worker");
   const claim = url.searchParams.get("claim") ?? "";
   if (!claim || claim.length > 200) throw new InputError("claim 是这次领活的编号，最多 200 字");
+  const minimum = url.searchParams.get("minPriority");
+  if (minimum !== null && (!/^(0|[1-9][0-9]*)$/.test(minimum) || Number(minimum) > 100)) {
+    throw new InputError("minPriority 要是 0 到 100 的整数");
+  }
+  const minPriority = Number(minimum ?? 0);
   const running = (url.searchParams.get("running") ?? "").split(",").filter((id) => POSITIVE_ID.test(id));
   act(call, "heartbeat", worker, running.map(Number));
   const until = waitUntil(call);
   for (;;) {
     if (!whose(services.view(), "worker", token)) throw new AuthError("密钥已失效");
     const wantsWork = !request.signal.aborted && url.searchParams.get("capacity") !== "0";
-    const job = wantsWork ? act(call, "claimNext", worker, claim) : null;
+    const job = wantsWork ? act(call, "claimNext", worker, claim, minPriority) : null;
     const cancel = cancels(services.view(), worker);
     if (job || cancel.length || services.now() >= until || request.signal.aborted) return json({ job, cancel });
     await services.wait(until, request.signal);

@@ -458,6 +458,11 @@
               },
               "required": ["source", "types"],
               "additionalProperties": true
+            },
+            "priority": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
             }
           },
           "required": ["name", "cwd"],

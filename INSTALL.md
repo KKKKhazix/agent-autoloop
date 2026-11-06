@@ -98,3 +98,5 @@ agent-autoloop uninstall
 - [安全边界](SECURITY.md)：密钥、执行权限和交付审查。
 
 开发检查用 `npm run test:quick`（改了 `kernel/`、`protocol/`、`sim/` 时用 `npm test`）、`npm run typecheck`、`npm run format:check`，完整故障检查和性能实测用 `npm run test:nightly`。备份和恢复见[配置手册](skills/agent-autoloop/SKILL.md#日志与恢复)。`master.key` 坏了中台会拒绝启动：从备份恢复；没有备份就删掉它，重启会生成新的，已发出的卡片链接和正在跑的轮次会失效。
+
+需要本人问话不被耗时任务堵住时，在可信交互规则设 `"priority":100`，制作规则保持默认 0；本机 `config.json` 可配 `worker.capacity:5`、`worker.reservedCapacity:1`。后者是额外名额，普通任务不能占用。先升级中台，再启用新接单程序的预留配置并重启；不自动修改用户原有并发配置。详见[协议](docs/protocol.md#优先级与预留执行名额)。

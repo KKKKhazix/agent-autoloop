@@ -255,3 +255,5 @@ Start reading at `bin/agent-autoloop.ts` → `cli/main.ts`, then follow the feat
 </details>
 
 [MIT License](LICENSE)
+
+For responsive owner messages, set `"priority":100` on interactive rules and configure `worker.capacity:5` with `worker.reservedCapacity:1` in `config.json`. This adds one priority-only slot beyond five ordinary slots; background work cannot borrow it. Equal priorities remain FIFO; running jobs are not preempted. Upgrade the hub before enabling this on workers. See [priority and reserved slots](docs/protocol.md#优先级与预留执行名额).

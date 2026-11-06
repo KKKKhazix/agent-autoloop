@@ -253,3 +253,5 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 </details>
 
 [MIT License](LICENSE)
+
+本人问话需要及时响应时，可给交互规则设 `"priority":100`，并在 `config.json` 配置 `worker.capacity:5`、`worker.reservedCapacity:1`：五个普通名额外再留一个高优先级名额，普通任务不能占用。同优先级仍按先后领取，不中断在跑任务；需先升级中台和接单程序，详见[优先级与预留执行名额](docs/protocol.md#优先级与预留执行名额)。

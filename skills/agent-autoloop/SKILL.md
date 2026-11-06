@@ -27,6 +27,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 ```
 
 - 同一个对象的事件要分开处理、互不等待，就写 `parallel`。一台接单程序同时跑几轮还受 `config.json` 的 `worker.capacity` 限制，默认 2，要多跑就一起调大。
+- 本人问话要优先响应时，交互规则设 `"priority":100`，普通规则保持 0；`worker.reservedCapacity` 额外预留正优先级名额，普通任务不能借用。例如 capacity=5、reservedCapacity=1 最多同时跑 6 轮。先升级中台再升级接单程序启用；不抢占已在跑的任务，也不越过同事项串行约束。
 - 同一个对象的新事件要接着上一轮的会话（比如同一个对话的后续消息），就写 `"resume": true`；默认每次开新会话。上一轮被停掉、可能还在跑或者换了 Agent 时开新的。不写 `parallel` 时整条规则的事件都接同一个会话。
 - 要停一条规则，用 `agent-autoloop pause <规则> --reason …`（到点自动恢复加 `--until`），恢复用 `resume <规则>`，现在就跑一轮用 `run <规则>`；不用为了停规则去改 `rules.json`。
 - 改规则前可以先写成草稿，用 `agent-autoloop check <草稿>` 校验，不影响正在跑的中台。

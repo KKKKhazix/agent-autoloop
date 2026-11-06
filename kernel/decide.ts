@@ -293,7 +293,7 @@ function sweep(draft: Draft) {
   }
 }
 
-function claimNext(draft: Draft, worker: string, claim: string) {
+function claimNext(draft: Draft, worker: string, claim: string, minPriority = 0) {
   const agents = agentsOf(draft.view, worker);
   const runs = rows(draft.view, "runs", { state: ["queued", "claimed"] });
   const claimed = runs.filter((run) => run.state === "claimed");
@@ -303,16 +303,18 @@ function claimNext(draft: Draft, worker: string, claim: string) {
     const rule = ruleNamed(draft, name);
     return !!rule && !pauseOf(draft.view, rule, draft.now);
   };
+  const priority = (run: Row) => ruleNamed(draft, run.rule)?.priority ?? 0;
   const claimable = (run: Row) =>
     run.state === "queued" &&
     agents.includes(ruleNamed(draft, run.rule)?.to ?? "") &&
+    priority(run) >= minPriority &&
     Date.parse(run.not_before) <= draft.now &&
     unpaused(run.rule) &&
     !claimed.some((other) => other.grp === run.grp && other.lane === run.lane) &&
     claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp);
   // The same claim again means the answer got lost: it gets back the run it already has.
   const held = claimed.find((run) => run.claim === claim && workerOf(draft.view, run) === worker);
-  const run = held ?? runs.find(claimable);
+  const run = held ?? runs.filter(claimable).sort((a, b) => priority(b) - priority(a) || a.id - b.id)[0];
   if (!run) return null;
   if (!held) {
     assignQueued(draft, run);

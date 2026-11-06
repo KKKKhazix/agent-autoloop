@@ -74,6 +74,8 @@ export type WorkerOptions = {
   hub: WorkerHub;
   name: string;
   capacity?: number;
+  /** Extra slots for positive-priority rules, never borrowed by ordinary work. */
+  reservedCapacity?: number;
   log?: (line: string) => void;
   /** Run when the hub can't be reached for ten minutes, with {text} in it: nothing else can tell the owner then. */
   unreachable?: string[];
@@ -183,11 +185,20 @@ export function createWorker({
   hub,
   name,
   capacity = 2,
+  reservedCapacity = 0,
   log = () => {},
   unreachable,
   wait = WAIT,
   now = Date.now,
 }: WorkerOptions) {
+  if (
+    !Number.isSafeInteger(capacity) ||
+    capacity < 1 ||
+    !Number.isSafeInteger(reservedCapacity) ||
+    reservedCapacity < 0
+  ) {
+    throw new Error("worker.capacity 要是正整数，reservedCapacity 要是非负整数");
+  }
   let claim = randomUUID();
   let unreachableSince: number | null = null;
   let told = false;
@@ -539,12 +550,17 @@ export function createWorker({
     await eachEntry(settle);
     const held = entries();
     let reachable = true;
+    // Positive-priority work uses the reserved allowance first. Remaining jobs share the ordinary slots.
+    const urgent = held.filter((entry) => (entry.job.rule.priority ?? 0) > 0).length;
+    const ordinary = held.length - Math.min(urgent, reservedCapacity);
+    const reservedOnly = ordinary >= capacity;
     try {
       const answer = await hub.work({
         claim,
         wait: held.length ? 1 : wait,
         running: held.map((entry) => entry.run),
-        capacity: held.length < capacity,
+        capacity: held.length < capacity + reservedCapacity,
+        ...(reservedCapacity > 0 && reservedOnly && { minPriority: 1 }),
       });
       for (const id of answer?.cancel ?? []) {
         const entry = held.find((entry) => entry.run === id);

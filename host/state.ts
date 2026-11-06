@@ -136,6 +136,7 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
       id: rule.name,
       name: rule.name,
       group: rule.group,
+      ...(rule.priority !== undefined && { priority: rule.priority }),
       agent: rule.to,
       source: eventRule(rule) ? rule.when.source : SCHEDULE,
       types: eventRule(rule) ? rule.when.types : [],
