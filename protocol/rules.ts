@@ -79,6 +79,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["resume", (value) => typeof value === "boolean", "只能是 true 或 false", true],
     ["tell", (value) => TELLS.includes(value as string), `只能是 ${TELLS.join("、")}`, true],
     ["emits", isObject, "要是一个对象", true],
+    ["channels", isSomeWords, "要是通道编号的列表", true],
   ]);
   if (isObject(when) && "source" in when) {
     checkFields(issues, `${where}的 when `, when, [
@@ -102,6 +103,9 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
       ["source", emittable, `不是已登记的来源：${rule.emits.source}`],
       ["types", isTypes, "要是事件类型的列表"],
     ]);
+  }
+  for (const channel of isSomeWords(rule.channels) ? (rule.channels as string[]) : []) {
+    if (!Object.hasOwn(rules.channels, channel)) issues.push(`${where}的 channels 不是已登记的通道：${channel}`);
   }
   rule.group ??= rule.name;
   rule.tell ??= "needed";

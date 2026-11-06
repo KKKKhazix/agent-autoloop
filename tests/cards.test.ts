@@ -15,6 +15,8 @@
 // in meanwhile loses the session of the answer in it, or has it wiped by what had none. A run with events from two
 // sources is given, or closes, cards that have no source. A channel that takes a card and never reports gets it for ever.
 // A card closed while its first message is on the way never gets that message updated.
+// A rule that lists its channels has its cards, and the notices of its runs, sent to others as well; one that lists none
+// stops reaching every channel; a notice of nobody's rule reaches only some.
 // Receipt FYIs must arrive closed without buttons, stay out of later open lists, and never wake work when clicked;
 // ordinary notices, questions, quiet rules, and the one-day FYI delivery window must keep their existing behavior.
 // The why timeline must show receipt FYIs without adding empty closures or repeating hub-generated end notices.
@@ -415,6 +417,26 @@ test("each channel gets each card once, and an update when its state changes; a 
     [id],
   )!;
   assert.deepEqual([row.version, row.ref], [2, "om_1"]);
+});
+
+test("a rule that lists channels has its cards go only there; one that lists none, or a notice of no rule, goes to all", () => {
+  clean();
+  underRules(
+    (rules) => {
+      rules.rules.find((rule: { name: string }) => rule.name === "意见").channels = ["plain"];
+    },
+    () => {
+      const { id } = asked(1);
+      assert.equal(nextCard("chat", at(1)), null, "chat isn't on the rule's list");
+      assert.equal(nextCard("plain", at(1))?.id, id);
+      tell("hub:test", "中台", "谁都该知道", at(2));
+      assert.ok(nextCard("chat", at(2)), "a notice of no rule still reaches every channel");
+    },
+  );
+  clean();
+  const { id } = asked(2);
+  assert.equal(nextCard("chat", at(1))?.id, id, "without a list, every channel gets it");
+  assert.equal(nextCard("plain", at(1))?.id, id);
 });
 
 test("a failed send is retried further and further apart, then given up within the hour; a channel that never came hasn't failed", () => {

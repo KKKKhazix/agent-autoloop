@@ -57,7 +57,8 @@
     "parallel": 3,                                         // 写了就按对象分事项：同一对象一次一轮，这一组最多 3 轮，还受接单程序的 worker.capacity 限制（默认 2）
     "resume": true,                                        // 同一事项的新事件接着上一轮的会话，默认每次开新会话
     "tell": "needed",                                      // always 每轮做成都发（没事可做、没跑成不发）/ needed 只在有卡片时（默认）/ never 只压住回执里的通知，提问和中台自己的告警照发
-    "emits": { "source": "shop", "types": ["pr.*"] }      // 回执里能发什么事件，不写就不能发
+    "emits": { "source": "shop", "types": ["pr.*"] },     // 回执里能发什么事件，不写就不能发
+    "channels": ["feishu"]                                 // 这条规则的卡片和通知只发到这几个通道，不写就发到所有通道
   }],
   "elsewhere": [{ "name": "每周清理", "source": "shop", "to": "claude", "cron": "0 6 * * 0", "where": "Claude 应用的定时任务" }]
 }
