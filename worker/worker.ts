@@ -415,11 +415,13 @@ export function createWorker({
         return;
       }
       if (going === null) {
-        // The forced kill is the last thing that can be done to it, and whether it worked can't be seen. Reporting
-        // `cancelled` would release the item while a process may still be in it, which the protocol forbids
-        // (docs/protocol.md: 确认组内没有活进程后才交 cancelled). `failed` also stops the run and claims less.
+        // The forced kill is the last thing that can be done to it, and whether it worked can't be seen.
         if (!overdue) return;
         signal(entry, "SIGKILL");
+        // A turn that was over, or a timeout, ends on what it said: `failed` there is tried again, redoing work done.
+        if (entry.why !== "cancel") return conclude(entry, adapter, exitCode());
+        // Reporting `cancelled` would release the item while a process may still be in it, which the protocol forbids
+        // (docs/protocol.md: 确认组内没有活进程后才交 cancelled). A cancelled run's `failed` isn't tried again.
         return endWith(entry, {
           outcome: "failed",
           error: "停止信号发出后没能确认进程组已结束：这一轮按没跑成记，不再重试，进程可能还在。",

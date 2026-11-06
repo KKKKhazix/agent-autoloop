@@ -1,7 +1,9 @@
 // Failure modes: the worker cannot run ps at all (the sandbox forbids it, or it is missing or not executable), and it
 // reports a run that is still going as finished because the failed lookup was read as "the process is gone"; or, unable
 // to look, it holds a stuck or stopped run forever because its timeout and its stop wait on a sighting that never comes;
-// or it holds back the result of a run that has ended, stopping a process group it can't see anything left in.
+// or it holds back the result of a run that has ended, stopping a process group it can't see anything left in; or, unable
+// to see a group it stopped itself because the turn was over, it throws away the answer the turn gave and the hub runs
+// the work again.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -178,7 +180,7 @@ function ownGroup() {
 }
 
 /** A run that was already stopped, so that only confirming its group gone is left to do. */
-function stoppedRun(run: number, pid: number) {
+function stoppedRun(run: number, pid: number, how: object = { why: "cancel" }) {
   const dir = join(runs, `${run}-1`);
   mkdirSync(dir, { recursive: true });
   const entry = {
@@ -196,7 +198,7 @@ function stoppedRun(run: number, pid: number) {
     pid,
     launchedAt: Date.now() - 60_000,
     stopping: Date.now() - 20_000,
-    why: "cancel",
+    ...how,
   };
   writeFileSync(join(dir, "entry.json"), JSON.stringify(entry));
   return () => rmSync(dir, { recursive: true, force: true });
@@ -279,4 +281,31 @@ test("a stopped run whose group is still there is not handed in until it has gon
     group.kill();
   }
   assert.equal(results[0]?.outcome, "cancelled", "the stop was confirmed once the group had gone");
+});
+
+test("a run stopped because its turn was over keeps its answer when its group can't be seen", async () => {
+  psCannotRun();
+  const group = ownGroup();
+  const clean = stoppedRun(21, group.pid, { why: "finished", finishedAt: Date.now() - 30_000 });
+  writeFileSync(join(runs, "21-1", "stdout-1.log"), "做完了");
+  const results: any[] = [];
+  const originalKill = process.kill;
+  try {
+    process.kill = ((target: number, signal?: string | number) => {
+      if (target === -group.pid) {
+        const error = new Error("operation not permitted") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      }
+      return originalKill(target, signal as NodeJS.Signals);
+    }) as typeof process.kill;
+    await idleWorker(results).tick();
+  } finally {
+    process.kill = originalKill;
+    group.kill();
+    clean();
+  }
+  assert.equal(results.length, 1, "the run was never handed in");
+  assert.notEqual(results[0].outcome, "failed", "a failed run is tried again, and the work it did is done twice");
+  assert.match(String(results[0].summary), /做完了/);
 });
