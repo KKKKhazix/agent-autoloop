@@ -112,9 +112,10 @@ async function until(done: () => boolean | Promise<boolean>, what: string, patie
 const alive = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
 
 test("an agent plugin that can't read what it printed fails that run, and the hub stays up", async () => {
+  // Node itself prints, so the program really runs everywhere: there's no /bin/echo on Windows.
   const it = await install({
     "unreadable/agent.ts": `export default {
-      command: () => ["/bin/echo", "ok"],
+      command: () => [${JSON.stringify(process.execPath)}, "-e", "console.log('ok')"],
       read() { throw new Error("no idea what this says"); },
     };`,
   });
