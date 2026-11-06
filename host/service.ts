@@ -1,10 +1,11 @@
 // Keeping it running: launchd on a Mac, systemd on Linux. Both start it at login and restart it if it stops.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "./home.ts";
+import { stablePath } from "./node-path.ts";
 
 const PROGRAM = path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 /** Another install on this machine (another AGENT_AUTOLOOP_HOME) has a service of its own. */
@@ -28,19 +29,6 @@ const systemdItem = (text: string, escapeDollar = false) => {
   if (escapeDollar) escaped = escaped.replaceAll("$", () => "$$");
   return `"${escaped}"`;
 };
-
-/** Homebrew keeps a version's files under `Cellar`, and deletes that directory at the next upgrade; `opt` beside it
- *  is the link that follows. A program named by its Cellar path dies the next time the machine is upgraded. */
-function stablePath(executable: string) {
-  const cellar = /^(\/opt\/homebrew|\/usr\/local)\/Cellar\/([^/]+)\/[^/]+\/bin\/([^/]+)$/.exec(executable);
-  if (!cellar) return executable;
-  const opt = `${cellar[1]}/opt/${cellar[2]}/bin/${cellar[3]}`;
-  try {
-    return realpathSync(opt) === executable ? opt : executable;
-  } catch {
-    return executable;
-  }
-}
 
 export function plist() {
   const logs = path.join(HOME, "logs");
