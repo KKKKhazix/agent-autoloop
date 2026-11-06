@@ -218,3 +218,40 @@ test("Windows notification text remains data in PowerShell", { skip: !windows },
     body: `${title}\n运行 agent-autoloop status 查看`,
   });
 });
+
+// The elevated Codex sandbox uses another Windows account, which cannot read a private hub's context file by default.
+test(
+  "Windows Codex exposes its context to the sandbox, without exposing the master key",
+  { skip: !windows || !!process.env.CI },
+  async (t) => {
+    const sid = powershell(
+      `try { ([Security.Principal.NTAccount]::new($env:COMPUTERNAME, 'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]).Value } catch [Security.Principal.IdentityNotMappedException] { }`,
+    );
+    if (!sid) return t.skip("Codex elevated sandbox is not installed");
+    const home = join(scratch, "sandbox-data");
+    const { privateDirectory } = await import("../host/files.ts");
+    privateDirectory(home);
+    const contextFile = join(home, "context.json");
+    const key = join(home, "master.key");
+    writeFileSync(contextFile, '{"answers":[]}');
+    writeFileSync(key, "private");
+    const { default: codex } = await import("../plugins/codex/agent.ts");
+    codex.command({
+      contextFile,
+      folder: home,
+      cwd: scratch,
+      prompt: "Read the context.",
+      access: "read",
+      session: "",
+      resume: null,
+    });
+    const rights = (file: string) =>
+      powershell(
+        `[IO.File]::GetAccessControl(${psQuote(file)}).Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq ${psQuote(sid)} } | ForEach-Object { [int]$_.FileSystemRights }`,
+      );
+    const contextRights = Number(rights(contextFile));
+    assert.ok(contextRights & 1, "the sandbox cannot read its context");
+    assert.equal(contextRights & 2, 0, "the sandbox can overwrite its context");
+    assert.equal(rights(key), "", "the sandbox was given the master key");
+  },
+);
