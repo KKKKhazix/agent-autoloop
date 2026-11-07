@@ -73,17 +73,21 @@ function installWindowsService() {
   }
 }
 
-/** Whether a process holds an administrator's full token. Only the hub's own account can ask about a hub that has one. */
-export function elevated(pid: number) {
+/**
+ * Whether a process holds an administrator's full token while the desktop of its session doesn't: more than the person
+ * signed in has. With UAC off, or an Administrator that isn't filtered, the desktop has it too and the Startup folder
+ * gives no less. Not knowing (it ended, or isn't ours to ask about) counts as no.
+ */
+export function aboveDesktop(pid: number) {
   return (
     powershell(`Add-Type @"
-using System; using System.Runtime.InteropServices;
+using System; using System.Diagnostics; using System.Runtime.InteropServices;
 public static class Token {
   [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("advapi32.dll")] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
   [DllImport("advapi32.dll")] static extern bool GetTokenInformation(IntPtr token, int kind, out int value, int size, out int length);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-  public static bool Elevated(int pid) {
+  static bool Elevated(int pid) {
     IntPtr process = OpenProcess(0x1000, false, pid), token;
     if (process == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
     try {
@@ -94,9 +98,18 @@ public static class Token {
       return value != 0;
     } finally { CloseHandle(process); }
   }
+  public static bool AboveDesktop(int pid) {
+    try {
+      if (!Elevated(pid)) return false;
+      int session = Process.GetProcessById(pid).SessionId;
+      foreach (Process shell in Process.GetProcessesByName("explorer"))
+        if (shell.SessionId == session) return !Elevated(shell.Id);
+    } catch {}
+    return false;
+  }
 }
 "@
-[Token]::Elevated(${pid})`) === "True"
+[Token]::AboveDesktop(${pid})`) === "True"
   );
 }
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");

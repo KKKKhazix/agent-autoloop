@@ -35,7 +35,7 @@ export function cantListen(error: NodeJS.ErrnoException, platform = process.plat
   return (
     `${said}。这个端口可能在 Windows 的系统保留范围里（Hyper-V、WSL 常占一段，重启后还会变），` +
     "运行 netsh int ipv4 show excludedportrange protocol=tcp 查看；" +
-    `换一个范围外的端口：改 ${CONFIG_FILE} 里 url、hub.listen、hub.publicUrl 三处，再重启中台`
+    `换一个范围外的端口：改 ${CONFIG_FILE} 里的 url 和 hub.listen（hub.publicUrl 是本机地址时也改），再重启中台`
   );
 }
 

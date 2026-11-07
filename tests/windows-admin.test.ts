@@ -1,10 +1,11 @@
 // Failure modes on Windows: a home written as an 8.3 short name (a TEMP like C:\Users\ADMINI~1\Temp) takes the hub down
-// with a libuv assertion the first time its rules folder changes; a hub is taken for one without an administrator's full
-// token, or the other way round, so a login task that runs it elevated goes unnoticed or one that doesn't is removed; the
-// startup shortcut offered where no login task can be made starts something other than what the task would.
+// with a libuv assertion the first time its rules folder changes; a hub with more rights than the signed-in desktop is
+// taken for one without, so a login task that runs it elevated goes unnoticed, or one with the desktop's own rights (UAC
+// off, an unfiltered Administrator, an ordinary account) is removed; the startup shortcut offered instead starts
+// something other than what the task would.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,11 +46,41 @@ test(
   },
 );
 
-test("an elevated process is told apart from one that isn't", { skip: !windows }, async () => {
-  const { elevated } = await import("../host/service.ts");
-  const groups = spawnSync("whoami", ["/groups"], { encoding: "utf8", windowsHide: true }).stdout;
-  assert.equal(elevated(process.pid), groups.includes("S-1-16-12288"));
-});
+/** The number of a process a login task starts at `level` in the signed-in session; it ends itself within a minute. */
+function taskProcess(level: "Highest" | "Limited") {
+  const output = join(scratch, `${level}.pid`);
+  const name = `agent-autoloop-test-${level}-${process.pid}`;
+  powershell(`
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${psQuote(`-NoProfile -NonInteractive -WindowStyle Hidden -Command "$PID | Set-Content -LiteralPath '${output.replaceAll("'", "''")}'; Start-Sleep 60"`)}
+    Register-ScheduledTask -TaskName ${psQuote(name)} -Action $action -Principal (New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel ${level}) -Force | Out-Null
+    Start-ScheduledTask -TaskName ${psQuote(name)}
+    $end = (Get-Date).AddSeconds(30)
+    while (!(Test-Path -LiteralPath ${psQuote(output)}) -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 200 }
+    Unregister-ScheduledTask -TaskName ${psQuote(name)} -Confirm:$false
+  `);
+  return Number(readFileSync(output, "utf8").trim());
+}
+
+// Making a task that runs at the highest level takes an elevated administrator and a signed-in desktop, as on the test
+// machine and not on CI.
+test(
+  "a process with more rights than the desktop is told apart from one with the desktop's own",
+  { skip: !windows || !!process.env.CI },
+  async () => {
+    const { aboveDesktop } = await import("../host/service.ts");
+    const higher = taskProcess("Highest");
+    const same = taskProcess("Limited");
+    try {
+      assert.equal(aboveDesktop(higher), true);
+      assert.equal(aboveDesktop(same), false);
+      // An elevated process in a session with no desktop (SSH, a service) has nothing to compare with.
+      assert.equal(aboveDesktop(process.pid), false);
+    } finally {
+      for (const pid of [higher, same]) spawnSync("taskkill", ["/F", "/PID", String(pid)], { windowsHide: true });
+    }
+  },
+);
 
 test("the startup shortcut runs exactly what the login task runs", { skip: !windows }, async () => {
   const { startupShortcut, windowsLauncher } = await import("../host/service.ts");

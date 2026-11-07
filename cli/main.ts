@@ -12,7 +12,7 @@ import { HOME, RULES_FILE } from "../host/home.ts";
 import { findOnPath, psQuote } from "../host/command.ts";
 import { privateDirectory } from "../host/files.ts";
 import {
-  elevated,
+  aboveDesktop,
   installService,
   removeService,
   restartService,
@@ -760,10 +760,10 @@ async function waitForHub() {
   }
   // A login task asks for the user's limited token, and the built-in Administrator gets the full one all the same.
   const hub = answering && process.platform === "win32" ? runningUp() : null;
-  if (hub !== null && elevated(hub)) {
+  if (hub !== null && aboveDesktop(hub)) {
     removeService();
     fail(
-      "登录任务拉起的中台拿到了完整的管理员权限，它派的每个 Agent 也会带着，所以没有装这个任务" +
+      "登录任务拉起的中台拿到了比你的桌面高的完整管理员权限，它派的每个 Agent 也会带着，所以没有装这个任务" +
         `（Windows 自带的 Administrator 账号会这样）。${startupInstead()}`,
     );
   }
