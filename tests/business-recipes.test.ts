@@ -271,6 +271,7 @@ test("mail is read as the user, a skipped sender's body is never read, and a lon
   assert.ok(calls.every((args) => args[args.indexOf("--as") + 1] === "user"));
   const read = calls.find((args) => args.includes("--message-ids"))!;
   assert.deepEqual(read[read.indexOf("--message-ids") + 1].split(","), ["m-budget", "m-long"]);
+  assert.ok(read.includes("--html=false"), "只取纯文本正文，不拉 HTML");
   const filter = calls.find((args) => args.includes("--filter"))!;
   assert.equal(JSON.parse(filter[filter.indexOf("--filter") + 1]).folder_id, "INBOX");
 });
