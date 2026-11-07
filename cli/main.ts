@@ -12,11 +12,14 @@ import { HOME, RULES_FILE } from "../host/home.ts";
 import { findOnPath, psQuote } from "../host/command.ts";
 import { privateDirectory } from "../host/files.ts";
 import {
+  elevated,
   installService,
   removeService,
   restartService,
+  runningUp,
   serviceLogs,
   serviceRunning,
+  startupInstead,
   systemUnit,
   untilAnswering,
 } from "../host/service.ts";
@@ -748,8 +751,21 @@ async function stop(args: string[]) {
 /** A command run right after starting the service would find no hub yet: this machine's is waited for, if it has one. */
 async function waitForHub() {
   const config = readConfig();
-  if (config.hub && (await untilAnswering(config.url)) === false) {
-    console.error(`系统服务起了，但中台 20 秒内没有应答。看看日志：${serviceLogs()}`);
+  if (!config.hub) return;
+  const answering = await untilAnswering(config.url);
+  if (answering === false) {
+    const log = serviceLogs();
+    const last = existsSync(log) ? readFileSync(log, "utf8").trimEnd().split("\n").slice(-5).join("\n") : "";
+    console.error(`系统服务起了，但中台 20 秒内没有应答。看看日志：${log}${last ? `\n\n${last}` : ""}`);
+  }
+  // A login task asks for the user's limited token, and the built-in Administrator gets the full one all the same.
+  const hub = answering && process.platform === "win32" ? runningUp() : null;
+  if (hub !== null && elevated(hub)) {
+    removeService();
+    fail(
+      "登录任务拉起的中台拿到了完整的管理员权限，它派的每个 Agent 也会带着，所以没有装这个任务" +
+        `（Windows 自带的 Administrator 账号会这样）。${startupInstead()}`,
+    );
   }
 }
 
