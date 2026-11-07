@@ -113,6 +113,18 @@ test("each run shows only what its own receipt sent", async () => {
   );
 });
 
+test("an event the receipt sends again under a number already taken isn't shown as what it sent", async () => {
+  hub.ingest("ops", { id: "n:taken", type: "note.ops", detail: "运维自己的" });
+  const mine = send("app", "f:9", "#9");
+  const job = take();
+  hub.finish(job.run, job.token, {
+    outcome: "done",
+    summary: "好了",
+    events: [{ id: "n:taken", type: "note.a", detail: "我的" }],
+  });
+  assert.deepEqual((await outcome(mine.event)).json.runs[0].events, []);
+});
+
 test("a run that ends without being done still reads as ended", async () => {
   const stopped = send("app", "f:5", "#5");
   const job = take();
