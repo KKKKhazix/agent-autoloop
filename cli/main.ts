@@ -21,7 +21,7 @@ import {
   untilAnswering,
 } from "../host/service.ts";
 import { versionLine } from "../host/version.ts";
-import { spendLine } from "./spend.ts";
+import { colorFor, render } from "./status.ts";
 import { attemptsOf, newFailure, waitingRetry } from "./try.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -419,55 +419,10 @@ async function tryIt() {
   fail("五分钟没等到结果。运行 agent-autoloop doctor 看看。");
 }
 
-const RUN_STATES: Record<string, string> = {
-  claimed: "在跑",
-  queued: "排队",
-  done: "做完了",
-  nothing: "没事可做",
-  unknown: "不确定",
-  cancelled: "停了",
-};
-
 async function status(named: Flags) {
-  const owner = ownerClient();
-  const state = await owner.state();
+  const state = await ownerClient().state();
   if (named.json !== undefined) return console.log(JSON.stringify(state, null, 2));
-  const { totals } = state;
-  const clock = { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" } as const;
-  const at = (iso: string) => new Date(iso).toLocaleString("zh-CN", { timeZone: state.timezone, ...clock });
-  console.log(
-    `在跑 ${totals.running} · 排队 ${totals.queued} · 今天做完 ${totals.doneToday} · 等你 ${state.cards.length}`,
-  );
-  console.log(`${spendLine(state.spending)}\n`);
-  for (const agent of state.agents) console.log(`${agent.online ? "●" : "○"} ${agent.name}（${agent.worker}）`);
-  for (const channel of state.channels) console.log(`${channel.online ? "●" : "○"} ${channel.name}`);
-  const paused = state.lines.filter((line: { paused?: unknown }) => line.paused);
-  if (paused.length) console.log("\n暂停中（恢复：agent-autoloop resume <规则>）");
-  for (const line of paused) console.log(`  ${line.name}${line.paused.reason ? `：${line.paused.reason}` : ""}`);
-  for (const card of state.cards) {
-    showCard(card);
-    console.log(howToAnswer(card));
-  }
-  const timed = [...state.lines.filter((line: { every: string | null }) => line.every), ...state.elsewhere];
-  if (timed.length) console.log("\n定时");
-  for (const { name, where, every, next } of timed) {
-    console.log(`  ${name}${where ? `（在别处：${where}）` : ""}：${every}，下次 ${at(next)}`);
-  }
-  if (state.recentCards.length) console.log("\n最近的卡片");
-  for (const card of state.recentCards.slice(0, 5)) {
-    const chosen = card.choice !== null ? card.options[card.choice] : card.answer;
-    console.log(`  #${card.id} ${card.title}：${[chosen, card.result].filter(Boolean).join("。") || card.text}`);
-  }
-  if (state.runs.length) console.log("\n最近几轮");
-  for (const run of state.runs.slice(0, 8)) {
-    const shown = run.state === "queued" && run.attempts > 0 ? "等重派" : (RUN_STATES[run.state] ?? run.state);
-    const outcome = run.summary || run.error;
-    console.log(`  #${run.id} ${run.rule} ${shown}${outcome ? `：${outcome}` : ""}`);
-  }
-  if (state.unrouted.length) console.log("\n没有规则接的事件");
-  for (const { source, type, subject, summary } of state.unrouted.slice(0, 5)) {
-    console.log(`  ${source} ${type} ${subject}${summary ? `：${summary}` : ""}`);
-  }
+  console.log(render(state, { color: colorFor(process.stdout, process.env), columns: process.stdout.columns }));
 }
 
 async function answer(args: string[]) {
