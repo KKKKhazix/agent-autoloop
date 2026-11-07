@@ -7,7 +7,8 @@
 // new session for it; what Claude said before a background task ended is taken for its answer, or starts the wait for a
 // turn that won't exit; the raw messages of a broken Claude run become the reason it failed. A receipt an Agent wrote
 // and then lost because a background task called it back for another turn is dropped, so the card it asked for never
-// exists and the work looks untouched. A line of output that's JSON
+// exists and the work looks untouched; or, carried along, it replaces one the last turn wrote wrongly, so a cancelled
+// review comes back. A line of output that's JSON
 // but no message, like `null`, stops a plugin reading anything. A command line's placeholder pass rewrites the prompt
 // itself — a `{cwd}` or a `$&` the person wrote arrives as the folder or as `{prompt}` — so the program is asked
 // something other than what the event said. A built-in agent starts the program it finds, not the one its rules name,
@@ -246,6 +247,17 @@ test("Claude Code: a receipt it wrote isn't lost when a background task calls it
   assert.equal(kept.later?.[0].key, "c", "it keeps the receipt of its own last turn");
   assert.equal(kept.notice, undefined, "and no older one is added beside it");
   assert.equal(claude.read(stream(init, said("先说一句"), init, said("最后一句")), 0, "").text, "最后一句");
+  // A last turn that wrote a receipt wrongly is asked to write it again, not handed an older one in its place.
+  const earlier = said(
+    `先说一句\n\n${block({ later: [{ key: "c", at: "2026-11-08T09:00:00+08:00", about: "复查" }] })}`,
+  );
+  const mislabelled = "最后\n\n```json\n" + JSON.stringify({ later: [{ key: "c", cancel: true }] }) + "\n```";
+  const unclosed = "最后\n\n```agent-autoloop\n" + JSON.stringify({ later: [{ key: "c", cancel: true }] }) + "```";
+  for (const last of [mislabelled, unclosed]) {
+    const message = readMessage(claude.read(stream(init, earlier, init, said(last)), 0, "").text!);
+    assert.equal(message.receipt, undefined, "the older receipt stands in for the one it got wrong");
+    assert.ok(message.problem, "and it isn't asked to write its own again");
+  }
 });
 
 test("Codex: access, new and going on", { skip: !stubbed(codex, {}) }, () => {

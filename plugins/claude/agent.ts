@@ -5,7 +5,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
-import { receiptBlock } from "../../worker/contract.ts";
+import { readMessage, receiptBlock } from "../../worker/contract.ts";
 
 const PERMISSIONS = { read: "plan", edit: "acceptEdits", full: "bypassPermissions" };
 
@@ -85,15 +85,17 @@ export default {
     // A background task that ends after its answer calls the run back for another turn, and that turn's word replaces the
     // one that carried its receipt. What it asked of the hub is still what it wants, so the words stay the last turn's and
     // the receipt is carried along: dropped, the card it asked for never exists and the work looks untouched.
-    const own = receiptBlock(said);
+    // One it wrote wrongly is its own and is written again; only a turn with no receipt at all keeps the earlier one.
+    const own = readMessage(said);
     const carried =
-      own ??
-      messages
-        .slice(0, messages.lastIndexOf(result))
-        .filter((message) => message?.type === "result")
-        .map((message) => receiptBlock(String(message.result ?? "")))
-        .findLast((block) => block !== undefined);
-    const text = own === undefined && carried !== undefined ? `${said}\n\n${carried}` : said;
+      own.receipt === undefined && own.problem === undefined
+        ? messages
+            .slice(0, messages.lastIndexOf(result))
+            .filter((message) => message?.type === "result")
+            .map((message) => receiptBlock(String(message.result ?? "")))
+            .findLast((block) => block !== undefined)
+        : undefined;
+    const text = carried === undefined ? said : `${said}\n\n${carried}`;
     if (result.is_error || result.subtype !== "success") {
       const error = said.split("\n")[0] || result.errors?.[0] || result.subtype || "没留下结果";
       return { ...known, usage, sessionUsage, finished: true, error };
