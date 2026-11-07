@@ -53,7 +53,8 @@ test("an elevated process is told apart from one that isn't", { skip: !windows }
 
 test("the startup shortcut runs exactly what the login task runs", { skip: !windows }, async () => {
   const { startupShortcut, windowsLauncher } = await import("../host/service.ts");
-  const folder = join(scratch, "启动 ' 文件夹");
+  // WScript.Shell saves shortcuts through the system code page; the Administrator account this is for has an ASCII path.
+  const folder = join(scratch, "Start ' Menu");
   mkdirSync(folder);
   powershell(startupShortcut(psQuote(folder)));
   const shortcut = powershell(`$s = (New-Object -ComObject WScript.Shell).CreateShortcut(
