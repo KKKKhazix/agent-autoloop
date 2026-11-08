@@ -119,6 +119,12 @@ test("the answers material carries the chosen text so the 0-based choice can't b
   answer(id, { choice: 1, by: "me" }, at(1));
   const job = claim("w1", at(1))!;
   assert.deepEqual([job.context.answers[0].choice, job.context.answers[0].chosen], [1, "留着"]);
+  // A free-text answer has no choice: the chosen text is the answer itself.
+  finish(job.run, job.token, { outcome: "done", ask: [question] }, at(2));
+  const second = one<{ id: number }>("SELECT id FROM cards WHERE id != ?", [id])!.id;
+  answer(second, { text: "先备份再删", by: "me" }, at(3));
+  const free = claim("w1", at(3))!;
+  assert.deepEqual([free.context.answers[0].choice, free.context.answers[0].chosen], [null, "先备份再删"]);
 });
 
 test("an answer while another run holds the thread joins the next run, and a merged run still carries it", () => {
