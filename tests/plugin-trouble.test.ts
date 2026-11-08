@@ -156,8 +156,18 @@ test("a channel plugin that returns at once doesn't stop the hub answering", asy
 });
 
 test("a worker that stops is started again, and the hub stays up", async () => {
+  // A turn that ends on its own leaves nothing in hand, and an idle worker then sits out its whole fifty-second poll
+  // before it looks at the folder again — so this one holds the turn open until the test writes `release`, and the
+  // folder breaks while a run is still in hand. The two-minute bound is only so that an assertion failing before that
+  // release cannot leave it polling for a file nobody will write.
+  const hold = `const { existsSync } = require("node:fs");
+const release = require("node:path").join(process.env.AGENT_AUTOLOOP_HOME, "release");
+const giveUp = Date.now() + 120_000;
+const look = () => (existsSync(release) || Date.now() > giveUp ? process.exit(0) : setTimeout(look, 50));
+look();`;
   const it = await install({
-    "busy/agent.ts": `export default { command: () => ["sleep", "5"], read: () => ({}) };`,
+    "busy/agent.ts": `const hold = ${JSON.stringify(hold)};
+export default { command: () => [process.execPath, "-e", hold], read: () => ({}) };`,
   });
   edit(join(it.home, "rules.json"), (rules) => {
     for (const agent of Object.values<any>(rules.agents)) {
@@ -176,6 +186,8 @@ test("a worker that stops is started again, and the hub stays up", async () => {
   rmSync(runs, { recursive: true, force: true });
   writeFileSync(runs, "");
   await until(() => alive(up) === false || it.said().includes("[worker] stopped"), "日志说接单程序停了");
+  // The agent outlives a stopped worker by design, so this lets it go instead of leaving it behind.
+  writeFileSync(join(it.home, "release"), "");
   assert.equal(alive(up), true, it.said());
   assert.equal(await answers(it.port), true);
 });
