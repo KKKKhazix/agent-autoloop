@@ -5,7 +5,8 @@
 // Reviewers by agent: an agent's exemption passes a path reviewed in depth, or a review asked for by label; a change nobody
 // declared, or declared by an account the project doesn't trust or for another PR, takes a listed agent's reviewer; a new
 // commit or a conflict resolved by hand keeps the declaration of the commit before it, while a clean sync with main loses it;
-// the model and depth set for a reviewer never reach Codex.
+// the model and depth set for a reviewer never reach Codex; a declaration its account took back still counts; a path Git
+// prints in quotes matches no pattern, so an exempt agent's change to a path reviewed in depth merges unreviewed.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseReview, codexCommand, declaredAgent, depth, reviewSnapshot } from "../plugins/delivery/review.ts";
@@ -234,6 +235,8 @@ test("only a trusted account's declaration for this PR names the agent, on this 
     { description: "Not A Name" },
   ])
     assert.equal(agent(own, on(own, status(wrong))), null);
+  const tookBack = (sha: string) => (sha === own ? [status({ state: "failure" }), status()] : []);
+  assert.equal(agent(own, tookBack), null);
   p.write("more.txt", "more");
   const next = p.commit();
   assert.equal(agent(next, on(own)), null);
@@ -245,7 +248,10 @@ test("only a trusted account's declaration for this PR names the agent, on this 
   const moved = p.commit();
   p.git("switch", "-q", "topic");
   p.git(...p.identity, "merge", "-q", "--no-edit", "main");
-  assert.equal(agent(p.git("rev-parse", "HEAD"), on(next), moved), "codex");
+  const synced = p.git("rev-parse", "HEAD");
+  assert.equal(agent(synced, on(next), moved), "codex");
+  const tookBackAfter = (sha: string) => (sha === synced ? [status({ state: "failure" })] : on(next)(sha));
+  assert.equal(agent(synced, tookBackAfter, moved), null);
   p.git("reset", "-q", "--hard", next);
   p.git("switch", "-q", "main");
   p.write("app.ts", "export const version = 3;\n");
@@ -255,3 +261,13 @@ test("only a trusted account's declaration for this PR names the agent, on this 
   p.write("app.ts", "export const version = 4;\n");
   assert.equal(agent(p.commit(), on(next), clashing), null);
 });
+test(
+  "a path Git prints in quotes is still one the project reviews in depth",
+  { skip: process.platform === "win32" && "Windows has no file names with a quote in them" },
+  async () => {
+    using p = project(() => ({ agents: { codex: null }, trusted: [1], xhigh: ["ops/*"] }));
+    p.write('ops/de"ploy.sh', "echo deploy\n");
+    assert.deepEqual(await p.review(p.commit(), { agent: "codex", required: false }), []);
+    assert.ok(p.reviewed());
+  },
+);

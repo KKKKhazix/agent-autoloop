@@ -149,7 +149,7 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 gh api repos/owner/app/statuses/<完整提交编号> -f context=delivery-agent/<PR 编号> -f state=success -f description=claude
 ```
 
-只认 `trusted` 里的 GitHub 账号写的状态，填账号的数字 ID（`gh api user --jq .id`）。声明跟着提交走：再推提交要重新声明，没声明就走默认审查；同步 main 产生的干净合并沿用原来的声明。PR 说明、标签和分支名都不算声明。
+只认 `trusted` 里的 GitHub 账号写的状态，填账号的数字 ID（`gh api user --jq .id`）。声明跟着提交走：再推提交要重新声明，没声明就走默认审查；同步 main 产生的干净合并沿用原来的声明。要撤回，在同一个提交上再写一条 `state=failure` 的同名状态。PR 说明、标签和分支名都不算声明。
 
 `check.job` 写 job 的名字；矩阵 job（名字像 `check (ubuntu-latest)`）算同一个 job，每一项都要成功。检查工作流的触发类型要带 `ready_for_review`：草稿转 ready 后，只接受这之后新跑的一次检查，而 `pull_request` 默认不在转 ready 时触发。写成 `on: { pull_request: { types: [opened, synchronize, reopened, ready_for_review] } }`。
 

@@ -79,7 +79,8 @@ function beforeSync(bare: string, main: string, head: string) {
 }
 
 /** The agent a trusted account declared this pull request's change to be by, as a commit status: on this commit, or on
- * the one a clean sync with main left it on. What the author added since has no declaration. */
+ * the one a clean sync with main left it on. What the author added since has no declaration. As GitHub reads statuses,
+ * the newest one of a context stands: a later one that isn't a success takes the declaration back. */
 export function declaredAgent(
   bare: string,
   main: string,
@@ -89,14 +90,10 @@ export function declaredAgent(
   statuses: (sha: string) => any[],
 ) {
   for (let sha: string | null = head; sha; sha = beforeSync(bare, main, sha)) {
-    const declared = statuses(sha).find(
-      (status) =>
-        status.context === `delivery-agent/${number}` &&
-        status.state === "success" &&
-        trusted.includes(status.creator?.id) &&
-        AGENT.test(status.description ?? ""),
+    const latest = statuses(sha).find(
+      (status) => status.context === `delivery-agent/${number}` && trusted.includes(status.creator?.id),
     );
-    if (declared) return declared.description as string;
+    if (latest) return latest.state === "success" && AGENT.test(latest.description ?? "") ? latest.description : null;
   }
   return null;
 }
@@ -127,8 +124,9 @@ export async function reviewSnapshot(
   }
   // No checkout: hooks, filters, AGENTS.md and program/config files from the PR never become executable inputs here.
   const branchLog = ["--diff-merges=remerge", "--no-renames"];
-  const paths = git(bare, "log", ...branchLog, "--format=", "--name-only", head, "--not", main)
-    .split("\n")
+  // -z: otherwise Git prints a name with a quote or a backslash in it quoted, and it matches no pattern.
+  const paths = git(bare, "log", ...branchLog, "--format=", "--name-only", "-z", head, "--not", main)
+    .split("\0")
     .filter(Boolean);
   if (!paths.length) return [];
   const raw = git(bare, "log", ...branchLog, "--format=", "--raw", head, "--not", main);
