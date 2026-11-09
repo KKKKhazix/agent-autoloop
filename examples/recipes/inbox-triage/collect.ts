@@ -109,14 +109,11 @@ if (
     if (!picked.length && complete) {
       console.log(`没事可做：${sources.lookbackHours} 小时内没有需要看的邮件`);
     } else {
-      // A sender the owner asked to skip is not read at all, so its body never reaches this machine.
-      const contents = lark([
-        "mail",
-        "+messages",
-        "--message-ids",
-        picked.map((m) => m.message_id).join(","),
-        "--html=false",
-      ]);
+      // A sender the owner asked to skip is not read at all, so its body never reaches this machine. A read cut short
+      // with nothing kept has no bodies to ask for, and an empty id list is not a request the mailbox takes.
+      const contents = picked.length
+        ? lark(["mail", "+messages", "--message-ids", picked.map((m) => m.message_id).join(","), "--html=false"])
+        : { messages: [] };
       if (!Array.isArray(contents.messages)) throw new Error("邮箱没有返回邮件正文，资料不完整");
       if (Array.isArray(contents.unavailable_message_ids) && contents.unavailable_message_ids.length)
         throw new Error(`邮箱没有返回部分邮件的正文（${contents.unavailable_message_ids.length} 封），本次不生成清单`);

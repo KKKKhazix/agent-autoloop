@@ -343,6 +343,7 @@ test("a read that stops while pages remain says mail went unscanned instead of c
   assert.equal(snapshot.scanned.complete, false, "清单要说明还有页面没看");
   assert.ok(snapshot.scanned.summaries > 0);
   assert.match(parsed.result.events?.[0].summary ?? "", /没读/, "回执也要说清没读全");
+  assert.doesNotMatch(readFileSync(join(dir, "calls.jsonl"), "utf8"), /--message-ids/, "一封都没留下就不取正文");
 });
 
 test("an empty inbox says so, keeps the old snapshot, and asks the mailbox for no bodies", () => {
