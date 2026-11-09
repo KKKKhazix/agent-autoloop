@@ -81,6 +81,8 @@ if (
     let scanned = 0;
     let pageToken = "";
     let more = true;
+    // Mail the owner wants that the cap left out of the snapshot.
+    let left = false;
     while (picked.length < sources.maxMessages && more && scanned < ceiling) {
       const listed = lark([
         "mail",
@@ -96,16 +98,18 @@ if (
       if (!Array.isArray(listed.messages)) throw new Error("邮箱没有返回邮件列表，不能当作没有新邮件");
       const page = listed.messages as Summary[];
       scanned += page.length;
-      for (const message of page)
-        if (!skip.has((message.head_from?.mail_address ?? "").toLowerCase()) && picked.length < sources.maxMessages)
-          picked.push(message);
+      for (const message of page) {
+        if (skip.has((message.head_from?.mail_address ?? "").toLowerCase())) continue;
+        if (picked.length < sources.maxMessages) picked.push(message);
+        else left = true;
+      }
       // An empty page ends the read whatever the listing says about more: there is nowhere left to page from.
       const next = typeof listed.page_token === "string" ? listed.page_token : "";
       more = listed.has_more === true && next !== "" && page.length > 0;
       pageToken = next;
     }
-    // The window was read to its end, or all that was asked for was kept. Anything else leaves mail unscanned.
-    const complete = picked.length >= sources.maxMessages || !more;
+    // Only a window read to its end with nothing left out is all of it; reaching the cap says nothing about what is after.
+    const complete = !more && !left;
     if (!picked.length && complete) {
       console.log(`没事可做：${sources.lookbackHours} 小时内没有需要看的邮件`);
     } else {

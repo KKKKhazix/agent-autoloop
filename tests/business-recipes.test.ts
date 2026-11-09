@@ -4,7 +4,7 @@
 // is read as the bot, a sender the user asked to skip still has its body read, a long body is kept whole or cut short of
 // what the reader is told, an empty inbox wakes the model, or a mailbox that returned only some bodies is saved as read.
 // A page of senders the user asked to skip fills the cap and hides the mail behind it, so a mailbox with mail reads as
-// having nothing to read; or pages are left unscanned and the brief still says there was nothing.
+// having nothing to read; or pages are left unscanned, by the cap or the ceiling, and the brief still says it read them all.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -215,8 +215,15 @@ const notify = Array.from({ length: 30 }, (_, i) => ({
   head_from: { name: '通知机器人', mail_address: 'noreply@example.com' },
   date_formatted: '2026-11-09 08:00', body_preview: '无需回复',
 }));
+const wanted = Array.from({ length: 30 }, (_, i) => ({
+  message_id: 'w' + i, thread_id: 't-w' + i, subject: '请确认排期', folder_id: 'INBOX',
+  head_from: { name: '李四', mail_address: 'li@example.com' },
+  date_formatted: '2026-11-09 09:00', body_preview: '麻烦回复',
+}));
 let data;
-if (args[1] === '+triage') {
+if (args[1] === '+triage' && mode === 'full') {
+  data = { messages: wanted, has_more: true, page_token: 'list:P2' };
+} else if (args[1] === '+triage') {
   const token = args.includes('--page-token') ? args[args.indexOf('--page-token') + 1] : '';
   const second = {
     paged: { messages: [summaries[0]], has_more: false, page_token: '' },
@@ -344,6 +351,15 @@ test("a read that stops while pages remain says mail went unscanned instead of c
   assert.ok(snapshot.scanned.summaries > 0);
   assert.match(parsed.result.events?.[0].summary ?? "", /没读/, "回执也要说清没读全");
   assert.doesNotMatch(readFileSync(join(dir, "calls.jsonl"), "utf8"), /--message-ids/, "一封都没留下就不取正文");
+});
+
+test("a read that fills the cap while the listing has more says mail was left unread", () => {
+  const { dir, run, parsed } = triage("full");
+  assert.equal(run.status, 0, run.stderr);
+  const snapshot = JSON.parse(readFileSync(join(dir, "inbox-input.json"), "utf8"));
+  assert.equal(snapshot.messages.length, 30);
+  assert.equal(snapshot.scanned.complete, false, "收满上限、后面还有邮件，不能说读全了");
+  assert.match(parsed.result.events?.[0].summary ?? "", /没读/, "回执也要说清没读全");
 });
 
 test("an empty inbox says so, keeps the old snapshot, and asks the mailbox for no bodies", () => {
