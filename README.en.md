@@ -129,7 +129,7 @@ Besides `ask`, receipts can send notifications (`notice`), resolve open cards (`
 
 ## Ready-to-use recipes
 
-Each recipe includes rules, a task Skill, and setup instructions (written in Chinese).
+Each recipe includes sample rules and setup instructions (written in Chinese).
 
 | Task | Included workflow |
 |---|---|
@@ -142,7 +142,7 @@ Each recipe includes rules, a task Skill, and setup instructions (written in Chi
 | [Inbox triage](examples/recipes/inbox-triage/README.md) | Read unread mail from the last 24 hours at 8 AM by default; write a local checklist with reply drafts, without sending or changing the mailbox |
 | [PR delivery](skills/agent-autoloop/SKILL.md#交付流水线) | Add `deliver` to a PR to review it, wait for CI, merge, wait for deployment, and verify the live version |
 
-**To enable one:** open its instructions, put the task Skill in your agent's skills directory, merge the sample rules into `~/.agent-autoloop/rules.json`, replace worker names and paths, then run `agent-autoloop check`.
+**To enable one:** open its instructions. If the recipe includes a task Skill, put it in your agent's skills directory. Merge the sample rules into `~/.agent-autoloop/rules.json`, replace worker names and paths, then run `agent-autoloop check`.
 
 Feedback, website watch, Feishu briefs, and inbox triage default to Asia/Shanghai and send only to the owner's private Feishu chat. Sample data is fictional; scripts and receipts have been verified only with local HTTP and a fake Feishu CLI, not run end to end on a live account.
 

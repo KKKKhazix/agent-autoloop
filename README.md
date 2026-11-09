@@ -127,7 +127,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 ## 拿来即用的场景模板
 
-每套模板都带规则、任务 Skill 和启用说明。
+每套模板都提供示例规则和启用说明。
 
 | 想做什么 | 已经封装好的流程 |
 |---|---|
@@ -140,7 +140,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 | [收件箱分诊](examples/recipes/inbox-triage/README.md) | 默认每天 8 点读过去 24 小时的未读邮件，写成清单和回复草稿；不发送、不改邮箱状态 |
 | [PR 自动交付](skills/agent-autoloop/SKILL.md#交付流水线) | 打上 `deliver` 标签后，审查、等 CI、合并、等发布并核对线上版本 |
 
-**启用：** 打开对应说明，把任务 Skill 放进所用 Agent 的 skills 目录，把示例规则合入 `~/.agent-autoloop/rules.json`，替换电脑名和路径，再运行 `agent-autoloop check`。
+**启用：** 打开对应说明。模板带任务 Skill 时，把它放进所用 Agent 的 skills 目录。把示例规则合入 `~/.agent-autoloop/rules.json`，替换电脑名和路径，再运行 `agent-autoloop check`。
 
 反馈处理、网站巡检、飞书摘要和收件箱分诊默认使用北京时间，只发给本人的飞书私聊。样例数据都是虚构的；脚本和回执只用本地 HTTP 与假飞书 CLI 验证过，没有在真实账号上跑过完整业务。
 
