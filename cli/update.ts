@@ -5,17 +5,25 @@ import { spawnSync } from "node:child_process";
 
 const PUBLISHED = "https://github.com/KKKKhazix/agent-autoloop.git";
 const RELEASE = /refs\/tags\/(v(\d+)\.(\d+)\.(\d+))$/;
+/** How long one git call may take before the command fails instead of hanging with no answer. */
+const GIT_TIMEOUT = 60_000;
 
-function git(root: string, ...args: string[]) {
-  const done = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
-  if (done.status !== 0) throw new Error(`git ${args[0]} 没成功：${done.stderr?.trim() || done.error?.message}`);
+const timedOut = (error: NodeJS.ErrnoException | undefined) => error?.code === "ETIMEDOUT";
+
+function git(root: string, args: string[], timeout = GIT_TIMEOUT) {
+  const done = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout });
+  if (done.status !== 0) {
+    const reason = timedOut(done.error as NodeJS.ErrnoException) ? "超时" : done.stderr?.trim() || done.error?.message;
+    throw new Error(`git ${args[0]} 没成功：${reason}`);
+  }
   return done.stdout.trim();
 }
 
-function latestRelease(root: string) {
-  const origin = spawnSync("git", ["-C", root, "config", "--get", "remote.origin.url"], { encoding: "utf8" });
+function latestRelease(root: string, timeout = GIT_TIMEOUT) {
+  const origin = spawnSync("git", ["-C", root, "config", "--get", "remote.origin.url"], { encoding: "utf8", timeout });
+  if (timedOut(origin.error as NodeJS.ErrnoException)) throw new Error("git config 没成功：超时");
   if (origin.stdout?.trim() !== PUBLISHED) return null;
-  const releases = git(root, "ls-remote", "--refs", "--tags", "origin", "v*")
+  const releases = git(root, ["ls-remote", "--refs", "--tags", "origin", "v*"], timeout)
     .split("\n")
     .flatMap((line) => {
       const found = RELEASE.exec(line);
@@ -26,12 +34,12 @@ function latestRelease(root: string) {
 }
 
 /** Brings this copy up to date. `to` is the release it's now at, if it follows releases. */
-export function updateCode(root: string) {
-  const before = git(root, "rev-parse", "HEAD");
-  const to = latestRelease(root);
+export function updateCode(root: string, timeout = GIT_TIMEOUT) {
+  const before = git(root, ["rev-parse", "HEAD"], timeout);
+  const to = latestRelease(root, timeout);
   if (to) {
-    git(root, "fetch", "--quiet", "--depth", "1", "origin", `refs/tags/${to}:refs/tags/${to}`);
-    git(root, "checkout", "--quiet", "--detach", to);
-  } else git(root, "pull", "--quiet", "--ff-only");
-  return { changed: git(root, "rev-parse", "HEAD") !== before, to };
+    git(root, ["fetch", "--quiet", "--depth", "1", "origin", `refs/tags/${to}:refs/tags/${to}`], timeout);
+    git(root, ["checkout", "--quiet", "--detach", to], timeout);
+  } else git(root, ["pull", "--quiet", "--ff-only"], timeout);
+  return { changed: git(root, ["rev-parse", "HEAD"], timeout) !== before, to };
 }
