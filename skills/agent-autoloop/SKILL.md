@@ -167,6 +167,8 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 
 轮询无需配置新的 Webhook 或密钥，事件编号由标签记录与 PR 提交组成，重复读取不会重新派发；也可以直接接现有 GitHub 来源。事项按 `owner/repo#编号` 分开，`parallel` 控制并发。打 `deliver` 进入流程；同时打 `deliver-review` 只审查，在等待检查期间加上也会阻止合并；`deliver-attended` 表示有人盯着，发现问题只写回执、不另发通知。审查发现问题后，同一个提交不再审第二次，修复后推新提交才重新审查。普通 issue 打 `ask-owner` 会变成一张问题卡片，回答后去掉标签；不替你在 GitHub 发评论。
 
+合并后发布失败时，修复发布后重新跟进原 PR 的 Ship 和健康检查。
+
 项目 Ship 只在 main 的 push 上运行，检出完整历史（checkout 的 `fetch-depth: 0`），然后调用这个仓库的 Action。把下面的占位提交换成发布后核实的完整 SHA：
 
 ```yaml
