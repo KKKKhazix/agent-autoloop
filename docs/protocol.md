@@ -62,6 +62,7 @@
     },
   },
   "channels": { "feishu": { "name": "飞书", "answerers": ["ou_xxx"] } },
+  "defaultChannels": ["feishu"], // 可选：自己没写 channels 的卡片和通知（tell、中台自己的告警、别处定时任务的提问、没写 channels 的规则）只发到这几个通道，不写就发到所有通道
   "rules": [
     {
       "name": "处理告警",
@@ -75,7 +76,7 @@
       "resume": true, // 同一事项的新事件接着上一轮的会话，默认每次开新会话
       "tell": "needed", // always 每轮做成都发（没事可做、没跑成不发）/ needed 只在有卡片时（默认）/ never 只压住回执里的通知，提问和中台自己的告警照发
       "emits": { "source": "shop", "types": ["pr.*"] }, // 回执里能发什么事件，不写就不能发
-      "channels": ["feishu"], // 这条规则的卡片和通知只发到这几个通道，不写就发到所有通道
+      "channels": ["feishu"], // 这条规则的卡片和通知只发到这几个通道，不写就照 defaultChannels
     },
   ],
   "elsewhere": [
