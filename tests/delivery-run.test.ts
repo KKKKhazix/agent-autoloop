@@ -1,7 +1,8 @@
 // Failure modes: an owner question with backticks in its title or text cuts the receipt short; a short commit from the health
 // check can't be fetched, so every change needs a release and a docs-only PR never finishes; a failure on an ordinary issue is
 // covered up by the 404 from looking it up as a PR; one item whose label record can't be read fails the whole poll; a failed
-// round writes its error over the delivery status, so the next one forgets the commit had findings and reviews it again.
+// round writes its error over the delivery status, so the next one forgets the commit had findings and reviews it again;
+// an obsolete Ship run requires a remote compare that fails, hiding the successful release of this merge.
 // Nothing here reaches GitHub: `gh` is a stand-in first on PATH, and the Git remote is a local folder.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -9,8 +10,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { waitLive } from "../plugins/delivery/delivery.ts";
 import { createIO, github, isGitHubHiccup, type DeliveryOptions } from "../plugins/delivery/github.ts";
 import { poll } from "../plugins/delivery/poll.ts";
+import { settings } from "../plugins/delivery/project.ts";
 import { run } from "../plugins/delivery/run.ts";
 import { readMessage } from "../worker/contract.ts";
 
@@ -141,6 +144,28 @@ test("a full commit is compared as it is, without asking GitHub", async () => {
 test("a short commit GitHub doesn't know means a release", async () => {
   answers({});
   assert.equal(await ioIn("unknown").releaseRequired("abcdef0", docsOnly, internal), true);
+});
+
+test("Ship uses local ancestry for older runs and the short healthy version", async () => {
+  answers({
+    "repos/example/app/actions/workflows/ship.yml/runs?branch=main&event=push&per_page=100": {
+      workflow_runs: [
+        { id: 2, event: "push", head_sha: docsOnly, status: "completed", conclusion: "success" },
+        { id: 1, event: "push", head_sha: live, status: "completed", conclusion: "success" },
+      ],
+    },
+    [`repos/example/app/compare/${docsOnly}...${live}`]: { fail: "gh: HTTP 502" },
+  });
+  const io = ioIn("ship-history");
+  io.live = async () => ({ sha: live.slice(0, 7), release: "live-before" });
+  const config = settings({
+    repo: "example/app",
+    internal,
+    review: { points: "AGENTS.md" },
+    health: { url: "https://example.invalid/health", field: "commit", pattern: "(?<sha>[0-9a-f]{7,40})" },
+  });
+  assert.deepEqual(await waitLive(docsOnly, config, io), { phase: "docs_only", ship: 2, release: "live-before" });
+  assert.doesNotMatch(readFileSync(calls, "utf8"), /compare\/|commits\//);
 });
 
 test("the toolkit trusts only a commit on main containing its latest tool changes", async () => {

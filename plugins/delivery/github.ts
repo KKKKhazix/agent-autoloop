@@ -61,6 +61,7 @@ export function pages(repo: string, path: string): any[] {
 }
 
 const commitSha = /^[a-f0-9]{40}$/;
+const commitPrefix = /^[a-f0-9]{7,40}$/;
 
 function decoded(file: { content: string }) {
   return JSON.parse(Buffer.from(file.content, "base64").toString("utf8"));
@@ -72,6 +73,14 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
   const started = Date.now();
   let initialized = false;
   const fetched = new Set<string>();
+  const localCommit = (sha: string) => {
+    if (!initialized || !commitPrefix.test(sha)) return;
+    try {
+      return git(bare, "rev-parse", "--verify", `${sha}^{commit}`);
+    } catch (error) {
+      if ((error as { status?: number }).status !== 128) throw error;
+    }
+  };
   const fetchObjects = (...refs: string[]) => {
     if (!initialized) {
       mkdirSync(bare, { recursive: true });
@@ -79,10 +88,10 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
       git(bare, "remote", "add", "origin", `https://github.com/${repo}.git`);
       initialized = true;
     }
-    const missing = refs.filter((ref) => !fetched.has(ref));
+    const missing = refs.filter((ref) => !commitSha.test(ref) || (!fetched.has(ref) && !localCommit(ref)));
     if (missing.length) {
       git(bare, "fetch", "--no-tags", "origin", ...missing);
-      missing.forEach((ref) => fetched.add(ref));
+      missing.filter((ref) => commitSha.test(ref)).forEach((ref) => fetched.add(ref));
     }
   };
   const ancestors = new Map<string, boolean>();
@@ -149,20 +158,38 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
     async disableAuto(number) {
       gh(["pr", "merge", String(number), "--repo", repo, "--disable-auto"]);
     },
+    prepareShip() {
+      // Every older Ship run would otherwise consume a compare request, even when the exact merge is already live.
+      fetchObjects("refs/heads/main");
+    },
     async contains(base, head) {
       if (base === head) return true;
       const key = `${base}:${head}`;
       if (!ancestors.has(key)) {
+        if (initialized && commitPrefix.test(base) && commitPrefix.test(head)) {
+          try {
+            git(bare, "merge-base", "--is-ancestor", base, head);
+            ancestors.set(key, true);
+            return true;
+          } catch (error) {
+            const status = (error as { status?: number }).status;
+            // All objects in this scratch repository are fetched with their full history.
+            if (status === 1) {
+              ancestors.set(key, false);
+              return false;
+            }
+            if (status !== 128) throw error;
+          }
+        }
         const { status } = await api(`compare/${base}...${head}`);
         ancestors.set(key, ["ahead", "identical"].includes(status));
       }
       return ancestors.get(key)!;
     },
     async releaseRequired(base, head, patterns) {
-      let full = base;
+      let full;
       try {
-        // A health check may report a short commit, and a fetch only takes a full one.
-        if (base.length < 40) full = (await api(`commits/${base}`)).sha;
+        full = localCommit(base) ?? (base.length < 40 ? (await api(`commits/${base}`)).sha : base);
         fetchObjects(full, head);
       } catch (error) {
         if (isGitHubHiccup(error)) throw error;

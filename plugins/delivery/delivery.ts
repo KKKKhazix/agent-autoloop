@@ -12,6 +12,7 @@ export type DeliveryIO = {
   disableAuto(number: number): Promise<void>;
   verifyTools?(head: string): Promise<string | null>;
   contains(base: string, head: string): Promise<boolean>;
+  prepareShip?(): void | Promise<void>;
   releaseRequired(base: string, head: string, patterns: string[]): Promise<boolean>;
   live(config: Settings): Promise<Live | null>;
   wait(): Promise<void>;
@@ -102,6 +103,7 @@ export async function fullCheck(
 export async function waitLive(merged: string, config: Settings, io: DeliveryIO, head?: string) {
   if (!config.health) return;
   if (head) await io.report?.("shipping", head, { merge: merged });
+  await io.prepareShip?.();
   const query = "branch=main&event=push&per_page=100";
   let ship: number | undefined;
   for (;;) {
