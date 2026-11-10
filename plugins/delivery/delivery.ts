@@ -224,9 +224,9 @@ export async function deliver(
       pr = await synced(number, head, base, io);
       if (pr.merged_at) break;
       if (!(await io.contains(head, pr.head.sha)))
-        throw new DeliverySuperseded("同步后的分支不包含原来的提交，等待重新交付");
+        throw new DeliverySuperseded(t("同步后的分支不包含原来的提交，等待重新交付"));
       head = pr.head.sha;
-      await status(io, head, "delivery", "pending", "已同步 main，正在审查、检查和核实发布");
+      await status(io, head, "delivery", "pending", t("已同步 main，正在审查、检查和核实发布"));
       // GitHub syncs with main as it is by then, which may be newer than what was read above: against the older one, those
       // commits would be reviewed as the branch's own.
       base = (await io.api("git/ref/heads/main")).object.sha;

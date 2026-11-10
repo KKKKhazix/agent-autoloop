@@ -516,5 +516,6 @@
   "三": "Wed",
   "四": "Thu",
   "五": "Fri",
-  "六": "Sat"
+  "六": "Sat",
+  "合并请求已关闭，未合并或发布": "Pull request closed; not merged or released"
 }
