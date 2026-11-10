@@ -40,6 +40,8 @@ const HELP = `Agent 自动化中台
                                     在测试中台上检查协议
   agent-autoloop status [--json]         现在什么情况：谁在线、等你什么、在做什么、做过什么、花了多少
                                      --json 输出 /v1/state 的原始结构，给脚本用
+  agent-autoloop runs [规则] [--before <第几轮>] [--json]
+                                    列出做完的轮次，可以只看一条规则、往前翻；细节再用 why
   agent-autoloop answer <卡片> [序号] [--text 别的想法]
                                     回答一张卡片；通知不用写序号
   agent-autoloop resolve <卡片> <结果>   这件事不用决定了，写一句结果
@@ -94,6 +96,13 @@ const STATUS_USAGE = `用法：agent-autoloop status [--json]
 现在什么情况：谁在线、等你什么、在做什么、做过什么、花了多少。
   --json  输出 /v1/state 的原始结构，给脚本和看板用`;
 
+const RUNS_USAGE = `用法：agent-autoloop runs [规则] [--before <第几轮>] [--json]
+
+列出做完的轮次，新的在前，一次 20 轮：编号、结束时间、怎么样了、规则和结果。
+  规则      只看这一条规则的
+  --before  从这一轮往前列，接着上一次列到的地方
+  --json    输出这些轮次的原始结构和下一页的 before，给脚本用`;
+
 const UPDATE_USAGE = `用法：agent-autoloop update
 
 更新到最新发布的版本。没有参数。`;
@@ -147,6 +156,7 @@ rules.json 里这个定时任务要写 cwd；你答了，中台叫醒它的 Agen
   restore: { flags: ["yes"], usage: RESTORE_USAGE },
   resume: { flags: [], usage: "用法：agent-autoloop resume <规则>" },
   rules: { flags: [], usage: "用法：agent-autoloop rules explain [文件]" },
+  runs: { flags: ["before", "json"], usage: RUNS_USAGE },
   run: { flags: ["subject", "reason"], usage: "用法：agent-autoloop run <规则> [--subject 对象] [--reason 说明]" },
   service: { flags: [], usage: "用法：agent-autoloop service install|remove" },
   status: { flags: ["json"], usage: STATUS_USAGE },
@@ -426,6 +436,18 @@ async function status(named: Flags) {
   const state = await ownerClient().state();
   if (named.json !== undefined) return console.log(JSON.stringify(state, null, 2));
   console.log(render(state, { color: colorFor(process.stdout, process.env), columns: process.stdout.columns }));
+}
+
+async function runs(args: string[]) {
+  const { named, rest } = flags(args);
+  if (rest.length > 1 || named.before === true) return fail(RUNS_USAGE);
+  const before = named.before === undefined ? undefined : runOf(named.before, RUNS_USAGE);
+  const owner = ownerClient();
+  const { findRuns, runsText } = await import("./runs.ts");
+  const found = await findRuns((at) => owner.state(at), { rule: rest[0], before });
+  if (named.json !== undefined) return console.log(JSON.stringify({ runs: found.runs, before: found.more }, null, 2));
+  const color = colorFor(process.stdout, process.env);
+  console.log(runsText(found, { rule: rest[0], color, columns: process.stdout.columns }));
 }
 
 async function answer(args: string[]) {
@@ -801,6 +823,7 @@ const commands: Record<string, () => unknown> = {
   try: () => tryIt(),
   status: () => status(flags(args).named),
   why: () => why(args),
+  runs: () => runs(args),
   conformance: () => checkConformance(args),
   answer: () => answer(args),
   resolve: () => resolve(args),
