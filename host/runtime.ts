@@ -121,8 +121,7 @@ export function reloadRules(file = RULES_FILE): { problem?: string } {
 }
 
 function unreadable(file: string, error: NodeJS.ErrnoException) {
-  if (error.code === "ENOENT")
-    return t('找不到 {"file"}，被删掉或移走了？放回去就会接着用', { file });
+  if (error.code === "ENOENT") return t('找不到 {"file"}，被删掉或移走了？放回去就会接着用', { file });
   if (error.code === "EACCES" || error.code === "EPERM")
     return t('没有权限读 {"file"}，改回能读的权限就会接着用', { file });
   return t('读不到 {"file"}：{"why"}', { file, why: error.code ?? error.message });
