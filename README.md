@@ -73,6 +73,10 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 ## 日常怎么配？
 
+### 界面语言
+
+界面默认是中文。想让 CLI 输出、卡片和通知显示英文，把 `~/.agent-autoloop/config.json` 里加上 `"lang": "en"`（或运行命令前设环境变量 `AGENT_AUTOLOOP_LANG=en`）。翻译来自 `locales/en.json`：字典里没有的字符串按原文（中文）显示，所以字典跟不上一版新代码也不会坏。改完 `config.json` 重启中台生效；每条 CLI 命令自己读，立即生效。
+
 ### 写一份规则（`rules.json`）
 
 不需要写胶水代码。打开 `~/.agent-autoloop/rules.json`，在 `rules` 里写清楚**什么事、交给谁、在哪个目录干**。`to` 填 `agents` 里已有的名字。比如每天早上 9 点写早报：

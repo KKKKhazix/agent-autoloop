@@ -75,6 +75,10 @@ Anything the agent can handle alone takes the auto-loop at the top of the diagra
 
 ## Day-to-day usage
 
+### Interface language
+
+The interface is Chinese by default. To have the CLI output, cards and notifications show English, add `"lang": "en"` to `~/.agent-autoloop/config.json` (or set the environment variable `AGENT_AUTOLOOP_LANG=en` for one command). Translations come from `locales/en.json`: a string the dictionary doesn't have shows in the original Chinese, so a dictionary trailing a new release never breaks anything. Restart the hub after editing `config.json`; each CLI command reads it for itself and takes effect at once.
+
 ### Write your rules (`rules.json`)
 
 No glue code needed. Open `~/.agent-autoloop/rules.json` and, under `rules`, declare **what happened, who handles it, and where they work**. Set `to` to a name already under `agents`. For example, write a brief every morning at 9:
