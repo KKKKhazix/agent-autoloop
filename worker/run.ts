@@ -39,7 +39,7 @@ if (process.argv[2] === "--supervise") {
   const said = (error: NodeJS.ErrnoException) =>
     error.code === "ENAMETOOLONG"
       ? `命令行太长：约 ${argv.join(" ").length} 个字符，Windows 最多 32767。` +
-        "把规则里长的说明写进 Skill；命令行 Agent 可以不传 {prompt}，改读资料文件。"
+        "把规则里长的说明写进 Skill，提示词里只留一句加载它。"
       : error.message;
   try {
     const [program, args] = commandLine(argv);
