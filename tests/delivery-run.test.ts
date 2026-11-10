@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { createIO } from "../plugins/delivery/github.ts";
+import { createIO, github, isGitHubHiccup, type DeliveryOptions } from "../plugins/delivery/github.ts";
 import { poll } from "../plugins/delivery/poll.ts";
 import { run } from "../plugins/delivery/run.ts";
 import { readMessage } from "../worker/contract.ts";
@@ -20,28 +20,42 @@ const bin = join(root, "bin");
 const routes = join(root, "routes.json");
 const calls = join(root, "calls.txt");
 const statuses = join(root, "statuses.txt");
+const bodies = join(root, "bodies.json");
 mkdirSync(bin);
 writeFileSync(
   join(bin, "gh"),
   `#!${process.execPath}
-const { appendFileSync, readFileSync } = require("node:fs");
-const { FAKE_GH_CALLS, FAKE_GH_ROUTES, FAKE_GH_STATUSES } = process.env;
+const { appendFileSync, readFileSync, writeFileSync } = require("node:fs");
+const { FAKE_GH_CALLS, FAKE_GH_ROUTES, FAKE_GH_STATUSES, FAKE_GH_BODIES } = process.env;
 const args = process.argv.slice(2);
 appendFileSync(FAKE_GH_CALLS, args.join(" ") + "\\n");
 const answer = JSON.parse(readFileSync(FAKE_GH_ROUTES, "utf8"))[args[1]];
 const written = /\\/statuses\\/(\\w+)$/.exec(args[1]);
 const asked = /\\/commits\\/(\\w+)\\/status\\?/.exec(args[1]);
-if (answer?.fail || (answer === undefined && !written && !asked)) {
+const listing = /\\/commits\\/(\\w+)\\/statuses\\?/.exec(args[1]);
+const pr = /\\/pulls\\/\\d+$/.test(args[1]);
+if (args[1] === "user") { console.log("42"); process.exit(0); }
+if (answer?.fail || (answer === undefined && !written && !asked && !listing)) {
   console.error(answer?.fail ?? "gh: Not Found (HTTP 404)");
   process.exit(1);
 }
 if (written) {
-  appendFileSync(FAKE_GH_STATUSES, JSON.stringify({ sha: written[1], ...JSON.parse(readFileSync(0, "utf8")) }) + "\\n");
+  appendFileSync(FAKE_GH_STATUSES, JSON.stringify({ sha: written[1], creator: { id: 42 }, ...JSON.parse(readFileSync(0, "utf8")) }) + "\\n");
   console.log("{}");
 } else if (asked) {
   const lines = readFileSync(FAKE_GH_STATUSES, "utf8").split("\\n").filter(Boolean);
   const newestFirst = lines.map((line) => JSON.parse(line)).filter((item) => item.sha === asked[1]).reverse();
   console.log(JSON.stringify({ statuses: newestFirst.filter((item, at) => newestFirst.findIndex((other) => other.context === item.context) === at) }));
+} else if (listing && answer === undefined) {
+  const rows = readFileSync(FAKE_GH_STATUSES, "utf8").split("\\n").filter(Boolean).map(JSON.parse);
+  console.log(JSON.stringify([rows.filter((item) => item.sha === listing[1]).reverse()]));
+} else if (pr) {
+  const bodies = JSON.parse(readFileSync(FAKE_GH_BODIES, "utf8"));
+  if (args.includes("PATCH")) {
+    bodies[args[1]] = JSON.parse(readFileSync(0, "utf8")).body;
+    writeFileSync(FAKE_GH_BODIES, JSON.stringify(bodies));
+  }
+  console.log(JSON.stringify({ ...answer, body: bodies[args[1]] ?? answer.body }));
 } else {
   console.log(JSON.stringify(args.includes("--slurp") ? [answer] : answer));
 }
@@ -52,7 +66,9 @@ process.env.PATH = `${bin}:${process.env.PATH}`;
 process.env.FAKE_GH_ROUTES = routes;
 process.env.FAKE_GH_CALLS = calls;
 process.env.FAKE_GH_STATUSES = statuses;
+process.env.FAKE_GH_BODIES = bodies;
 writeFileSync(statuses, "");
+writeFileSync(bodies, "{}");
 /** What the stand-in answers from here on, by the path after `gh api`, and a clean list of what it was asked. */
 const answers = (table: object) => {
   writeFileSync(routes, JSON.stringify(table));
@@ -103,10 +119,10 @@ const live = publish("docs/a.md", "first");
 const docsOnly = publish("docs/a.md", "second");
 const code = publish("app.ts", "2");
 const internal = ["docs/*.md"];
-const ioIn = (name: string) => {
+const ioIn = (name: string, options?: DeliveryOptions) => {
   const folder = join(root, name);
   mkdirSync(folder);
-  return createIO("example/app", folder);
+  return createIO("example/app", folder, options);
 };
 
 test("a short commit from the health check is made full before comparing", async () => {
@@ -125,6 +141,38 @@ test("a full commit is compared as it is, without asking GitHub", async () => {
 test("a short commit GitHub doesn't know means a release", async () => {
   answers({});
   assert.equal(await ioIn("unknown").releaseRequired("abcdef0", docsOnly, internal), true);
+});
+
+test("the toolkit trusts only a commit on main containing its latest tool changes", async () => {
+  const installedFile = `repos/example/app/contents/ops/delivery/kit.json?ref=${code}`;
+  const checks = (installed: string, onMain: string, current: string) => ({
+    [installedFile]: { content: Buffer.from(JSON.stringify({ kit: installed })).toString("base64") },
+    "repos/example/tools/git/ref/heads/main": { object: { sha: code } },
+    [`repos/example/tools/commits?sha=${code}&path=delivery&per_page=1`]: [{ sha: docsOnly }],
+    [`repos/example/tools/compare/${installed}...${code}`]: { status: onMain },
+    [`repos/example/tools/compare/${docsOnly}...${installed}`]: { status: current },
+  });
+  const io = ioIn("kit", { toolkit: "example/tools" });
+  answers(checks(docsOnly, "ahead", "identical"));
+  assert.equal(await io.verifyTools?.(code), null);
+  answers(checks(live, "ahead", "behind"));
+  assert.match((await io.verifyTools?.(code)) ?? "", /不是 main 上的最新版/);
+  answers(checks(live, "diverged", "ahead"));
+  assert.match((await io.verifyTools?.(code)) ?? "", /不是 main 上的最新版/);
+  assert.equal(ioIn("own-kit", { toolkit: "example/app" }).verifyTools, undefined);
+});
+
+test("GitHub's own 5xx and GraphQL failures keep their classification through the CLI", async () => {
+  const api = github("example/app");
+  for (const failure of ["gh: something failed (HTTP 502)", "Something went wrong while executing your query"]) {
+    answers({ "repos/example/app/pulls/1": { fail: failure } });
+    await assert.rejects(() => api("pulls/1"), isGitHubHiccup);
+  }
+  answers({ "repos/example/app/pulls/1": { fail: "secondary rate limit (HTTP 403)" } });
+  await assert.rejects(
+    () => api("pulls/1"),
+    (error) => !isGitHubHiccup(error),
+  );
 });
 
 test("a failure on an ordinary issue is reported as it happened", async () => {
@@ -191,6 +239,7 @@ const lastStatus = (context: string) =>
 const startOver = () => {
   writeFileSync(statuses, "");
   writeFileSync(reviews, "");
+  writeFileSync(bodies, "{}");
 };
 const settingsPath = `repos/example/app/contents/ops/delivery.json?ref=${live}`;
 const settingsFile = {
@@ -242,7 +291,7 @@ test("a failed round in between does not open a commit with findings to another 
   const third = await run("example/app", about(8), true).catch((error) => error.message);
   assert.equal(timesReviewed(), 1);
   assert.equal(lastStatus("my-review").state, "failure");
-  assert.match(third, /推新提交/);
+  assert.match(third, /第 1 条还没有处理/);
 });
 
 const merged = { ...openPr, state: "closed", merged_at: "now", merge_commit_sha: code };

@@ -47,6 +47,11 @@ test("the fixture loads, with defaults filled in", () => {
   const wrapped = good();
   wrapped.agents.a1.program = "/opt/bin/claude-via-gateway";
   assert.equal(parseRules(JSON.stringify(wrapped)).agents.a1.program, "/opt/bin/claude-via-gateway");
+  wrapped.agents.a1.maxActive = 3;
+  wrapped.rules[0].maxActive = 1;
+  const limited = parseRules(JSON.stringify(wrapped));
+  assert.equal(limited.agents.a1.maxActive, 3);
+  assert.equal(limited.rules[0].maxActive, 1);
 });
 
 test("a mistake says which rule and what is wrong", () => {
@@ -106,6 +111,12 @@ test("a mistake says which rule and what is wrong", () => {
   problem((r) => {
     r.rules[0].parallel = 0;
   }, /规则「意见」.*parallel/);
+  problem((r) => {
+    r.rules[0].maxActive = 0;
+  }, /规则「意见」.*maxActive/);
+  problem((r) => {
+    r.agents.a1.maxActive = 1.5;
+  }, /Agent a1.*maxActive/);
   problem((r) => {
     r.rules[0].resume = "thread";
   }, /规则「意见」.*resume/);

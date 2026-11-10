@@ -307,18 +307,20 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   const runs = rows(draft.view, "runs", { state: ["queued", "claimed"] });
   const claimed = runs.filter((run) => run.state === "claimed");
   const groupLimit = (group: string) => draft.rules.rules.find((rule) => rule.group === group)?.parallel ?? 1;
-  // What was queued before a pause, or an answer that came in during one, waits for the resume.
-  const unpaused = (name: string) => {
-    const rule = ruleNamed(draft, name);
-    return !!rule && !pauseOf(draft.view, rule, draft.now);
+  const claimable = (run: Row) => {
+    if (run.state !== "queued") return false;
+    const rule = ruleNamed(draft, run.rule);
+    // What was queued before a pause, or an answer that came in during one, waits for the resume.
+    if (!rule || !agents.includes(rule.to) || pauseOf(draft.view, rule, draft.now)) return false;
+    const agentLimit = draft.rules.agents[rule.to].maxActive;
+    return (
+      Date.parse(run.not_before) <= draft.now &&
+      !claimed.some((other) => other.grp === run.grp && other.lane === run.lane) &&
+      claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp) &&
+      (rule.maxActive === undefined || claimed.filter((other) => other.rule === run.rule).length < rule.maxActive) &&
+      (agentLimit === undefined || claimed.filter((other) => other.agent === rule.to).length < agentLimit)
+    );
   };
-  const claimable = (run: Row) =>
-    run.state === "queued" &&
-    agents.includes(ruleNamed(draft, run.rule)?.to ?? "") &&
-    Date.parse(run.not_before) <= draft.now &&
-    unpaused(run.rule) &&
-    !claimed.some((other) => other.grp === run.grp && other.lane === run.lane) &&
-    claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp);
   // The same claim again means the answer got lost: it gets back the run it already has.
   const held = claimed.find((run) => run.claim === claim && workerOf(draft.view, run) === worker);
   const run = held ?? runs.find(claimable);

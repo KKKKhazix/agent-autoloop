@@ -28,6 +28,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 - 同一个对象的事件要分开处理、互不等待，就写 `parallel`。一台接单程序同时跑几轮还受 `config.json` 的 `worker.capacity` 限制，默认 2，要多跑就一起调大。
 - 对话这类要马上回的活，不想排在批量的长任务后面：把批量的规则都写进同一个 `group`，`parallel` 写得比 `worker.capacity` 小，留下的名额长任务占不了，对话来了直接领。比如 `capacity` 是 4，批量那组写 `"group": "batch", "parallel": 3`。同一组的规则 `parallel` 写成一样的。
+- 同组一共并行三轮，但单条规则每次只跑一轮时，在规则里加 `"maxActive": 1`。每个对象仍单独排队。在 `agents` 里也可以给单个 Agent 加 `maxActive`，限制它跨规则同时跑几轮。
 - 同一个对象的新事件要接着上一轮的会话（比如同一个对话的后续消息），就写 `"resume": true`；默认每次开新会话。上一轮被停掉、可能还在跑或者换了 Agent 时开新的。不写 `parallel` 时整条规则的事件都接同一个会话。
 - 要停一条规则，用 `agent-autoloop pause <规则> --reason …`（到点自动恢复加 `--until`），恢复用 `resume <规则>`，现在就跑一轮用 `run <规则>`；不用为了停规则去改 `rules.json`。
 - 改规则前可以先写成草稿，用 `agent-autoloop check <草稿>` 校验，不影响正在跑的中台。
@@ -125,6 +126,8 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 }
 ```
 
+多个项目共用规则时，在接单命令后加 `--review-policy owner/config:ops/review-policy.json`。插件从这个仓库的 main 读取文件。`reviewers` 按名字给出模型（字符串简写）或 `{ "model": "…", "effort": "xhigh" }`，`default` 是默认审查器名称列表，`agents` 给每种开发 Agent 写列表，空列表免审，同名写两次独立审查两次。`trusted_submitters` 列出可以登记来源的 GitHub 数字账号。深审路径和显式只审查都可覆盖免审。已有分支规则指定审查状态时，用 `--review-status` 传它的名字。
+
 `AGENTS.md` 要有 `## 审查要点`。`review.command` 可用命令数组替换审查程序：提示词从标准输入读，`{input}` 替换成文字差异文件，标准输出必须是 `{"findings":[{"title":"文件:行号和问题","text":"触发条件和后果"}]}`；没问题交空列表。默认 Codex 忽略用户配置、禁用记忆，只读单独的审查快照。`admin_merge` 默认为空；只有 main 明确列出的 PR 作者才能使用管理员合并。没有线上服务的项目可以省略 `health`，回执会明确写只完成合并。
 
 要按写代码的 Agent 定审查，在 `review` 里加 `agents` 和 `trusted`：
@@ -192,6 +195,17 @@ gh api repos/owner/app/statuses/<完整提交编号> -f context=delivery-agent/<
 轮询无需配置新的 Webhook 或密钥，事件编号由标签记录与 PR 提交组成，重复读取不会重新派发；也可以直接接现有 GitHub 来源。事项按 `owner/repo#编号` 分开，`parallel` 控制并发。打 `deliver` 进入流程；同时打 `deliver-review` 只审查，在等待检查期间加上也会阻止合并；`deliver-attended` 表示有人盯着，发现问题只写回执、不另发通知。审查发现问题后，同一个提交不再审第二次，修复后推新提交才重新审查。普通 issue 打 `ask-owner` 会变成一张问题卡片，回答后去掉标签；不替你在 GitHub 发评论。
 
 合并后发布失败时，修复发布后重新跟进原 PR 的 Ship 和健康检查。
+
+把这套流程接到已有 GitHub 交付命令时，可以在可信规则中给 `delivery` 的 `command` 加这些参数。
+
+- `--auto-merge` 在完整检查和审查都通过后，为当前提交开启 GitHub 的 squash 自动合并。项目设置中的管理员合并名单仍走现有管理员权限。
+- `--toolkit owner/name` 在合并前核对项目装入的 `ops/delivery/` 与该工具仓库 main 一致。工具仓库自己使用源码。
+- `--progress-command /绝对路径/程序` 从标准输入收一条阶段快照，包括 `repo`、`number`、`head`、`phase`、`at`，已知时带 `merge`、`ship`、`detail`。展示失败不影响 GitHub 回执。
+- `--notify-command /绝对路径/程序` 从标准输入收 `{ "key": "…", "text": "…" }`。程序用 `key` 去重，在成功接收后返回零。这个模式把无人等的退回和 `ask-owner` 转告交给该程序，并用中台复查每分钟重试暂时的 GitHub 或执行错误。
+
+对应的轮询命令用 `poll.ts --dispatch owner/app owner/another`。规则按 `delivery.owner.app.pr`、`delivery.owner.app.issue` 和 `delivery.owner.app.unacknowledged` 路由给固定的仓库，其中最后一种在有等待标记的退回三分钟无人领取时触发。同组设置 `parallel` 控制总体并发，每个项目规则用 `maxActive: 1`。
+
+中台停机时，可以在原接单机器上先确认同一项目的交付已停稳，再用可信安装目录的 `node plugins/delivery/run.ts owner/app --pr 123` 加原规则中的审查和合并参数，处理已打 `deliver` 的 PR。它直接读 GitHub 当前状态并使用相同检查。中台不可达时省略通知和看板命令。手动交付期间保持自动派单暂停，完毕后再恢复接单。
 
 项目 Ship 只在 main 的 push 上运行，检出完整历史（checkout 的 `fetch-depth: 0`），然后调用这个仓库的 Action。把下面的占位提交换成发布后核实的完整 SHA：
 
