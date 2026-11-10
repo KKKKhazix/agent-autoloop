@@ -186,28 +186,6 @@ async function runReviewer(
   return parseReview(command ? text : readFileSync(output, "utf8"));
 }
 
-export async function reviewSnapshot(
-  bare: string,
-  snapshot: string,
-  main: string,
-  head: string,
-  config: Settings,
-  source: { agent: string | null; required: boolean } = { agent: null, required: false },
-): Promise<Reviewed> {
-  // Git can't show what a merge of three or more parents brought: neither its paths nor its diff would reach the reviewer.
-  if (git(bare, "rev-list", "--min-parents=3", head, "--not", main)) return [OCTOPUS];
-  const changed = scope(bare, main, head, config);
-  if (!changed.needsReview) return [];
-  const [reviewer] = selectReview(config, source.agent, changed.inDepth || source.required);
-  if (!reviewer) return { exempt: source.agent! };
-  return runReviewer(
-    snapshot,
-    reviewer,
-    depth(reviewer.effort, changed.inDepth),
-    reviewInput(bare, main, changed.range, config),
-  );
-}
-
 type ReviewOptions = {
   api: (path: string, body?: any, method?: string) => Promise<any>;
   statuses: (sha: string) => any[];
