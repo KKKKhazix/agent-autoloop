@@ -81,4 +81,8 @@ PR 一开出来就开审查，几个 PR 同时审，不排队。审查报的问�
 
 现有测试是行为规格，不为迁就实现改预期。模拟、穷举、强杀和变异检查在本地只在相关改动需要时运行，不扩写验证框架。新测试先写失败方式再写实现，不补复述实现的测试。性能只记录实测，不设达标线，不作为发布门槛；不为加速模拟保留另一套内核。实测采用 README 和协议的口径：空闲内存与千连接内存分开，持久化写入不换成批量提交。不写守数字的测试（行数、内存、检查条数）：边界用查越没越界的测试守，长了多少写进汇报让人判断。
 
-真机脚本在 `scripts/real-agents.ts`、`scripts/real-protocols.ts` 和 `scripts/delivery-e2e.ts`。真实交付脚本要求 `owner/name --run`，会创建并删除指定私有测试仓库；只有用户明确要求运行时才执行。其他测试使用临时 `AGENT_AUTOLOOP_HOME` 和随机端口，退出清理。飞书用假 CLI；不能拿已在线的应用再开一个事件监听。通道用本地假 HTTP 服务，不发真消息。桌面通知用放在 PATH 最前面的假命令，不真的弹：`init` 之后再跑 `up` 的测试都要带上。`scripts/install-smoke.sh` 在临时 HOME 里走一遍从安装到卸载，装的是已提交的代码，CI 在 ubuntu 和 macOS 上都跑；Windows 用 `scripts/install-smoke-windows.ts`，共用行为和原生进程检查用 `npm run test:windows`。Unix shell、Homebrew 与服务模拟仍在 Unix 验证，Windows 原生安装、通知和进程树由专用测试覆盖；登录服务在真实桌面会话验证，CI 不注册用户任务。
+真机脚本在 `scripts/real-agents.ts`、`scripts/real-protocols.ts` 和 `scripts/delivery-e2e.ts`。真实交付脚本要求 `owner/name --run`，会创建并删除指定私有测试仓库；只有用户明确要求运行时才执行。其他测试使用临时 `AGENT_AUTOLOOP_HOME` 和随机端口。飞书用假 CLI；不能拿已在线的应用再开一个事件监听。通道用本地假 HTTP 服务，不发真消息。
+
+本机用 `init --no-service` 准备验收时，先从临时 `config.json` 和 `rules.json` 的 `channels` 移除 `desktop` 再启动 `up`。验收桌面通道时才保留 `desktop`，并用放在 PATH 最前面的假命令接收通知。后台启动时记下这次进程的 PID，正常结束、失败和中断时都等该进程退出后再删临时目录。
+
+`scripts/install-smoke.sh` 在临时 HOME 里走一遍从安装到卸载，装的是已提交的代码，CI 在 Ubuntu 和 macOS 上都跑。Windows 用 `scripts/install-smoke-windows.ts`，共用行为和原生进程检查用 `npm run test:windows`。Unix shell、Homebrew 与服务模拟仍在 Unix 验证，Windows 原生安装、通知和进程树由专用测试覆盖。登录服务在真实桌面会话验证，CI 不注册用户任务。
