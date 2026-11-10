@@ -83,7 +83,8 @@ const HELP = `Agent 自动化中台
 const INIT_USAGE = `用法：agent-autoloop init [--agent claude|codex] [--command '某个命令 {prompt}'] [--port 3350] [--no-service]
 
   --agent      只接这个 Agent：claude 或 codex。不写就接本机装好的全部
-  --command    改用别的命令行 Agent；{prompt} 会作为一个独立参数传进去
+  --command    改用别的命令行 Agent；{prompt} 会作为一个独立参数传进去，带空格的路径用引号括起来；
+               这台电脑上找不到这个程序就不装
   --port       中台监听的端口，默认 3350
   --no-service 先不装系统服务，之后手动运行 agent-autoloop up`;
 
@@ -256,16 +257,56 @@ function howToRun() {
   return /\s/.test(PROGRAM) ? `'${PROGRAM}'` : PROGRAM;
 }
 
+/**
+ * A command line split the way a shell would: spaces part words, quotes keep one together and are dropped. No escapes, as
+ * a Windows path is all backslashes. Null when a quote is left open.
+ */
+function commandWords(line: string) {
+  const words: string[] = [];
+  let word: string | null = null;
+  let quote: string | null = null;
+  for (const char of line) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else word += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      word ??= "";
+    } else if (/\s/.test(char)) {
+      if (word !== null) words.push(word);
+      word = null;
+    } else word = (word ?? "") + char;
+  }
+  if (quote) return null;
+  if (word !== null) words.push(word);
+  return words;
+}
+
 /** What was asked for on the command line, or whichever of the usual Agents is installed. */
 async function agentsToUse(named: Flags, worker: string) {
   const agents: Record<string, { name: string; worker: string; use: string; command?: string[] }> = {};
+  const { adapterFor, findProgram } = await import("../worker/agents.ts");
   const command = text(named.command);
   if (command) {
-    agents.agent = { name: "Agent", worker, use: "command", command: command.split(/\s+/) };
+    const words = commandWords(command);
+    if (!words?.length) return fail(`--command 里有没配对的引号：${command}`);
+    // Found now, or every run of every rule fails later with the install long said to be done.
+    const [first] = words;
+    const there = /[\\/]/.test(first)
+      ? existsSync(path.resolve(first))
+      : /^[\w.+@-]+$/.test(first) &&
+        (() => {
+          try {
+            return Boolean(findProgram(first));
+          } catch {
+            return false;
+          }
+        })();
+    if (!there) return fail(`找不到 ${first}：先装好它，或者在 --command 里写它的完整路径。`);
+    agents.agent = { name: "Agent", worker, use: "command", command: words };
     return agents;
   }
   const wanted = text(named.agent);
-  const { adapterFor } = await import("../worker/agents.ts");
   const emptyTurn = {
     prompt: "",
     session: "",
