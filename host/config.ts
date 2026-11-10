@@ -13,6 +13,8 @@ export type Config = {
   channels?: Record<string, ChannelConfig>;
   source?: { name: string; key: string };
   owner?: string;
+  /** The interface language; only English has a dictionary today, anything else shows Chinese. */
+  lang?: "en";
 };
 
 export const CONFIG_FILE = path.join(HOME, "config.json");
