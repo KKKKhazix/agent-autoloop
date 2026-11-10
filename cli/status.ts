@@ -1,6 +1,7 @@
 // `agent-autoloop status` for a person: what waits for them first, then what's going on, then what only reports.
 // Colour only on a terminal: a pipe, a file or an Agent reading it gets plain text, and scripts use --json.
 import { spendLines } from "./spend.ts";
+import { localeTag, t } from "../host/i18n.ts";
 
 type Style = (text: string) => string;
 
@@ -71,21 +72,24 @@ function clockFor(state: any) {
     return Date.UTC(y, m - 1, d) / 86_400_000;
   };
   const clock = (at: number) =>
-    new Date(at).toLocaleString("zh-CN", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    new Date(at).toLocaleString(localeTag(), { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   /** Today's is just the time; yesterday, tomorrow and the coming week by name; further off by date. */
   const when = (iso: string) => {
     const at = Date.parse(iso);
     const days = dayOf(at) - dayOf(now);
     if (days === 0) return clock(at);
-    if (days === -1) return `昨天 ${clock(at)}`;
-    if (days === 1) return `明天 ${clock(at)}`;
-    if (days > 1 && days < 7) return `${WEEK[new Date(dayOf(at) * 86_400_000).getUTCDay()]} ${clock(at)}`;
-    const date = new Date(at).toLocaleString("zh-CN", { timeZone: zone, month: "numeric", day: "numeric" });
-    return `${date} ${clock(at)}`;
+    if (days === -1) return t('昨天 {"time"}', { time: clock(at) });
+    if (days === 1) return t('明天 {"time"}', { time: clock(at) });
+    if (days > 1 && days < 7)
+      return t('{"day"} {"time"}', { day: t(WEEK[new Date(dayOf(at) * 86_400_000).getUTCDay()]), time: clock(at) });
+    const date = new Date(at).toLocaleString(localeTag(), { timeZone: zone, month: "numeric", day: "numeric" });
+    return t('{"date"} {"time"}', { date, time: clock(at) });
   };
   const lasted = (iso: string) => {
     const minutes = Math.max(0, Math.round((now - Date.parse(iso)) / 60_000));
-    return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+    return minutes < 60
+      ? t('{"n"} 分钟', { n: minutes })
+      : t('{"h"} 小时 {"m"} 分钟', { h: Math.floor(minutes / 60), m: minutes % 60 });
   };
   return { when, lasted };
 }
@@ -99,10 +103,10 @@ export function runRows(state: any, runs: any[], { color, columns }: { color: bo
   const { dim, red, green, yellow } = stylesFor(color);
   const { when } = clockFor(state);
   const RUN_LOOK: Record<string, [string, Style]> = {
-    done: ["做完了", green],
-    nothing: ["没事可做", dim],
-    cancelled: ["停了", yellow],
-    unknown: ["不确定", red],
+    done: [t("做完了"), green],
+    nothing: [t("没事可做"), dim],
+    cancelled: [t("停了"), yellow],
+    unknown: [t("不确定"), red],
   };
   const out: string[] = [];
   const ended = runs.map((run: any) => (run.finishedAt ? when(run.finishedAt) : ""));
@@ -141,12 +145,12 @@ export function render(state: any, { color, columns }: { color: boolean; columns
     n > 0 ? `${label} ${bold(style(String(n)))}` : dim(`${label} 0`);
   say(
     [
-      count("等你", state.cards.length, yellow),
-      count("在跑", totals.running, cyan),
-      count("排队", totals.queued - totals.retrying, yellow),
-      totals.retrying ? count("等重派", totals.retrying, yellow) : "",
-      totals.unknown ? count("不确定", totals.unknown, red) : "",
-      `今天做完 ${totals.doneToday}`,
+      count(t("等你"), state.cards.length, yellow),
+      count(t("在跑"), totals.running, cyan),
+      count(t("排队"), totals.queued - totals.retrying, yellow),
+      totals.retrying ? count(t("等重派"), totals.retrying, yellow) : "",
+      totals.unknown ? count(t("不确定"), totals.unknown, red) : "",
+      t('今天做完 {"n"}', { n: totals.doneToday }),
     ]
       .filter(Boolean)
       .join(dim(" · ")),
@@ -155,9 +159,9 @@ export function render(state: any, { color, columns }: { color: boolean; columns
 
   const presence = [
     ...state.agents.map((agent: any) => ({ ...agent, where: agent.worker })),
-    ...state.channels.map((channel: any) => ({ ...channel, where: "通道" })),
+    ...state.channels.map((channel: any) => ({ ...channel, where: t("通道") })),
   ];
-  if (presence.length) section(heading("在线"));
+  if (presence.length) section(heading(t("在线")));
   const nameRoom = Math.max(0, ...presence.map((one) => width(one.name)));
   const whereRoom = Math.max(0, ...presence.map((one) => width(one.where)));
   for (const one of presence) {
@@ -165,18 +169,21 @@ export function render(state: any, { color, columns }: { color: boolean; columns
     if (one.online) say(head + dim(one.where));
     else
       say(
-        `${head}${dim(pad(one.where, whereRoom))}  ${red(`离线，最后在线 ${one.seenAt ? when(one.seenAt) : "没见过"}`)}`,
+        `${head}${dim(pad(one.where, whereRoom))}  ${red(
+          t('离线，最后在线 {"when"}', { when: one.seenAt ? when(one.seenAt) : t("没见过") }),
+        )}`,
       );
   }
 
   const paused = state.lines.filter((line: any) => line.paused);
-  if (paused.length) section(`${heading("暂停中")}${dim("（恢复：agent-autoloop resume <规则>）")}`);
-  for (const line of paused) say(`  ${line.name}${line.paused.reason ? dim(`：${line.paused.reason}`) : ""}`);
+  if (paused.length) section(`${heading(t("暂停中"))}${dim(t("（恢复：agent-autoloop resume <规则>）"))}`);
+  for (const line of paused)
+    say(`  ${line.name}${line.paused.reason ? dim(t('：{"reason"}', { reason: line.paused.reason })) : ""}`);
 
   const INDENT = "       ";
-  if (state.cards.length) section(bold(yellow(`等你 ${state.cards.length}`)));
+  if (state.cards.length) section(bold(yellow(t('等你 {"n"}', { n: state.cards.length }))));
   for (const card of state.cards) {
-    const label = card.kind === "ask" ? bold(yellow("决定")) : bold(magenta("留意"));
+    const label = card.kind === "ask" ? bold(yellow(t("决定"))) : bold(magenta(t("留意")));
     say(`  ${label} ${dim(`#${card.id}`)} ${bold(card.title)}`);
     for (const paragraph of (card.text ?? "").split(/\n\s*\n/).filter((one: string) => one.trim())) {
       for (const line of wrap(unlinked(paragraph), room - INDENT.length)) say(INDENT + line);
@@ -184,61 +191,80 @@ export function render(state: any, { color, columns }: { color: boolean; columns
     }
     if (card.kind === "ask") {
       card.options.forEach((option: string, index: number) => {
-        say(`${INDENT}${index + 1}. ${option}${index === card.recommend ? green("（推荐）") : ""}`);
+        say(
+          INDENT +
+            t('{"n"}. {"option"}{"recommend"}', {
+              n: index + 1,
+              option,
+              recommend: index === card.recommend ? green(t("（推荐）")) : "",
+            }),
+        );
       });
-      say(dim(`${INDENT}回答：agent-autoloop answer ${card.id} <序号>`));
-    } else say(dim(`${INDENT}处理完了：agent-autoloop answer ${card.id}`));
+      say(dim(INDENT + t('回答：agent-autoloop answer {"id"} <序号>', { id: card.id })));
+    } else say(dim(INDENT + t('处理完了：agent-autoloop answer {"id"}', { id: card.id })));
   }
 
   const sourceName = (id: string) => state.sources.find((one: any) => one.id === id)?.name ?? id;
   const because = (event: { source: string; type: string; subject: string; summary: string }) => {
-    if (event.type === "card.answered") return `你回答了卡片「${event.summary}」`;
-    if (event.type === "schedule.tick") return "到点了";
-    if (event.type === "timer.due") return `约好的复查到了${event.subject ? `：${event.subject}` : ""}`;
+    if (event.type === "card.answered") return t('你回答了卡片「{"card"}」', { card: event.summary });
+    if (event.type === "schedule.tick") return t("到点了");
+    if (event.type === "timer.due")
+      return t('约好的复查到了{"subject"}', {
+        subject: event.subject ? t('：{"subject"}', { subject: event.subject }) : "",
+      });
     if (event.type === "run.manual") return event.summary;
     return `${sourceName(event.source)} ${event.type} ${event.summary || event.subject}`.trim();
   };
   const running = state.runs.filter((run: any) => run.state === "claimed");
   const queued = state.runs.filter((run: any) => run.state === "queued");
-  if (running.length || queued.length) section(heading("正在做"));
+  if (running.length || queued.length) section(heading(t("正在做")));
   for (const run of running) {
-    const stopping = run.stopping ? `  ${yellow("正在停")}` : "";
-    say(`  ${dim(`#${run.id}`)} ${run.rule}  ${cyan(`已跑 ${lasted(run.claimedAt)}`)}${stopping}`);
-    if (run.events[0]) for (const line of wrap(`因为${because(run.events[0])}`, room - 6, 1)) say(`      ${dim(line)}`);
+    const stopping = run.stopping ? `  ${yellow(t("正在停"))}` : "";
+    say(
+      `  ${dim(`#${run.id}`)} ${run.rule}  ${cyan(t('已跑 {"duration"}', { duration: lasted(run.claimedAt) }))}${stopping}`,
+    );
+    if (run.events[0])
+      for (const line of wrap(t('因为{"why"}', { why: because(run.events[0]) }), room - 6, 1))
+        say(`      ${dim(line)}`);
   }
   for (const run of queued) {
     const retry = run.attempts > 0;
-    say(`  ${dim(`#${run.id}`)} ${run.rule}  ${yellow(retry ? `等重派，${when(run.notBefore)} 再试` : "排队")}`);
+    say(
+      `  ${dim(`#${run.id}`)} ${run.rule}  ${yellow(
+        retry ? t('等重派，{"when"} 再试', { when: when(run.notBefore) }) : t("排队"),
+      )}`,
+    );
     if (retry && run.error) for (const line of wrap(run.error, room - 6, 2)) say(`      ${red(line)}`);
   }
 
   const recentRuns = state.runs.filter(finished).slice(0, 8);
-  if (recentRuns.length) section(heading("最近几轮"));
+  if (recentRuns.length) section(heading(t("最近几轮")));
   for (const line of runRows(state, recentRuns, { color, columns })) say(line);
 
   const CARD_LOOK: Record<string, [string, Style]> = {
-    decided: ["已回答", cyan],
-    done: ["已完成", green],
-    closed: ["已关闭", dim],
+    decided: [t("已回答"), cyan],
+    done: [t("已完成"), green],
+    closed: [t("已关闭"), dim],
   };
   const recent = state.recentCards.slice(0, 5);
-  if (recent.length) section(heading("最近的卡片"));
+  if (recent.length) section(heading(t("最近的卡片")));
   const cardRoom = Math.max(0, ...recent.map((card: any) => width(`#${card.id}`)));
   for (const card of recent) {
     const [label, style] =
       card.kind === "notice" && card.state === "closed"
-        ? ["已处理", dim]
+        ? [t("已处理"), dim]
         : (CARD_LOOK[card.state] ?? [card.state, (text: string) => text]);
     const before = `  ${pad(`#${card.id}`, cardRoom)} ${pad(label, 6)} `;
     const [title] = wrap(card.title, room - width(before), 1);
     say(`  ${dim(pad(`#${card.id}`, cardRoom))} ${style(pad(label, 6))} ${bold(title)}`);
     const indent = " ".repeat(width(before));
     const parts: [string, Style][] = [];
-    if (card.choice !== null && card.choice !== undefined) parts.push([`你选了 ${card.options[card.choice]}`, green]);
-    if (card.answer) parts.push([`你说：${card.answer}`, (text) => text]);
+    if (card.choice !== null && card.choice !== undefined)
+      parts.push([t('你选了 {"option"}', { option: card.options[card.choice] }), green]);
+    if (card.answer) parts.push([t('你说：{"text"}', { text: card.answer }), (text) => text]);
     // A notice dealt with says so already in its label.
     if (card.result && card.result !== "已处理") parts.push([unlinked(card.result), (text) => text]);
-    else if (card.state === "decided") parts.push(["Agent 接着在做", dim]);
+    else if (card.state === "decided") parts.push([t("Agent 接着在做"), dim]);
     // What `tell` says is closed as soon as it's made, so this is where it's read; one line keeps the list a list.
     else if (card.kind === "notice" && card.text) parts.push([unlinked(card.text), dim]);
     if (!parts.length) continue;
@@ -250,20 +276,22 @@ export function render(state: any, { color, columns }: { color: boolean; columns
   }
 
   const timed = [...state.lines.filter((line: any) => line.every), ...state.elsewhere];
-  if (timed.length) section(heading("定时"));
+  if (timed.length) section(heading(t("定时")));
   const ruleRoom = Math.max(0, ...timed.map((line: any) => width(line.name)));
   const everyRoom = Math.max(0, ...timed.map((line: any) => width(line.every)));
   for (const line of timed) {
-    const head = `  ${pad(line.name, ruleRoom)}  ${pad(line.every, everyRoom)}  下次 ${when(line.next)}`;
-    const [where] = line.where ? wrap(`（在别处：${line.where}）`, room - width(head), 1) : [""];
-    say(`  ${pad(line.name, ruleRoom)}  ${pad(line.every, everyRoom)}  ${dim("下次")} ${when(line.next)}${dim(where)}`);
+    const head = `  ${pad(line.name, ruleRoom)}  ${pad(line.every, everyRoom)}  ${t('下次 {"when"}', { when: when(line.next) })}`;
+    const [where] = line.where ? wrap(t('（在别处：{"where"}）', { where: line.where }), room - width(head), 1) : [""];
+    say(
+      `  ${pad(line.name, ruleRoom)}  ${pad(line.every, everyRoom)}  ${dim(t("下次"))} ${when(line.next)}${dim(where)}`,
+    );
   }
 
   const unrouted = state.unrouted.slice(0, 5);
-  if (unrouted.length) section(heading("没有规则接的事件"));
+  if (unrouted.length) section(heading(t("没有规则接的事件")));
   for (const event of unrouted) {
     const words = `${sourceName(event.source)} ${event.type} ${event.subject}`;
-    say(`  ${yellow(words)}${event.summary ? dim(`：${event.summary}`) : ""}`);
+    say(`  ${yellow(words)}${event.summary ? dim(t('：{"summary"}', { summary: event.summary })) : ""}`);
   }
   return out.join("\n");
 }

@@ -1,6 +1,7 @@
 // `agent-autoloop runs`: the finished runs before the few `status` shows, so `why` can be given a number. It pages through
 // /v1/state the way any owner's client can; picking one rule is done here, so the protocol stays as it is.
 import { finished, runRows } from "./status.ts";
+import { t } from "../host/i18n.ts";
 
 type Page = (before?: number) => Promise<any>;
 
@@ -35,12 +36,13 @@ export function runsText(
   found: Awaited<ReturnType<typeof findRuns>>,
   { rule, color, columns }: { rule?: string; color: boolean; columns?: number },
 ) {
-  if (!found.runs.length) return rule === undefined ? "还没有做完的轮次。" : `规则「${rule}」没有做完的轮次。`;
+  if (!found.runs.length)
+    return rule === undefined ? t("还没有做完的轮次。") : t('规则「{"rule"}」没有做完的轮次。', { rule });
   const lines = runRows(found.state, found.runs, { color, columns });
-  lines.push("", "细节：agent-autoloop why <第几轮>");
+  lines.push("", t("细节：agent-autoloop why <第几轮>"));
   if (found.more !== null) {
     const named = rule === undefined ? "" : ` ${/^[^\s"'\\$`]+$/.test(rule) ? rule : JSON.stringify(rule)}`;
-    lines.push(`更早的：agent-autoloop runs${named} --before ${found.more}`);
+    lines.push(t('更早的：agent-autoloop runs{"named"} --before {"more"}', { named, more: found.more }));
   }
   return lines.join("\n");
 }
