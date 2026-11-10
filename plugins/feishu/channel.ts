@@ -89,9 +89,9 @@ export function render(card: Card) {
                 rows: 2,
                 auto_resize: true,
                 max_length: 1000,
-                label: { tag: "plain_text", content: "补充文字（选填）" },
+                label: { tag: "plain_text", content: "选项都不合适，就直接写回答" },
                 label_position: "top",
-                placeholder: { tag: "plain_text", content: "账号、密码或说明；填好点“提交文字”" },
+                placeholder: { tag: "plain_text", content: "写好点“提交文字”；写了再点选项，文字不会带上" },
               },
               {
                 tag: "button",
