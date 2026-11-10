@@ -296,6 +296,10 @@ test("a PR retargeted during checks is not merged", async () => {
 });
 test("a delivery withdrawn during checks does not leave its status pending", async () => {
   const { io, state } = fixture();
+  const phases: string[] = [];
+  io.report = (phase) => {
+    phases.push(phase);
+  };
   const { api } = io;
   io.api = async (path, body, method) => {
     if (path.startsWith("actions/runs/1/jobs")) state.pr.labels = [];
@@ -307,6 +311,7 @@ test("a delivery withdrawn during checks does not leave its status pending", asy
   assert.equal(last.state, "success");
   assert.match(last.description, /撤回/);
   assert.match(last.description, /未合并/);
+  assert.equal(phases.at(-1), "withdrawn");
   assert.ok(!state.statuses.some((s: any) => s.context === "my-review"));
 });
 test("findings and review-only mode stop before merge", async () => {

@@ -29,6 +29,7 @@ export type DeliveryPhase =
   | "merged"
   | "reviewed"
   | "returned"
+  | "withdrawn"
   | "retrying"
   | "docs_only";
 export type DeliveryReport = (
@@ -174,6 +175,7 @@ export async function deliver(
   };
   const withdrawn = async (head: string): Promise<Delivered> => {
     await status(io, head, "delivery", "success", "交付标记已撤回，未合并或发布");
+    await io.report?.("withdrawn", head);
     return { summary: "交付标记已撤回" };
   };
   let pr = await io.api(`pulls/${number}`);

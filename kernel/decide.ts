@@ -402,7 +402,13 @@ function scheduleReview(draft: Draft, run: Row, later: Later) {
     return;
   }
   const session = draft.view.get("runs", run.id)!.session;
-  const fields = { at: iso(Date.parse(later.at!)), about: later.about, session, hops: hopsOf(draft, run) };
+  const fields = {
+    at: iso(Date.parse(later.at!)),
+    about: later.about,
+    session,
+    agent: run.agent,
+    hops: hopsOf(draft, run),
+  };
   if (existing) return void put(draft, "timers", existing.id, fields);
   const source = sourceOf(draft.view, run.id) ?? SCHEDULE;
   add(draft, "timers", { ...fields, rule, lane, key: later.key, source, event_id: null, created_at: draft.at });
@@ -575,7 +581,7 @@ function tick(draft: Draft) {
     const event = { id: `timer:${timer.id}`, type: "timer.due", subject: timer.lane, hops: timer.hops ?? 0 };
     const eventId = recordEvent(draft, timer.source, event, rule ? [rule.name] : []);
     put(draft, "timers", timer.id, { event_id: eventId });
-    if (rule) enqueue(draft, rule, eventId, timer.lane, timer.session);
+    if (rule) enqueue(draft, rule, eventId, timer.lane, timer.agent === rule.to ? timer.session : null);
   }
   sweep(draft);
 }

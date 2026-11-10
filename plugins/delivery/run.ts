@@ -64,6 +64,7 @@ async function handoff(
       return { text: "没事可做：没有待交付的标记", exit: 2 };
     }
     if (pr.state === "closed" && !pr.merged_at) {
+      await status(io, head, "delivery", "failure", "合并请求已关闭，未合并或发布");
       gh(["pr", "edit", String(number), "--repo", repo, "--remove-label", "deliver,deliver-review,deliver-attended"]);
       await io.report?.("returned", head, { detail: "closed" });
       return { text: "没事可做：合并请求已关闭", exit: 2 };

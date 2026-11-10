@@ -3,7 +3,7 @@
 // covered up by the 404 from looking it up as a PR; one item whose label record can't be read fails the whole poll; a failed
 // round writes its error over the delivery status, so the next one forgets the commit had findings and reviews it again;
 // an obsolete Ship run requires a remote compare that fails, hiding the successful release of this merge; a manual retry
-// reuses its scratch folder and fails because the origin already exists.
+// reuses its scratch folder and fails because the origin already exists; closing a labelled PR leaves its status pending.
 // Nothing here reaches GitHub: `gh` is a stand-in first on PATH, and the Git remote is a local folder.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -306,6 +306,23 @@ const delivering = (pr: object) => ({
   "repos/example/app/git/ref/heads/main": { object: { sha: live } },
   [settingsPath]: settingsFile,
   [`repos/example/app/compare/${live}...${code}`]: { status: "ahead" },
+});
+test("a closed unmerged handoff records failure before clearing its queue labels", async () => {
+  startOver();
+  answers({ ...delivering({ ...openPr, state: "closed" }), edit: {} });
+  const phases: string[] = [];
+  const message = await run("example/app", about(8), true, {
+    notifyCommand: join(root, "must-not-notify"),
+    report: (phase) => {
+      phases.push(phase);
+    },
+  });
+  assert.match(message, /已关闭/);
+  assert.equal(lastStatus("delivery")?.state, "failure");
+  assert.match(lastStatus("delivery").description, /已关闭/);
+  assert.deepEqual(phases, ["returned"]);
+  const called = readFileSync(calls, "utf8");
+  assert.ok(called.indexOf(`/statuses/${code}`) < called.indexOf("pr edit"));
 });
 const dataLoss = [{ title: "数据会丢", text: "先修复" }];
 
