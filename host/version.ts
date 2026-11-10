@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { t } from "./i18n.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 
@@ -37,5 +38,8 @@ export function versionName(root = ROOT) {
 }
 
 export function versionLine(root = ROOT) {
-  return `agent-autoloop ${releaseOf(root) ?? "未发布"}（提交 ${commitOf(root).slice(0, 12)}）`;
+  return t('agent-autoloop {"release"}（提交 {"commit"}）', {
+    release: releaseOf(root) ?? t("未发布"),
+    commit: commitOf(root).slice(0, 12),
+  });
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { AGENT, REPO, type Reviewer, type Settings } from "./project.ts";
+import { t } from "../../host/i18n.ts";
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
@@ -15,7 +16,7 @@ const isObject = (value: any) => value && typeof value === "object" && !Array.is
 
 export function sharedPolicy(value: any): SharedPolicy {
   const bad = () => {
-    throw new Error("共用审查策略不正确：请检查审查器、深度、可信账号和非空默认审查列表");
+    throw new Error(t("共用审查策略不正确：请检查审查器、深度、可信账号和非空默认审查列表"));
   };
   if (!isObject(value) || Object.keys(value).sort().join() !== "agents,default,reviewers,trusted_submitters") bad();
   const { trusted_submitters, reviewers, agents, default: fallback } = value;
@@ -52,7 +53,7 @@ export async function readSharedPolicy(spec: string, apiFor: (repo: string) => (
     rest.length ||
     path.split("/").some((part) => !part || part === "." || part === "..")
   )
-    throw new Error("共用审查策略要写成 owner/repo:仓库内路径");
+    throw new Error(t("共用审查策略要写成 owner/repo:仓库内路径"));
   const { content } = await apiFor(repo)(`contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=main`);
   return sharedPolicy(JSON.parse(Buffer.from(content, "base64").toString("utf8")));
 }

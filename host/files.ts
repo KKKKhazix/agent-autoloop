@@ -1,6 +1,7 @@
 // POSIX modes do not protect Windows secrets. A private directory gives new files only the owner's and SYSTEM's access.
 import { chmodSync, mkdirSync } from "node:fs";
 import { powershell, psQuote } from "./command.ts";
+import { t } from "./i18n.ts";
 
 export function privateDirectory(directory: string) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });

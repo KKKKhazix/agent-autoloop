@@ -3,6 +3,7 @@
 // find it still going, or finished. A job is saved before anything slow happens; a result is saved before it's handed
 // in and stays until the hub has taken it.
 import { execFileSync, spawn } from "node:child_process";
+import { t } from "../host/i18n.ts";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -239,7 +240,7 @@ export function createWorker({
       contextFile: path.join(entry.dir, "context.json"),
       folder: entry.dir,
     };
-    if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
+    if (!existsSync(cwd)) throw new Error(t('在 {"cwd"} 启动不了：这个目录不存在', { cwd }));
     const argv = adapter.command(turn);
     const { out, err, exit, command } = files(entry);
     if (process.platform === "win32") {
@@ -344,13 +345,16 @@ export function createWorker({
     const { out, err } = files(entry);
     try {
       const reading = adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
-      if (!reading) throw new Error("它什么也没给");
+      if (!reading) throw new Error(t("它什么也没给"));
       return reading;
     } catch (error) {
       sayOnce(`run ${entry.run}: couldn't read its output: ${error}`);
       // One still going goes on, since this says nothing about how it's doing. Whether one that has ended got started isn't
       // known, and starting it again in a new session could do its work twice: it stays in this one.
-      return { started: true, error: `读不懂这个 Agent 的输出：${(error as Error).message ?? error}` };
+      return {
+        started: true,
+        error: t('读不懂这个 Agent 的输出：{"why"}', { why: (error as Error).message ?? error }),
+      };
     }
   }
 
@@ -362,8 +366,12 @@ export function createWorker({
       usage: entry.usage,
     });
     const notice: Notice = {
-      title: `「${entry.job.rule.name}」的回执读不懂`,
-      text: `这一轮按第一行算结束了，但它要中台做的事没有生效（${problem}）。原文在 ${files(original).out}，留 ${KEEP_DAYS} 天。`,
+      title: t('「{"rule"}」的回执读不懂', { rule: entry.job.rule.name }),
+      text: t('这一轮按第一行算结束了，但它要中台做的事没有生效（{"problem"}）。原文在 {"file"}，留 {"days"} 天。', {
+        problem,
+        file: files(original).out,
+        days: KEEP_DAYS,
+      }),
     };
     endWith(entry, { ...result, notice: [...(result.notice ?? []), notice] });
   }
@@ -377,15 +385,16 @@ export function createWorker({
     if (seen.session) entry.session = seen.session;
     const usage = entry.usage && { usage: entry.usage };
     const known = session && { session };
-    if (entry.why === "cancel") return endWith(entry, { outcome: "cancelled", summary: "已停止", ...known, ...usage });
+    if (entry.why === "cancel")
+      return endWith(entry, { outcome: "cancelled", summary: t("已停止"), ...known, ...usage });
     if (entry.why === "timeout") {
       const minutes = entry.job.agent.timeout ?? TIMEOUT_MINUTES;
-      const error = `超过 ${minutes} 分钟还没结束，已停止`;
+      const error = t('超过 {"minutes"} 分钟还没结束，已停止', { minutes });
       if (entry.repairs) return discardReceipt(entry, adapter, error);
       return endWith(entry, { outcome: "failed", error, ...known, ...usage });
     }
     if (seen.error !== undefined || !seen.text?.trim()) {
-      const error = seen.error || "没留下结果";
+      const error = seen.error || t("没留下结果");
       if (entry.repairs) return discardReceipt(entry, adapter, error);
       // The conversation may not be there to go on in, or something else has it open: this go carries on in a new one.
       // Not once the turn has started: a new one would do its work again. The hub tries again later, in this one.
@@ -461,7 +470,7 @@ export function createWorker({
         // (docs/protocol.md: 确认组内没有活进程后才交 cancelled). A cancelled run's `failed` isn't tried again.
         return endWith(entry, {
           outcome: "failed",
-          error: "停止信号发出后没能确认进程组已结束：这一轮按没跑成记，不再重试，进程可能还在。",
+          error: t("停止信号发出后没能确认进程组已结束：这一轮按没跑成记，不再重试，进程可能还在。"),
         });
       }
       return conclude(entry, adapter, exitCode());
@@ -540,7 +549,10 @@ export function createWorker({
     if (!unreachable?.length || told || tries >= TELL_TRIES || moment - unreachableSince < UNREACHABLE) return;
     tries += 1;
     const minutes = Math.floor((moment - unreachableSince) / 60_000);
-    const text = `${name} 连不上中台已经 ${minutes} 分钟了，派给它的活暂时没人接；它还在一直重试。`;
+    const text = t('{"name"} 连不上中台已经 {"minutes"} 分钟了，派给它的活暂时没人接；它还在一直重试。', {
+      name,
+      minutes,
+    });
     const [program, args] = commandLine(unreachable.map((part) => part.replaceAll("{text}", text)));
     try {
       execFileSync(program, args, { timeout: 60_000, stdio: "ignore" });

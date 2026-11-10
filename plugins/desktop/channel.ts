@@ -5,9 +5,10 @@
 import { execFile, spawnSync } from "node:child_process";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 import { POWERSHELL, powershell } from "../../host/command.ts";
+import { t } from "../../host/i18n.ts";
 
-const WORDS = "运行 agent-autoloop status 查看";
-const TITLE = "Agent 问你一个问题";
+const WORDS = () => t("运行 agent-autoloop status 查看");
+const TITLE = () => t("Agent 问你一个问题");
 const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"];
 
 /**
@@ -15,9 +16,9 @@ const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with 
  * it one when it starts with a dash: without it osascript takes a title of `-e` as more script to run.
  */
 export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
-  const body = `${title}\n${WORDS}`;
+  const body = `${title}\n${WORDS()}`;
   if (platform === "win32") {
-    const data = Buffer.from(JSON.stringify({ title: TITLE, body })).toString("base64");
+    const data = Buffer.from(JSON.stringify({ title: TITLE(), body })).toString("base64");
     const script = `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);
       $words = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${data}')) | ConvertFrom-Json
       Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -42,8 +43,9 @@ export function notifyCommand(title: string, platform: string = process.platform
       ],
     ];
   }
-  if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
-  return ["notify-send", ["--", TITLE, body]];
+  if (platform === "darwin")
+    return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE(), body]];
+  return ["notify-send", ["--", TITLE(), body]];
 }
 
 function hasDesktop() {
@@ -75,7 +77,7 @@ export default async function desktop({ hub, log, signal }: ChannelContext) {
     try {
       ({ card } = await hub.nextCard(50));
     } catch (error) {
-      log(`连不上中台：${error}`);
+      log(t('连不上中台：{"why"}', { why: error }));
       await new Promise((resolve) => setTimeout(resolve, 10_000));
       continue;
     }
@@ -93,7 +95,7 @@ export default async function desktop({ hub, log, signal }: ChannelContext) {
       await show(card.title);
       await hub.delivered(card.id, card.version, `shown-${card.id}`);
     } catch (error) {
-      log(`卡片 ${card.id} 的桌面通知没发出：${error}`);
+      log(t('卡片 {"id"} 的桌面通知没发出：{"why"}', { id: card.id, why: error }));
       await hub.failed(card.id, card.version, String(error)).catch(() => {});
     }
   }

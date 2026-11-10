@@ -1,6 +1,7 @@
 // What the kernel's doors need from this machine: the clock, a timer for the next deadline, long polls to wake, the
 // rules file to watch, the log as a stream and the webhook plugins.
 import { realpathSync, watch } from "node:fs";
+import { t } from "./i18n.ts";
 import { basename, dirname } from "node:path";
 import { RULES_FILE } from "./home.ts";
 import { loadPlugin } from "./plugins.ts";
@@ -56,14 +57,14 @@ function logStream(after: number, signal: AbortSignal, key: string) {
 
 async function adaptWebhook(source: string, headers: Headers, body: string) {
   const adapter = hub.rules.sources[source]?.adapter;
-  if (!adapter || !/^[a-z][a-z0-9-]*$/.test(adapter)) throw new NotFound("这个来源不收 Webhook");
+  if (!adapter || !/^[a-z][a-z0-9-]*$/.test(adapter)) throw new NotFound(t("这个来源不收 Webhook"));
   const translate = await loadPlugin(adapter, "source");
   const secret = process.env[`AGENT_AUTOLOOP_SECRET_${source.toUpperCase().replaceAll("-", "_")}`] ?? "";
   try {
     const events = translate({ headers: Object.fromEntries(headers), body, secret });
     return Array.isArray(events) ? events : [];
   } catch {
-    throw new AuthError("验签没过");
+    throw new AuthError(t("验签没过"));
   }
 }
 

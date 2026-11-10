@@ -3,6 +3,7 @@
 //   "channels": { "dingtalk": { "use": "webhook", "key": "…", "url": "https://…",
 //                               "body": { "msgtype": "text", "text": { "content": "{text}" } } } }
 import { accepted, payload } from "./templates.ts";
+import { t } from "../../host/i18n.ts";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 
 function fill(template: unknown, text: string): unknown {
@@ -21,16 +22,17 @@ const asWords = (text: string) => text.replaceAll("](", "］(").replaceAll("<", 
 function words(card: Card, platform = "") {
   if (platform === "wecom")
     card = { ...card, title: asWords(card.title), text: asWords(card.text), options: card.options.map(asWords) };
-  const source = platform === "wecom" && card.rule ? `来源：${asWords(card.rule)}` : "";
+  const source = platform === "wecom" && card.rule ? t('来源：{"rule"}', { rule: asWords(card.rule) }) : "";
   if (
     platform === "wecom" &&
     card.kind === "notice" &&
     card.state === "open" &&
     card.options.length === 1 &&
-    card.options[0] === "已处理" &&
+    // Matches the option words the delivery plugin writes into its ask, in the same language.
+    card.options[0] === t("已处理") &&
     card.link
   )
-    return [card.title, source, card.text, `[点击处理](${card.link})`].filter(Boolean).join("\n\n");
+    return [card.title, source, card.text, t('[点击处理]({"link"})', { link: card.link })].filter(Boolean).join("\n\n");
   const choices = card.options.map((option, index) => `${index + 1}. ${option}`).join("\n");
   const parts = [card.title, source, card.text, ...(card.state === "open" ? [choices, card.link] : [])];
   return parts.filter(Boolean).join("\n\n");

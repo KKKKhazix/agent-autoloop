@@ -1,6 +1,7 @@
 // The log and its expendable projection commit together. Only this module appends facts.
 import type { DatabaseSync } from "node:sqlite";
 import { Conflict } from "./errors.ts";
+import { t } from "../host/i18n.ts";
 import { evolve, initialize, statement, View, type Fact } from "./evolve.ts";
 
 export function* iterateLog(db: DatabaseSync, after = 0): Generator<Fact> {
@@ -32,7 +33,7 @@ export function openView(db: DatabaseSync, format: string) {
 export function commit(db: DatabaseSync, view: View, produce: () => Fact[]): View {
   return transaction(db, () => {
     const latest = Number(statement(db, "SELECT COALESCE(MAX(seq),0) AS seq FROM facts").get()!.seq);
-    if (latest !== view.seq) throw new Conflict("日志已变化，请重读后再提交");
+    if (latest !== view.seq) throw new Conflict(t("日志已变化，请重读后再提交"));
     const facts = produce();
     if (!facts.length) return view;
     const insert = statement(db, "INSERT INTO facts(seq,fact) VALUES (?,?)");

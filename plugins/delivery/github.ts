@@ -6,6 +6,7 @@ import { setTimeout } from "node:timers/promises";
 import type { DeliveryIO, DeliveryReport } from "./delivery.ts";
 import { git, liveRelease, releaseRequired, REPO } from "./project.ts";
 import { readSharedPolicy, reviewDelivery } from "./review.ts";
+import { t } from "../../host/i18n.ts";
 
 const LONGEST_WAIT = 1800000;
 class GitHubHiccup extends Error {}
@@ -40,7 +41,7 @@ export function gh(args: string[], input?: object) {
 }
 
 export function github(repo: string) {
-  if (!REPO.test(repo)) throw new Error("仓库要写成 owner/name");
+  if (!REPO.test(repo)) throw new Error(t("仓库要写成 owner/name"));
   return async (path: string, body?: any, method = body === undefined ? "GET" : "POST") => {
     const ready = /^pulls\/(\d+)\/ready$/.exec(path);
     if (ready) {
@@ -56,7 +57,7 @@ export function github(repo: string) {
 }
 
 export function pages(repo: string, path: string): any[] {
-  if (!REPO.test(repo)) throw new Error("仓库要写成 owner/name");
+  if (!REPO.test(repo)) throw new Error(t("仓库要写成 owner/name"));
   return JSON.parse(gh(["api", `repos/${repo}/${path}`, "--paginate", "--slurp"])).flat();
 }
 
@@ -139,11 +140,14 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
         const main = (await kit("git/ref/heads/main")).object.sha;
         const latest = (await kit(`commits?sha=${main}&path=delivery&per_page=1`))[0]?.sha;
         if (!commitSha.test(installed ?? "") || !commitSha.test(latest ?? ""))
-          throw new Error("无法识别项目安装的交付工具或工具仓库 main 上的版本");
+          throw new Error(t("无法识别项目安装的交付工具或工具仓库 main 上的版本"));
         const includes = async (base: string, head: string) =>
           base === head || ["ahead", "identical"].includes((await kit(`compare/${base}...${head}`)).status);
         if ((await includes(installed, main)) && (await includes(latest, installed))) return null;
-        return `ops/delivery/ 装的是 ${options.toolkit} ${installed.slice(0, 12)}，不是 main 上的最新版（交付工具最近一次改在 ${latest.slice(0, 12)}）。请重新安装并提交后再交付。`;
+        return t(
+          'ops/delivery/ 装的是 {"toolkit"} {"installed"}，不是 main 上的最新版（交付工具最近一次改在 {"latest"}）。请重新安装并提交后再交付。',
+          { toolkit: options.toolkit, installed: installed.slice(0, 12), latest: latest.slice(0, 12) },
+        );
       },
     }),
     async merge(pr, config) {
@@ -153,7 +157,7 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
         return;
       }
       const result = await api(`pulls/${pr.number}/merge`, { sha: pr.head.sha, merge_method: "squash" }, "PUT");
-      if (!result.merged) throw new Error("GitHub 没有接受合并");
+      if (!result.merged) throw new Error(t("GitHub 没有接受合并"));
     },
     async disableAuto(number) {
       gh(["pr", "merge", String(number), "--repo", repo, "--disable-auto"]);
@@ -199,7 +203,7 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
     },
     live: liveRelease,
     async wait() {
-      if (Date.now() - started > LONGEST_WAIT) throw new Error("等待超过半小时，保留远端状态，稍后继续核实");
+      if (Date.now() - started > LONGEST_WAIT) throw new Error(t("等待超过半小时，保留远端状态，稍后继续核实"));
       await setTimeout(5000);
     },
   };

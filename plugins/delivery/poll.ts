@@ -1,5 +1,6 @@
 // What's waiting for delivery, as events: each labelled item, with an id that stays the same until something changes.
 import { github, pages } from "./github.ts";
+import { t } from "../../host/i18n.ts";
 import { hasLabel, unattendedFailure } from "./handoff.ts";
 import { pendingEvents } from "./input.ts";
 
@@ -51,15 +52,20 @@ if (import.meta.main) {
   const [, , first, ...rest] = process.argv;
   const dispatch = first === "--dispatch";
   const repos = dispatch ? rest : [first];
-  if (!repos.length) throw new Error("请指定至少一个 owner/name 仓库");
+  if (!repos.length) throw new Error(t("请指定至少一个 owner/name 仓库"));
   const results = await Promise.allSettled(repos.map((repo) => poll(repo, dispatch)));
   const events = results
     .flatMap((result, index) => {
       if (result.status === "fulfilled") return result.value;
       if (!dispatch) throw result.reason;
-      console.error(`${repos[index]} 的交付标签暂时读不到，下轮再查`);
+      console.error(t('{"repo"} 的交付标签暂时读不到，下轮再查', { repo: repos[index] }));
       return [];
     })
     .slice(0, 100);
-  console.log(`看过了，${events.length} 件待处理\n\`\`\`agent-autoloop\n${JSON.stringify({ events })}\n\`\`\``);
+  console.log(
+    t('看过了，{"n"} 件待处理\n```agent-autoloop\n{"events"}\n```', {
+      n: events.length,
+      events: JSON.stringify({ events }),
+    }),
+  );
 }

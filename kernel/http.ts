@@ -1,5 +1,6 @@
 // The doors: every request the hub takes, which key it asks for, and which input it becomes. Nothing is decided here.
 import { cardPage, PAGE_HEADERS, wordsPage } from "./card-page.ts";
+import { t } from "../host/i18n.ts";
 import { whose, type Environment } from "./credentials.ts";
 import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
 import type { Row, View } from "./evolve.ts";
@@ -25,7 +26,12 @@ const MAX_WAIT_SECONDS = 50;
 const LINK_LIFETIME = 7 * 86400_000;
 const CARD_LINK = /^\/c\/([A-Za-z0-9_-]{1,64})$/;
 const POSITIVE_ID = /^[1-9][0-9]*$/;
-const KEY_HOLDERS: Record<string, string> = { owner: "本人", worker: "接单程序", channel: "通道", source: "来源" };
+const KEY_HOLDERS: Record<string, () => string> = {
+  owner: () => t("本人"),
+  worker: () => t("接单程序"),
+  channel: () => t("通道"),
+  source: () => t("来源"),
+};
 const NO_STORE = { "cache-control": "no-store" };
 
 class TooLarge extends Error {}
@@ -53,7 +59,7 @@ async function readJson(request: Request) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new InputError("不是 JSON");
+    throw new InputError(t("不是 JSON"));
   }
 }
 
@@ -81,7 +87,7 @@ const act = (call: Call, type: string, ...args: any[]) => call.services.dispatch
 
 function requireKey(call: Call, kind: string) {
   const holder = keyHolder(call, kind);
-  if (!holder) throw new AuthError(`要${KEY_HOLDERS[kind]}自己的密钥`);
+  if (!holder) throw new AuthError(t('要{"kind"}自己的密钥', { kind: KEY_HOLDERS[kind]?.() }));
   return holder;
 }
 
@@ -102,19 +108,21 @@ async function cardAtLink(call: Call, linkToken: string) {
   const { environment } = call.services;
   const card = call.services.card(linkToken);
   const linksInUse = Object.values(rules.channels).some((channel) => channel.links);
-  if (!card || !linksInUse) throw new NotFound("没有这张卡片");
+  if (!card || !linksInUse) throw new NotFound(t("没有这张卡片"));
   if (call.now - Date.parse(card.created_at) > LINK_LIFETIME) {
-    throw new AuthError("这个链接过期了。在装它的电脑上运行 agent-autoloop status，还没答的卡片都在那里，可以接着回答");
+    throw new AuthError(
+      t("这个链接过期了。在装它的电脑上运行 agent-autoloop status，还没答的卡片都在那里，可以接着回答"),
+    );
   }
   if (request.method === "GET") return new Response(cardPage(cardView(card, environment)), { headers: PAGE_HEADERS });
   const form = new URLSearchParams(await readText(request));
   const choice = form.has("choice") && { choice: Number(form.get("choice")) };
-  act(call, "answer", card.id, { ...choice, text: form.get("text") ?? undefined, by: "链接" });
+  act(call, "answer", card.id, { ...choice, text: form.get("text") ?? undefined, by: t("链接") });
   return new Response(null, { status: 303, headers: { location: call.url.pathname, ...NO_STORE } });
 }
 
 async function webhook(call: Call, source: string) {
-  if (!call.rules.sources[source]?.adapter) throw new NotFound("这个来源不收 Webhook");
+  if (!call.rules.sources[source]?.adapter) throw new NotFound(t("这个来源不收 Webhook"));
   const events = await call.services.adapt(source, call.request.headers, await readText(call.request));
   return json({ events: events.map((event) => act(call, "ingest", source, event)) });
 }
@@ -123,7 +131,7 @@ async function tell(call: Call) {
   const { rules } = call;
   const source = keyHolder(call, "source");
   const worker = source ? null : keyHolder(call, "worker");
-  if (!source && !worker) throw new AuthError("要来源或接单程序的密钥");
+  if (!source && !worker) throw new AuthError(t("要来源或接单程序的密钥"));
   const input = await readJson(call.request);
   // A task elsewhere either tells you something or asks you, with a question just as a receipt's.
   if (worker && input && typeof input === "object" && "ask" in input) return askAsTask(call, worker, input);
@@ -132,7 +140,7 @@ async function tell(call: Call) {
   const keyIsValid = typeof input?.key === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(input.key);
   const text = typeof input?.text === "string" ? input.text.trim() : "";
   if (!hasExpected || !keyIsValid || !text || [...text].length > 20_000) {
-    throw new InputError("要有正确的 key 和 text，接单程序还要写 task，text 最多 20000 字；问你的写 task 和 ask");
+    throw new InputError(t("要有正确的 key 和 text，接单程序还要写 task，text 最多 20000 字；问你的写 task 和 ask"));
   }
   if (source) {
     return json(act(call, "tell", `source:${source}:${input.key}`, rules.sources[source]?.name ?? source, text));
@@ -143,13 +151,13 @@ async function tell(call: Call) {
 
 function taskOf({ rules, view }: Call, worker: string, name: unknown) {
   const task = rules.elsewhere.find((task) => task.name === name && agentsOf(view, worker).includes(task.to));
-  if (!task) throw new AuthError("这台接单程序没有这个定时任务");
+  if (!task) throw new AuthError(t("这台接单程序没有这个定时任务"));
   return task;
 }
 
 function askAsTask(call: Call, worker: string, input: Record<string, any>) {
   if (Object.keys(input).sort().join() !== "ask,task" || !isAsk(input.ask)) {
-    throw new InputError("问你的只写 task 和 ask，ask 和回执里的一样：title、text、2 到 5 个 options");
+    throw new InputError(t("问你的只写 task 和 ask，ask 和回执里的一样：title、text、2 到 5 个 options"));
   }
   return json(act(call, "ask", taskOf(call, worker, input.task).name, input.ask));
 }
@@ -158,12 +166,12 @@ async function work(call: Call) {
   const { services, request, url, token } = call;
   const worker = requireKey(call, "worker");
   const claim = url.searchParams.get("claim") ?? "";
-  if (!claim || claim.length > 200) throw new InputError("claim 是这次领活的编号，最多 200 字");
+  if (!claim || claim.length > 200) throw new InputError(t("claim 是这次领活的编号，最多 200 字"));
   const running = (url.searchParams.get("running") ?? "").split(",").filter((id) => POSITIVE_ID.test(id));
   act(call, "heartbeat", worker, running.map(Number));
   const until = waitUntil(call);
   for (;;) {
-    if (!whose(services.view(), "worker", token)) throw new AuthError("密钥已失效");
+    if (!whose(services.view(), "worker", token)) throw new AuthError(t("密钥已失效"));
     const wantsWork = !request.signal.aborted && url.searchParams.get("capacity") !== "0";
     const job = wantsWork ? act(call, "claimNext", worker, claim) : null;
     const cancel = cancels(services.view(), worker);
@@ -178,7 +186,7 @@ async function nextCard(call: Call) {
   const until = waitUntil(call);
   act(call, "channelSeen", channel);
   for (;;) {
-    if (!whose(services.view(), "channel", token)) throw new AuthError("密钥已失效");
+    if (!whose(services.view(), "channel", token)) throw new AuthError(t("密钥已失效"));
     const card = request.signal.aborted ? null : act(call, "nextCard", channel);
     if (card || services.now() >= until || request.signal.aborted) return json({ card });
     await services.wait(until, request.signal);
@@ -192,15 +200,15 @@ async function cardAction(call: Call, id: number, action: string) {
   if (action === "resolve") {
     const reason = given?.reason;
     if (typeof reason !== "string" || !reason.trim() || reason.length > 1000) {
-      throw new InputError("写一句处理结果，最多 1000 字");
+      throw new InputError(t("写一句处理结果，最多 1000 字"));
     }
-    return json({ changed: act(call, "resolve", id, reason.trim(), "本人") });
+    return json({ changed: act(call, "resolve", id, reason.trim(), t("本人")) });
   }
   if (action === "answer") {
-    const who = channel ? { by: given?.by, ref: given?.ref, channel } : { by: "本人" };
+    const who = channel ? { by: given?.by, ref: given?.ref, channel } : { by: t("本人") };
     return json(act(call, "answer", id, { choice: given?.choice, text: given?.text, ...who }));
   }
-  if (!Number.isInteger(given?.version)) throw new InputError("要说明是哪个版本");
+  if (!Number.isInteger(given?.version)) throw new InputError(t("要说明是哪个版本"));
   const ref = typeof given.ref === "string" ? given.ref : null;
   act(call, action, channel, id, given.version, action === "delivered" ? ref : String(given.error ?? ""));
   return json({ ok: true });
@@ -216,18 +224,18 @@ async function control(call: Call, encoded: string, action: string) {
   try {
     name = decodeURIComponent(encoded);
   } catch {
-    throw new InputError("名字不正确");
+    throw new InputError(t("名字不正确"));
   }
   const text = await readText(call.request);
   let given: unknown = {};
   try {
     if (text.trim()) given = JSON.parse(text);
   } catch {
-    throw new InputError("不是 JSON");
+    throw new InputError(t("不是 JSON"));
   }
-  if (!given || typeof given !== "object" || Array.isArray(given)) throw new InputError("要是一个 JSON 对象");
+  if (!given || typeof given !== "object" || Array.isArray(given)) throw new InputError(t("要是一个 JSON 对象"));
   const unknown = Object.keys(given).filter((field) => !CONTROL_FIELDS[action].includes(field));
-  if (unknown.length) throw new InputError(`不认识的字段：${unknown.join("、")}`);
+  if (unknown.length) throw new InputError(t('不认识的字段：{"fields"}', { fields: unknown.join(t("、")) }));
   const type = CONTROL_INPUTS[action];
   return json(action === "resume" ? act(call, type, name) : act(call, type, name, holder, given));
 }
@@ -235,7 +243,7 @@ async function control(call: Call, encoded: string, action: string) {
 function state(call: Call) {
   requireKey(call, "owner");
   const before = call.url.searchParams.get("before");
-  if (before !== null && !POSITIVE_ID.test(before)) throw new InputError("编号不正确");
+  if (before !== null && !POSITIVE_ID.test(before)) throw new InputError(t("编号不正确"));
   return json(call.services.state(call.now, before === null ? undefined : Number(before)));
 }
 
@@ -243,7 +251,7 @@ function stream(call: Call) {
   const { request, services, token } = call;
   requireKey(call, "owner");
   const after = call.url.searchParams.get("after") ?? request.headers.get("last-event-id") ?? "0";
-  if (!/^\d+$/.test(after) || !Number.isSafeInteger(Number(after))) throw new InputError("日志序号不正确");
+  if (!/^\d+$/.test(after) || !Number.isSafeInteger(Number(after))) throw new InputError(t("日志序号不正确"));
   const headers = { "content-type": "text/event-stream", ...NO_STORE, "x-accel-buffering": "no" };
   return new Response(services.stream(Number(after), request.signal, token), { headers });
 }
@@ -261,7 +269,7 @@ async function route(call: Call): Promise<Response> {
     try {
       name = decodeURIComponent(key[2]);
     } catch {
-      throw new InputError("密钥名字不正确");
+      throw new InputError(t("密钥名字不正确"));
     }
     return json({ ok: true, changed: act(call, "removeKey", key[1], name) });
   }
@@ -276,7 +284,7 @@ async function route(call: Call): Promise<Response> {
   if (method === "GET" && sent) {
     // Another source's event is as missing as one never sent: a source can't learn which numbers are taken.
     const found = eventOutcome(call.view, requireKey(call, "source"), Number(sent[1]));
-    if (!found) throw new NotFound("没有这条事件");
+    if (!found) throw new NotFound(t("没有这条事件"));
     return json(found);
   }
   if (method === "POST" && path === "/v1/tell") return tell(call);
@@ -300,7 +308,7 @@ async function route(call: Call): Promise<Response> {
   if (method === "POST" && ruleControl) return control(call, ruleControl[1], ruleControl[2]);
   if (method === "GET" && path === "/v1/state") return state(call);
   if (method === "GET" && path === "/v1/stream") return stream(call);
-  return json({ error: "没有这个地址" }, 404);
+  return json({ error: t("没有这个地址") }, 404);
 }
 
 export function createHandler(services: Services) {
@@ -311,7 +319,7 @@ export function createHandler(services: Services) {
     } catch (error) {
       const status = statusOf(error);
       if (status === 500) throw error;
-      const message = error instanceof TooLarge ? "请求最多 1024 KB" : (error as Error).message;
+      const message = error instanceof TooLarge ? t("请求最多 1024 KB") : (error as Error).message;
       if (CARD_LINK.test(call.url.pathname)) return new Response(wordsPage(message), { status, headers: PAGE_HEADERS });
       return json({ error: message }, status);
     }

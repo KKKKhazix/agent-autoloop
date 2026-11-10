@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { question } from "./input.ts";
+import { t } from "../../host/i18n.ts";
 
 const retryKey = "delivery-retry";
 const retryInterval = 60_000;
@@ -54,12 +55,23 @@ export function tellReturn(program: string, repo: string, number: number, head: 
   const key = matter(`${repo.split("/")[1]}.${number}.${head.slice(0, 12)}`);
   const url = `https://github.com/${repo}/pull/${number}`;
   const text = question({ number, title: "", body: reason, html_url: url }).text.slice(0, 300);
-  runHook(program, { key, text: `上线流程停在 ${repo} 的第 ${number} 项改动。\n${text}\n${url}` }, 60_000);
+  runHook(
+    program,
+    {
+      key,
+      text: t('上线流程停在 {"repo"} 的第 {"number"} 项改动。\n{"text"}\n{"url"}', { repo, number, text, url }),
+    },
+    60_000,
+  );
 }
 
 export function tellQuestion(program: string, repo: string, issue: Parameters<typeof question>[0]) {
   const { text, title } = question(issue);
   const key = matter(`ask.${repo.split("/")[1]}.${issue.number}`);
   const body = text === issue.html_url ? "" : `${text.slice(0, 600)}\n`;
-  runHook(program, { key, text: `云端有件事需要你决定。\n${title}\n${body}${issue.html_url}` }, 60_000);
+  runHook(
+    program,
+    { key, text: t('云端有件事需要你决定。\n{"title"}\n{"body"}{"url"}', { title, body, url: issue.html_url }) },
+    60_000,
+  );
 }

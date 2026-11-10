@@ -6,6 +6,7 @@
 import { execFile, spawn } from "node:child_process";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 import { eachLine } from "../../host/lines.ts";
+import { t } from "../../host/i18n.ts";
 import { commandLine } from "../../host/command.ts";
 
 /** Feishu sends these values as JSON in a string, which may be empty. */
@@ -20,9 +21,13 @@ function safeJson(text: unknown): any {
 
 function outcomeOf(card: Card) {
   const chosen = card.choice === null ? card.answer : card.options[card.choice];
-  if (card.state === "decided") return `你选了「${chosen}」，已记录，等待处理。`;
-  if (card.state === "done") return `你选了「${chosen}」。${card.result ? `已执行：${card.result}` : "已执行。"}`;
-  if (card.state === "closed" && card.kind === "ask") return `不用决定了：${card.result ?? ""}`;
+  if (card.state === "decided") return t('你选了「{"chosen"}」，已记录，等待处理。', { chosen });
+  if (card.state === "done")
+    return t('你选了「{"chosen"}」。{"result"}', {
+      chosen,
+      result: card.result ? t('已执行：{"result"}', { result: card.result }) : t("已执行。"),
+    });
+  if (card.state === "closed" && card.kind === "ask") return t('不用决定了：{"result"}', { result: card.result ?? "" });
   return card.state === "closed" && card.result ? card.result : null;
 }
 
@@ -43,7 +48,7 @@ export function render(card: Card) {
   const afterwards = outcome ? [{ tag: "markdown", content: `**${outcome}**` }] : [];
   const noteSaid =
     card.kind === "notice" && card.answer
-      ? [{ tag: "div", text: { tag: "plain_text", content: `处理说明：${card.answer}` } }]
+      ? [{ tag: "div", text: { tag: "plain_text", content: t('处理说明：{"answer"}', { answer: card.answer }) } }]
       : [];
   const notice = card.kind === "notice";
   // Both forms submit `note`; an ask uses it as the answer, a notice records it when closing the card.
@@ -59,13 +64,16 @@ export function render(card: Card) {
           rows: 2,
           auto_resize: true,
           max_length: 1000,
-          label: { tag: "plain_text", content: notice ? "处理说明（可不填）" : "选项都不合适，就直接写回答" },
+          label: {
+            tag: "plain_text",
+            content: notice ? t("处理说明（可不填）") : t("选项都不合适，就直接写回答"),
+          },
           label_position: "top",
           placeholder: {
             tag: "plain_text",
             content: notice
-              ? "比如：已回复他视频下周发；或：群发广告，不用管"
-              : "写好点“提交文字”；写了再点选项，文字不会带上",
+              ? t("比如：已回复他视频下周发；或：群发广告，不用管")
+              : t("写好点“提交文字”；写了再点选项，文字不会带上"),
           },
         },
         {
@@ -73,7 +81,7 @@ export function render(card: Card) {
           name: notice ? `handling_note_submit_${card.id}` : `ask_text_submit_${card.id}`,
           form_action_type: "submit",
           type: notice ? "primary" : "default",
-          text: { tag: "plain_text", content: notice ? "记录并结案" : "提交文字" },
+          text: { tag: "plain_text", content: notice ? t("记录并结案") : t("提交文字") },
         },
       ],
     },
@@ -115,7 +123,7 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
     return out;
   };
   const owner = (options.user as string | undefined) ?? (await lark(["auth", "status"], "")).identities?.user?.openId;
-  if (!owner) throw new Error("飞书通道要在 config.json 写 user，或者先 lark-cli auth login");
+  if (!owner) throw new Error(t("飞书通道要在 config.json 写 user，或者先 lark-cli auth login"));
 
   const updateMessage = (ref: string, content: string) =>
     lark(["im", "messages", "patch", "--message-id", ref, "--as", "bot", "--data", "-"], JSON.stringify({ content }));

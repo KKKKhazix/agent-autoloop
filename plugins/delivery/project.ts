@@ -1,6 +1,7 @@
 // A project's delivery settings and what they say about a release. The Ship action runs from a copy of this file in the
 // project, so it imports nothing beyond Node.
 import { execFileSync, spawnSync } from "node:child_process";
+import { t } from "../../host/i18n.ts";
 
 export type Settings = {
   repo: string;
@@ -49,7 +50,7 @@ const jsPattern = (pattern: string) => pattern.replace("(?P<sha>", "(?<sha>");
 
 export function settings(value: any, testLocalHealth = false): Settings {
   const bad = () => {
-    throw new Error("ops/delivery.json 的设置不正确");
+    throw new Error(t("ops/delivery.json 的设置不正确"));
   };
   if (!value || !REPO.test(value.repo ?? "") || !isPaths(value.internal)) bad();
   if (Object.keys(value).some((key) => !SETTINGS_KEYS.includes(key))) bad();

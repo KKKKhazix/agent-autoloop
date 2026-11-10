@@ -8,6 +8,7 @@ import path from "node:path";
 import { HOME } from "./home.ts";
 import { stablePath } from "./node-path.ts";
 import { powershell, processCommandSync, psQuote } from "./command.ts";
+import { t } from "./i18n.ts";
 
 const PROGRAM = path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 /** Another install on this machine (another AGENT_AUTOLOOP_HOME) has a service of its own. */
@@ -47,10 +48,11 @@ export function startupShortcut(folder = "[Environment]::GetFolderPath('Startup'
 
 /** For an account that can't, or shouldn't, have the login task: the desktop starts it, with the desktop's rights. */
 export const startupInstead = () =>
-  "可以改用「启动」文件夹：在 PowerShell 里运行下面这行，以后登录时由桌面以普通权限拉起中台，退出后照样自动重启，" +
-  "现在注销再登录一次就开始跑。这样起的中台不算系统服务：doctor 会说服务没在跑；重新运行安装器更新时加 --no-service，" +
-  "不然它又去建登录任务；更新之后注销再登录一次才用上新版。\n\n" +
-  startupShortcut();
+  t(
+    "可以改用「启动」文件夹：在 PowerShell 里运行下面这行，以后登录时由桌面以普通权限拉起中台，退出后照样自动重启，" +
+      "现在注销再登录一次就开始跑。这样起的中台不算系统服务：doctor 会说服务没在跑；重新运行安装器更新时加 --no-service，" +
+      "不然它又去建登录任务；更新之后注销再登录一次才用上新版。\n\n",
+  ) + startupShortcut();
 
 function installWindowsService() {
   const { program, args, directory } = windowsLauncher();
@@ -68,7 +70,7 @@ function installWindowsService() {
   } catch (error) {
     // The built-in Administrator with UAC on can't make any task without elevating, however the task is written.
     if (!String((error as { stderr?: string }).stderr ?? error).includes("0x80070005")) throw error;
-    throw new Error(`Windows 不让这个账号建登录任务（拒绝访问）。${startupInstead()}`);
+    throw new Error(t('Windows 不让这个账号建登录任务（拒绝访问）。{"instead"}', { instead: startupInstead() }));
   }
   // Stopping the task ends wscript, not the hub it started; that one, or one started by hand, is stopped after it.
   powershell(`$task = ${task()}; if ($task.State -eq 'Running') { $task | Stop-ScheduledTask }`);
@@ -124,7 +126,7 @@ export type UnitOptions = {
 };
 
 const systemdItem = (text: string, escapeDollar = false) => {
-  if (/[\u0000-\u001f\u007f]/u.test(text)) throw new Error("systemd unit 的值不能包含控制字符");
+  if (/[\u0000-\u001f\u007f]/u.test(text)) throw new Error(t("systemd unit 的值不能包含控制字符"));
   let escaped = text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%");
   if (escapeDollar) escaped = escaped.replaceAll("$", () => "$$");
   return `"${escaped}"`;
@@ -299,5 +301,5 @@ export function systemUnit() {
 export function restartService() {
   if (serviceRunning()) return void installService();
   const name = systemUnit();
-  return name ? `这台电脑用的是系统级服务，运行 systemctl restart ${name} 才会用上新版。` : undefined;
+  return name ? t('这台电脑用的是系统级服务，运行 systemctl restart {"name"} 才会用上新版。', { name }) : undefined;
 }

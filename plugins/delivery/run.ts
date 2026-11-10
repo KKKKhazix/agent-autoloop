@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
+import { t } from "../../host/i18n.ts";
 import { parseArgs } from "node:util";
 import { createIO, gh, isGitHubHiccup, type DeliveryOptions } from "./github.ts";
 import { deliver, DeliveryRefusal, DeliverySuperseded, disableAuto, status, type DeliveryIO } from "./delivery.ts";
@@ -30,24 +31,24 @@ async function handoff(
   const notify = options.notifyCommand;
   const sendBack = async (reason: string, detail: string): Promise<HandoffResult> => {
     const current = await io.api(`pulls/${number}`);
-    if (head && current.head.sha !== head) return { text: "提交已更新，下一轮处理新提交", exit: 2 };
-    if (!hasLabel(current, "deliver")) return { text: "没事可做：交付标记已撤掉", exit: 2 };
+    if (head && current.head.sha !== head) return { text: t("提交已更新，下一轮处理新提交"), exit: 2 };
+    if (!hasLabel(current, "deliver")) return { text: t("没事可做：交付标记已撤掉"), exit: 2 };
     head = current.head.sha;
     if (current.auto_merge) await disableAuto(number, io);
     if (!hasLabel(current, "deliver-attended") && notify) tellReturn(notify, repo, number, head, reason);
     await status(io, head, "delivery", "failure", reason);
     gh(["pr", "edit", String(number), "--repo", repo, "--remove-label", "deliver,deliver-review"]);
     await io.report?.("returned", head, { detail });
-    return { text: `交付退回：${reason}`, exit: 1 };
+    return { text: t('交付退回：{"reason"}', { reason }), exit: 1 };
   };
   try {
     const issue = await io.api(`issues/${number}`);
     if (!issue.pull_request) {
       if (!notify || issue.state !== "open" || !hasLabel(issue, "ask-owner"))
-        return { text: "没事可做：没有待转告的问题", exit: 2 };
+        return { text: t("没事可做：没有待转告的问题"), exit: 2 };
       tellQuestion(notify, repo, issue);
       await io.api(`issues/${number}/labels/ask-owner`, undefined, "DELETE");
-      return { text: "已转告需要处理的问题" };
+      return { text: t("已转告需要处理的问题") };
     }
     pr = await io.api(`pulls/${number}`);
     head = pr.head.sha;
@@ -58,16 +59,16 @@ async function handoff(
         if (unattendedFailure(pr.labels, latest)) {
           tellReturn(notify, repo, number, head, latest.description);
           gh(["pr", "edit", String(number), "--repo", repo, "--remove-label", "deliver-attended"]);
-          return { text: "已转告无人领取的交付结果" };
+          return { text: t("已转告无人领取的交付结果") };
         }
       }
-      return { text: "没事可做：没有待交付的标记", exit: 2 };
+      return { text: t("没事可做：没有待交付的标记"), exit: 2 };
     }
     if (pr.state === "closed" && !pr.merged_at) {
       await status(io, head, "delivery", "failure", "合并请求已关闭，未合并或发布");
       gh(["pr", "edit", String(number), "--repo", repo, "--remove-label", "deliver,deliver-review,deliver-attended"]);
       await io.report?.("returned", head, { detail: "closed" });
-      return { text: "没事可做：合并请求已关闭", exit: 2 };
+      return { text: t("没事可做：合并请求已关闭"), exit: 2 };
     }
     const result = await deliver(repo, number, io, testLocalHealth);
     if (result.findings?.length) {
@@ -90,18 +91,18 @@ async function handoff(
     const retry = retryHandoff(timers, head, hiccup, Date.now(), canReturn || options.direct === true);
     if (retry) {
       if (head) await io.report?.("retrying", head, { detail: hiccup ? "github" : "execution" });
-      return { text: hiccup ? "GitHub 暂时出错，一分钟后接着查" : "交付步骤暂时出错，一分钟后接着查", retry };
+      return { text: hiccup ? t("GitHub 暂时出错，一分钟后接着查") : t("交付步骤暂时出错，一分钟后接着查"), retry };
     }
-    if (!canReturn) return { text: "暂时读不到交付请求，请稍后重交", exit: 2 };
+    if (!canReturn) return { text: t("暂时读不到交付请求，请稍后重交"), exit: 2 };
     try {
       return await sendBack(
-        hiccup ? "GitHub 连续约一小时出错，请稍后重交" : "交付连续五次尝试都卡住了，请稍后重交",
+        hiccup ? t("GitHub 连续约一小时出错，请稍后重交") : t("交付连续五次尝试都卡住了，请稍后重交"),
         hiccup ? "github" : "execution",
       );
     } catch {
-      if (options.direct) return { text: "暂时写不回交付结果，请稍后重交", exit: 2 };
+      if (options.direct) return { text: t("暂时写不回交付结果，请稍后重交"), exit: 2 };
       const retry = retryHandoff(timers, head, hiccup, Date.now(), false)!;
-      return { text: "暂时写不回交付结果，一分钟后接着查", retry };
+      return { text: t("暂时写不回交付结果，一分钟后接着查"), retry };
     }
   }
 }
@@ -116,7 +117,7 @@ export async function run(repo: string, context: Context, testLocalHealth = fals
           runHook(progressCommand, { repo, number, head, phase, at: new Date().toISOString(), ...metadata }, 3000);
         } catch {
           // Progress is separate from the GitHub receipt and may be unavailable during a release.
-          console.error("暂时没能上报交付进度");
+          console.error(t("暂时没能上报交付进度"));
         }
       }
     : options.report;
@@ -142,12 +143,12 @@ export async function run(repo: string, context: Context, testLocalHealth = fals
     }
     const issue = await io.api(`issues/${number}`);
     if (!issue.pull_request) {
-      if (issue.state !== "open" || !hasLabel(issue, "ask-owner")) return "没事可做：没有待处理的问题";
+      if (issue.state !== "open" || !hasLabel(issue, "ask-owner")) return t("没事可做：没有待处理的问题");
       if (context.answers?.length) {
         await io.api(`issues/${number}/labels/ask-owner`, undefined, "DELETE");
-        return "已记录处理结果";
+        return t("已记录处理结果");
       }
-      return `有一件事需要你处理\n${receiptBlock({ ask: [question(issue)] })}`;
+      return t('有一件事需要你处理\n{"receipt"}', { receipt: receiptBlock({ ask: [question(issue)] }) });
     }
     try {
       const result = await deliver(repo, number, io, testLocalHealth);

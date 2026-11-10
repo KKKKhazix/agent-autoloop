@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { HOME, RULES_FILE } from "./home.ts";
 import { privateDirectory } from "./files.ts";
+import { t } from "./i18n.ts";
 import { stateOf as state, viewStatements } from "./state.ts";
 import { cardHash, digest, whose as keyHolder } from "../kernel/credentials.ts";
 import { decide } from "../kernel/decide.ts";
@@ -25,8 +26,10 @@ const masterKey = readFileSync(masterKeyFile, "utf8").trim();
 // void every link and token, so that is left to the owner.
 if (!/^[A-Za-z0-9_-]{43}$/.test(masterKey)) {
   throw new Error(
-    `${masterKeyFile} 坏了（应该是 43 个字符），中台不启动。从备份恢复这个文件；没有备份就删掉它，` +
-      "重启会生成新的，但已经发出的卡片链接和正在跑的轮次会失效。",
+    t(
+      '{"file"} 坏了（应该是 43 个字符），中台不启动。从备份恢复这个文件；没有备份就删掉它，重启会生成新的，但已经发出的卡片链接和正在跑的轮次会失效。',
+      { file: masterKeyFile },
+    ),
   );
 }
 export const environment = {
@@ -118,13 +121,15 @@ export function reloadRules(file = RULES_FILE): { problem?: string } {
 }
 
 function unreadable(file: string, error: NodeJS.ErrnoException) {
-  if (error.code === "ENOENT") return `找不到 ${file}，被删掉或移走了？放回去就会接着用`;
-  if (error.code === "EACCES" || error.code === "EPERM") return `没有权限读 ${file}，改回能读的权限就会接着用`;
-  return `读不到 ${file}：${error.code ?? error.message}`;
+  if (error.code === "ENOENT")
+    return t('找不到 {"file"}，被删掉或移走了？放回去就会接着用', { file });
+  if (error.code === "EACCES" || error.code === "EPERM")
+    return t('没有权限读 {"file"}，改回能读的权限就会接着用', { file });
+  return t('读不到 {"file"}：{"why"}', { file, why: error.code ?? error.message });
 }
 
 const initial = reloadRules();
-if (!rules) throw new Error(initial.problem ?? "缺少规则");
+if (!rules) throw new Error(initial.problem ?? t("缺少规则"));
 
 let toldOf: string | undefined;
 
@@ -180,7 +185,7 @@ export const logAfter = (after = 0, limit = -1) =>
 /** The part of the log that explains one run: its events, cards and receipts, and the rules it ran under. */
 export function why(id: number) {
   const latest = getView();
-  if (!latest.get("runs", id)) throw new NotFound("没有这一轮");
+  if (!latest.get("runs", id)) throw new NotFound(t("没有这一轮"));
   const events = query.eventsOf(latest, id).map((event) => event.id);
   const cards = [...rows(latest, "cards", { run_id: id }), ...rows(latest, "cards", { answer_event: events })];
   const sequences = new Set<number>();

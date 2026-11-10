@@ -3,11 +3,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HOME } from "./home.ts";
+import { t } from "./i18n.ts";
 
 export async function loadPlugin(name: string, kind: "agent" | "channel" | "source") {
-  if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`插件名字不正确：${name}`);
+  if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(t('插件名字不正确：{"name"}', { name }));
   const entry = join(name, `${kind}.ts`);
   const file = [join(HOME, "plugins", entry), join(import.meta.dirname, "..", "plugins", entry)].find(existsSync);
-  if (!file) throw new Error(`没有 ${name} 的插件（plugins/${name}/${kind}.ts）`);
+  if (!file)
+    throw new Error(t('没有 {"name"} 的插件（plugins/{"name"}/{"kind"}.ts）', { name, kind }));
   return (await import(pathToFileURL(file).href)).default;
 }

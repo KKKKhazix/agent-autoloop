@@ -3,6 +3,7 @@
 // all of it is escaped, and the only thing the page may load is its own style.
 import { createHash } from "node:crypto";
 import type { cardView } from "./query.ts";
+import { t } from "../host/i18n.ts";
 
 const STYLE = `:root{color-scheme:light dark;font:16px/1.6 system-ui,sans-serif}
 body{max-width:34rem;margin:0 auto;padding:32px 16px;overflow-wrap:anywhere}
@@ -50,13 +51,24 @@ export function cardPage(card: ReturnType<typeof cardView>) {
     // A notice can take a line on how it was handled: optional, and kept with the closing.
     const notice = card.kind === "notice";
     const box = notice
-      ? `<input name="text" placeholder="我实际怎么处理的（可不填）" aria-label="处理说明">`
-      : `<input name="text" placeholder="别的想法" aria-label="别的想法" required>`;
-    const other = `<form method="post">${box}<button>${notice ? "记录并结案" : "发送"}</button></form>`;
+      ? t('<input name="text" placeholder="{"ph"}" aria-label="{"label"}">', {
+          ph: t("我实际怎么处理的（可不填）"),
+          label: t("处理说明"),
+        })
+      : t('<input name="text" placeholder="{"ph"}" aria-label="{"label"}" required>', {
+          ph: t("别的想法"),
+          label: t("别的想法"),
+        });
+    const other = `<form method="post">${box}<button>${notice ? t("记录并结案") : t("发送")}</button></form>`;
     return shell(card.title, `${words}<form method="post">${card.options.map(button).join("")}</form>${other}`);
   }
   const chosen = card.kind === "ask" ? (card.choice !== null ? card.options[card.choice] : card.answer) : null;
-  const outcome = [chosen ? `你选了「${chosen}」` : "", card.result ?? ""].filter(Boolean).join("。");
-  const settled = card.kind === "notice" && card.answer ? `<p>处理说明：${escaped(card.answer)}</p>` : "";
+  const outcome = [chosen ? t('你选了「{"chosen"}」', { chosen }) : "", card.result ?? ""]
+    .filter(Boolean)
+    .join(t("。"));
+  const settled =
+    card.kind === "notice" && card.answer
+      ? `<p>${t('处理说明：{"answer"}', { answer: escaped(card.answer) })}</p>`
+      : "";
   return shell(card.title, `${words}${outcome ? `<p>${escaped(outcome)}</p>` : ""}${settled}`);
 }

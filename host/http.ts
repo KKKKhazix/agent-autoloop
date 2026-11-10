@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { makeHandler } from "./server.ts";
+import { t } from "./i18n.ts";
 
 export function serve(port: number, host = "127.0.0.1", { commit = "dev" }: { commit?: string } = {}) {
   const runtime = makeHandler(commit);
@@ -31,7 +32,7 @@ export function serve(port: number, host = "127.0.0.1", { commit = "dev" }: { co
     } catch (error) {
       console.error(error);
       if (res.headersSent) return void res.end();
-      res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "中台出错了" }));
+      res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: t("中台出错了") }));
     }
   });
   server.on("close", runtime.close);

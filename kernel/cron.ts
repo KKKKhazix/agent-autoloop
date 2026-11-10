@@ -113,7 +113,8 @@ export function dayStart(now: number, zone: string) {
 }
 
 // With the rest of the cron and not with the status summary: a client's own page can import this file, which needs nothing
-// of Node.
+// of Node; i18n reads lazily, so importing this file still pulls in nothing of the install.
+import { t } from "../host/i18n.ts";
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六", "日"];
 
 /** A common schedule in plain words (每天 18:00, 每周日 06:00, 工作日 09:00, 每月 1 日 04:00); any other as written. */
@@ -122,9 +123,9 @@ export function describeCron(text: string) {
   const number = /^\d+$/;
   if (!number.test(minute) || !number.test(hour) || month !== "*" || !parseCron(text)) return text;
   const at = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
-  if (day === "*" && weekday === "*") return `每天 ${at}`;
-  if (day === "*" && number.test(weekday)) return `每周${WEEKDAYS[Number(weekday)]} ${at}`;
-  if (day === "*" && weekday === "1-5") return `工作日 ${at}`;
-  if (number.test(day) && weekday === "*") return `每月 ${Number(day)} 日 ${at}`;
+  if (day === "*" && weekday === "*") return t('每天 {"at"}', { at });
+  if (day === "*" && number.test(weekday)) return t('每周{"day"} {"at"}', { day: t(WEEKDAYS[Number(weekday)]), at });
+  if (day === "*" && weekday === "1-5") return t('工作日 {"at"}', { at });
+  if (number.test(day) && weekday === "*") return t('每月 {"n"} 日 {"at"}', { n: Number(day), at });
   return text;
 }
