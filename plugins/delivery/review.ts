@@ -156,15 +156,15 @@ function reviewInput(bare: string, main: string, range: string[], config: Settin
 async function runReviewer(
   snapshot: string,
   reviewer: Reviewer,
-  inDepth: boolean,
+  effort: string,
   input: ReturnType<typeof reviewInput>,
 ) {
   mkdirSync(snapshot, { recursive: true });
   const changesFile = join(snapshot, "changes.txt");
   writeFileSync(changesFile, input.diff);
   const output = join(snapshot, "review.json");
-  const { command, model, effort } = reviewer;
-  const codex = () => [findProgram("codex", () => IN_THE_APP), ...codexCommand(output, depth(effort, inDepth), model)];
+  const { command, model } = reviewer;
+  const codex = () => [findProgram("codex", () => IN_THE_APP), ...codexCommand(output, effort, model)];
   const argv = command ?? codex();
   const args = argv.slice(1).map((arg) => arg.replaceAll("{input}", changesFile));
   const child = execFile(...commandLine([argv[0], ...args]), {
@@ -200,7 +200,12 @@ export async function reviewSnapshot(
   if (!changed.needsReview) return [];
   const [reviewer] = selectReview(config, source.agent, changed.inDepth || source.required);
   if (!reviewer) return { exempt: source.agent! };
-  return runReviewer(snapshot, reviewer, changed.inDepth, reviewInput(bare, main, changed.range, config));
+  return runReviewer(
+    snapshot,
+    reviewer,
+    depth(reviewer.effort, changed.inDepth),
+    reviewInput(bare, main, changed.range, config),
+  );
 }
 
 type ReviewOptions = {
@@ -283,7 +288,9 @@ export async function reviewDelivery(
   if (!reviewers.length) return current.unhandled.length ? unhandled(current) : { exempt: agent! };
 
   const signature = reviewSignature(reviewers);
-  const previous = verified?.signature === signature ? verified : undefined;
+  const efforts = reviewers.map((reviewer) => depth(reviewer.effort, changed.inDepth));
+  // The signed round also records effective depth. Expanding xhigh on main can change it without a new PR commit.
+  const previous = verified?.signature === signature && verified.effort === efforts.join(" + ") ? verified : undefined;
   let since: string | undefined;
   if (previous) {
     try {
@@ -304,7 +311,7 @@ export async function reviewDelivery(
   const input = reviewInput(bare, main, outstanding.range, config, current.author, since ? current.record : undefined);
   const found: Finding[] = [];
   for (const [index, reviewer] of reviewers.entries()) {
-    const results = await runReviewer(join(snapshot, String(index + 1)), reviewer, outstanding.inDepth, input);
+    const results = await runReviewer(join(snapshot, String(index + 1)), reviewer, efforts[index], input);
     for (const { title, text } of results) {
       found.push({ title: reviewers.length > 1 ? `${title}（审查 ${index + 1}/${reviewer.name}）` : title, text });
     }
@@ -314,7 +321,6 @@ export async function reviewDelivery(
   if (latest.merged_at || latest.head.sha !== head) return { changed: true };
   const latestLedger = ledger(latest.body);
   if (JSON.stringify(latestLedger.rounds) !== JSON.stringify(current.rounds)) return { changed: true };
-  const efforts = reviewers.map((reviewer) => depth(reviewer.effort, outstanding.inDepth));
   const written = latestLedger.append(renderRound(latestLedger, signature, efforts, head, found));
   const round = ledger(written).rounds.at(-1)!;
   // A pending proof can recover a write that reached GitHub even if this process stopped before finalizing it.

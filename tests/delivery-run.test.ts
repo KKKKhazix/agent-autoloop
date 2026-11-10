@@ -2,7 +2,8 @@
 // check can't be fetched, so every change needs a release and a docs-only PR never finishes; a failure on an ordinary issue is
 // covered up by the 404 from looking it up as a PR; one item whose label record can't be read fails the whole poll; a failed
 // round writes its error over the delivery status, so the next one forgets the commit had findings and reviews it again;
-// an obsolete Ship run requires a remote compare that fails, hiding the successful release of this merge.
+// an obsolete Ship run requires a remote compare that fails, hiding the successful release of this merge; a manual retry
+// reuses its scratch folder and fails because the origin already exists.
 // Nothing here reaches GitHub: `gh` is a stand-in first on PATH, and the Git remote is a local folder.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -166,6 +167,15 @@ test("Ship uses local ancestry for older runs and the short healthy version", as
   });
   assert.deepEqual(await waitLive(docsOnly, config, io), { phase: "docs_only", ship: 2, release: "live-before" });
   assert.doesNotMatch(readFileSync(calls, "utf8"), /compare\/|commits\//);
+});
+
+test("a manual retry can fetch main in its existing scratch folder", async () => {
+  const folder = join(root, "retry-objects");
+  const first = createIO("example/app", folder);
+  await first.prepareShip?.();
+  const retry = createIO("example/app", folder);
+  await retry.prepareShip?.();
+  assert.equal(await retry.contains(live, docsOnly), true);
 });
 
 test("the toolkit trusts only a commit on main containing its latest tool changes", async () => {

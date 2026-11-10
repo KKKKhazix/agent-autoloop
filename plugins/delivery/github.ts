@@ -85,7 +85,7 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
     if (!initialized) {
       mkdirSync(bare, { recursive: true });
       git(bare, "init", "--bare", "--template=");
-      git(bare, "remote", "add", "origin", `https://github.com/${repo}.git`);
+      git(bare, "config", "remote.origin.url", `https://github.com/${repo}.git`);
       initialized = true;
     }
     const missing = refs.filter((ref) => !commitSha.test(ref) || (!fetched.has(ref) && !localCommit(ref)));
