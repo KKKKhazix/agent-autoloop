@@ -9,6 +9,7 @@ const acknowledgeWithin = 180_000;
 type Label = { name: string };
 type Status = { state: string; description: string; created_at: string };
 type Timer = { key: string; about?: string; at?: string };
+type RetryState = { head: string; github: number; execution: number };
 
 export const hasLabel = (issue: { labels: Label[] }, name: string) => issue.labels.some((label) => label.name === name);
 
@@ -21,13 +22,20 @@ export function unattendedFailure(labels: Label[], last: Status | undefined, now
   );
 }
 
-export function retryHandoff(timers: Timer[], head: string, hiccup: boolean, now = Date.now()) {
+function retryState(timers: Timer[]): RetryState | undefined {
   const saved = timers.find((timer) => timer.key === retryKey)?.about;
-  const previous = saved ? JSON.parse(saved) : undefined;
+  return saved ? JSON.parse(saved) : undefined;
+}
+
+export const retryHead = (timers: Timer[]) => retryState(timers)?.head ?? "";
+
+export function retryHandoff(timers: Timer[], head: string, hiccup: boolean, now = Date.now(), canReturn = true) {
+  const previous = retryState(timers);
   const count = previous?.head === head ? previous : { head, github: 0, execution: 0 };
   const kind = hiccup ? "github" : "execution";
-  count[kind] += 1;
-  if (count[kind] >= (hiccup ? 60 : 5)) return null;
+  const limit = hiccup ? 60 : 5;
+  count[kind] = Math.min(count[kind] + 1, limit);
+  if (count[kind] === limit && canReturn) return null;
   return { key: retryKey, at: new Date(now + retryInterval).toISOString(), about: JSON.stringify(count) };
 }
 

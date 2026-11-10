@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import { createIO, gh, isGitHubHiccup, type DeliveryOptions } from "./github.ts";
 import { deliver, DeliveryRefusal, DeliverySuperseded, disableAuto, status, type DeliveryIO } from "./delivery.ts";
 import { deliveryReceipt, question, receiptBlock, subjectNumber } from "./input.ts";
-import { hasLabel, retryHandoff, runHook, tellQuestion, tellReturn, unattendedFailure } from "./handoff.ts";
+import { hasLabel, retryHandoff, retryHead, runHook, tellQuestion, tellReturn, unattendedFailure } from "./handoff.ts";
 
 type Options = DeliveryOptions & { progressCommand?: string; notifyCommand?: string; direct?: boolean };
 type Context = Parameters<typeof subjectNumber>[1] & {
@@ -24,7 +24,8 @@ async function handoff(
   options: Options,
   testLocalHealth: boolean,
 ): Promise<HandoffResult> {
-  let head = "";
+  const timers = context.timers ?? [];
+  let head = retryHead(timers);
   let pr: any;
   const notify = options.notifyCommand;
   const sendBack = async (reason: string, detail: string): Promise<HandoffResult> => {
@@ -84,21 +85,22 @@ async function handoff(
       }
     }
     const hiccup = isGitHubHiccup(error);
-    const retry = retryHandoff(context.timers ?? [], head, hiccup);
-    if (retry || !pr || !hasLabel(pr, "deliver")) {
-      if (!retry) throw error;
+    const canReturn = !!pr && hasLabel(pr, "deliver");
+    const retry = retryHandoff(timers, head, hiccup, Date.now(), canReturn || options.direct === true);
+    if (retry) {
       if (head) await io.report?.("retrying", head, { detail: hiccup ? "github" : "execution" });
       return { text: hiccup ? "GitHub 暂时出错，一分钟后接着查" : "交付步骤暂时出错，一分钟后接着查", retry };
     }
+    if (!canReturn) return { text: "暂时读不到交付请求，请稍后重交", exit: 2 };
     try {
       return await sendBack(
         hiccup ? "GitHub 连续约一小时出错，请稍后重交" : "交付连续五次尝试都卡住了，请稍后重交",
         hiccup ? "github" : "execution",
       );
     } catch {
-      const next = retryHandoff([], head, hiccup)!;
-      const about = JSON.stringify({ head, github: hiccup ? 59 : 0, execution: hiccup ? 0 : 4 });
-      return { text: "暂时写不回交付结果，一分钟后接着查", retry: { ...next, about } };
+      if (options.direct) return { text: "暂时写不回交付结果，请稍后重交", exit: 2 };
+      const retry = retryHandoff(timers, head, hiccup, Date.now(), false)!;
+      return { text: "暂时写不回交付结果，一分钟后接着查", retry };
     }
   }
 }

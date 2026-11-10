@@ -12,6 +12,8 @@ test("GitHub errors get an hour without using up the five regular retries", () =
   assert.deepEqual(JSON.parse(next!.about), { head, github: 59, execution: 4 });
   assert.equal(next!.at, "2026-10-30T12:01:00.000Z");
   assert.equal(retryHandoff([due], head, true, now), null);
+  const unreachable = retryHandoff([due], head, true, now, false);
+  assert.deepEqual(JSON.parse(unreachable!.about), { head, github: 60, execution: 3 });
   assert.deepEqual(JSON.parse(retryHandoff([due], "b".repeat(40), true, now)!.about).github, 1);
 });
 
