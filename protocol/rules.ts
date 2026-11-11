@@ -32,6 +32,11 @@ const isId: Check = (value) => typeof value === "string" && ID.test(value);
 const isCount: Check = (value) => Number.isInteger(value) && (value as number) > 0;
 const isTypes: Check = (value) => isSomeWords(value) && (value as string[]).every((type) => TYPE_PATTERN.test(type));
 const isCron: Check = (value) => typeof value === "string" && parseCron(value) !== null;
+// One word: a client may name a session after the first word of its first message.
+const isTitle: Check = (value) =>
+  typeof value === "string" &&
+  /^\S+$/.test(value) &&
+  [...value.matchAll(/\{([^{}]*)\}/g)].every(([, name]) => name === "id" || name === "subject");
 const isFolder: Check = (value) =>
   typeof value === "string" && /^(~[/\\]|\/|[a-z]:[/\\]|\\\\[^\\]+\\[^\\]+)/i.test(value);
 const FOLDER = "要是绝对目录（如 ~/code、/srv/app、C:\\code 或 \\\\服务器\\共享目录）";
@@ -77,6 +82,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["cwd", isFolder, FOLDER],
     ["skill", isText, NOT_EMPTY, true],
     ["prompt", isText, NOT_EMPTY, true],
+    ["title", isTitle, "要是一个不含空白的词，占位符只能用 {id}、{subject}", true],
     ["group", isText, NOT_EMPTY, true],
     ["parallel", isCount, "要是正整数", true],
     ["maxActive", isCount, "要是正整数", true],
