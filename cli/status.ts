@@ -93,9 +93,14 @@ export function clockFor(state: { now: string; timezone: string }) {
 // A word both sh and PowerShell take as it is: # starts a comment and @ a splat only at the front of a word.
 const PLAIN = /^[\p{L}\p{N}_./][\p{L}\p{N}_.#@:/-]*$/u;
 
-/** A word the user's shell reads back unchanged: single quotes, which neither expands inside, as each shell escapes them. */
+/** A word the user's shell reads back unchanged: single quotes, which neither expands inside, as each shell escapes them.
+ * PowerShell also takes the curly single quotes (common in Chinese text) as quotes, so each of those is doubled too. */
 const shellWord = (word: string, windows: boolean) =>
-  PLAIN.test(word) ? word : windows ? `'${word.replaceAll("'", "''")}'` : `'${word.replaceAll("'", `'\\''`)}'`;
+  PLAIN.test(word)
+    ? word
+    : windows
+      ? `'${word.replace(/['\u2018\u2019\u201a\u201b]/g, "$&$&")}'`
+      : `'${word.replaceAll("'", `'\\''`)}'`;
 
 /** The command that hands a rule what its pause skipped since then, to copy as it is into this machine's shell. */
 export const replayCommand = (rule: string, since: string, windows = process.platform === "win32") =>

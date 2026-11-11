@@ -155,7 +155,7 @@ test("a paused rule says since when, how many events it has skipped, the latest 
 });
 
 const since = "2026-11-11T14:07:53.620Z";
-const odd = ["意见 $HOME `id`", "#99 意见", "@x", "it's", "a b"];
+const odd = ["意见 $HOME `id`", "#99 意见", "@x", "it's", "a b", "‘羊毛’ ’"];
 
 test(
   "the replay command reads back the rule name and time unchanged in sh, and a plain name stays unquoted",
@@ -179,4 +179,8 @@ test("on Windows the replay command quotes the way PowerShell reads single quote
   assert.equal(replayCommand("it's $x", since, true), `agent-autoloop replay 'it''s $x' --since ${since}`);
   assert.equal(replayCommand("#99", since, true), `agent-autoloop replay '#99' --since ${since}`);
   assert.equal(replayCommand("@x", since, true), `agent-autoloop replay '@x' --since ${since}`);
+  // PowerShell takes the curly single quotes as its own: each is doubled like the straight one, or a Chinese name ends the quote.
+  assert.equal(replayCommand("O’Reilly", since, true), `agent-autoloop replay 'O’’Reilly' --since ${since}`);
+  assert.equal(replayCommand("‘羊毛’; rm x", since, true), `agent-autoloop replay '‘‘羊毛’’; rm x' --since ${since}`);
+  assert.equal(replayCommand("‚a‛", since, true), `agent-autoloop replay '‚‚a‛‛' --since ${since}`);
 });
