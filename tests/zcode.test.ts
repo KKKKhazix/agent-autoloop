@@ -1,9 +1,10 @@
 // What's different about ZCode. Failure cases: a level of access maps to the wrong permission mode, or a prompt runs in
-// yolo when the rule asked for read/edit; a resumed turn starts a new session instead of going on; the final JSON is read
-// line by line (it is one pretty-printed object) or a warning before it hides the answer; a still-running turn is taken
-// for an answer or a failure; an unknown resumed session is retried in that same session forever instead of starting a
-// new one; a run that exited without JSON is taken for a success; the provider's tokens are dropped; a Windows .cjs
-// bundle is run as if the platform could execute it; the version check passes when the program is missing.
+// yolo when the rule asked for read/edit; a resumed turn starts a new session instead of going on; the final JSON is
+// read line by line (it is one pretty-printed object) or a warning before it hides the answer; a still-running turn is
+// taken for an answer or a failure, or output cut off inside the object hangs the worker that reads it; an unknown
+// resumed session is retried in that same session forever instead of starting a new one; a run that exited without JSON
+// is taken for a success; the provider's tokens are dropped; a Windows .cjs bundle is run as if the platform could
+// execute it; the version check passes when the program is missing.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,6 +96,8 @@ test("ZCode: the final JSON's response is the answer, with the session and the p
 test("ZCode: still running is not an answer and not a failure, and counts as started", () => {
   assert.deepEqual(zcode.read("", null, ""), { started: true });
   assert.deepEqual(zcode.read('{"sessionId":"sess_1"', null, ""), { started: true });
+  // Cut off after a brace inside the answer: no object yet, and reading it must return.
+  assert.deepEqual(zcode.read('{"sessionId":"sess_1","response":"用 {x} 写', null, ""), { started: true });
 });
 
 test("ZCode: an unknown resumed session may start a new one; another failure stays in this one", () => {

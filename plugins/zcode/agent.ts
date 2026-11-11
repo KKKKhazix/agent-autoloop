@@ -23,7 +23,8 @@ function lastJsonObject(text: string): any {
   } catch {}
   const end = text.lastIndexOf("}");
   if (end < 0) return null;
-  for (let start = text.lastIndexOf("{", end); start >= 0; start = text.lastIndexOf("{", start - 1)) {
+  // lastIndexOf with -1 still finds a brace at 0, so stop after trying the start of the text.
+  for (let start = text.lastIndexOf("{", end); start >= 0; start = start ? text.lastIndexOf("{", start - 1) : -1) {
     try {
       const value = JSON.parse(text.slice(start, end + 1));
       if (value && typeof value === "object" && !Array.isArray(value)) return value;
