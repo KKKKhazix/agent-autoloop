@@ -3,9 +3,12 @@
 // so columns after it drift and lines wrap past the edge; what waits for the owner sinks below what only reports; a
 // notice dealt with spreads its whole text over the list, or loses it, though that's the only place what `tell` said is read.
 // A paused rule doesn't say how many events it has let go by since when, which ones, or that there are more than it lists.
+// The replay command it prints, copied as it is, runs something else: a rule name with $ or a backquote expands, one
+// starting with # turns the rest of the line into a comment.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { colorFor, render, width } from "../cli/status.ts";
+import { execFileSync } from "node:child_process";
+import { colorFor, render, replayCommand, width } from "../cli/status.ts";
 
 const now = "2026-11-07T02:00:00.000Z"; // 10:00 in Asia/Shanghai
 const run = (id: number, state: string, rule: string, more: object = {}) => ({
@@ -149,4 +152,31 @@ test("a paused rule says since when, how many events it has skipped, the latest 
   );
   assert.match(section, /共 7 条，这里列出最近 5 条/);
   assert.match(section, /早报：放假\n {4}08:00 起$/);
+});
+
+const since = "2026-11-11T14:07:53.620Z";
+const odd = ["意见 $HOME `id`", "#99 意见", "@x", "it's", "a b"];
+
+test(
+  "the replay command reads back the rule name and time unchanged in sh, and a plain name stays unquoted",
+  { skip: process.platform === "win32" },
+  () => {
+    assert.equal(replayCommand("中台意见", since, false), `agent-autoloop replay 中台意见 --since ${since}`);
+    for (const rule of odd) {
+      const command = replayCommand(rule, since, false);
+      const args = execFileSync(
+        "sh",
+        ["-c", `set -- ${command.replace(/^agent-autoloop replay /, "")}; printf '%s\\n' "$@"`],
+        { encoding: "utf8" },
+      );
+      assert.equal(args, `${rule}\n--since\n${since}\n`, command);
+    }
+  },
+);
+
+test("on Windows the replay command quotes the way PowerShell reads single quotes", () => {
+  assert.equal(replayCommand("中台意见", since, true), `agent-autoloop replay 中台意见 --since ${since}`);
+  assert.equal(replayCommand("it's $x", since, true), `agent-autoloop replay 'it''s $x' --since ${since}`);
+  assert.equal(replayCommand("#99", since, true), `agent-autoloop replay '#99' --since ${since}`);
+  assert.equal(replayCommand("@x", since, true), `agent-autoloop replay '@x' --since ${since}`);
 });

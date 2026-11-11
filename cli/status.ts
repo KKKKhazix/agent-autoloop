@@ -90,9 +90,16 @@ export function clockFor(state: { now: string; timezone: string }) {
   return { when, lasted };
 }
 
-/** The command that hands a rule what its pause skipped since then, to copy as it is. */
-export const replayCommand = (rule: string, since: string) =>
-  `agent-autoloop replay ${/^[\p{L}\p{N}_.#@:/-]+$/u.test(rule) ? rule : JSON.stringify(rule)} --since ${since}`;
+// A word both sh and PowerShell take as it is: # starts a comment and @ a splat only at the front of a word.
+const PLAIN = /^[\p{L}\p{N}_./][\p{L}\p{N}_.#@:/-]*$/u;
+
+/** A word the user's shell reads back unchanged: single quotes, which neither expands inside, as each shell escapes them. */
+const shellWord = (word: string, windows: boolean) =>
+  PLAIN.test(word) ? word : windows ? `'${word.replaceAll("'", "''")}'` : `'${word.replaceAll("'", `'\\''`)}'`;
+
+/** The command that hands a rule what its pause skipped since then, to copy as it is into this machine's shell. */
+export const replayCommand = (rule: string, since: string, windows = process.platform === "win32") =>
+  `agent-autoloop replay ${shellWord(rule, windows)} --since ${shellWord(since, windows)}`;
 
 /** One event a pause skipped, in a line no wider than `room`: when it came, from where, what and about what. */
 export function skippedLine(event: any, room: number, when: (iso: string) => string, from = (id: string) => id) {
