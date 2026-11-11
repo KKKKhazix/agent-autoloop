@@ -3,8 +3,9 @@
 // couldn't work, or that there was nothing to do, is taken as work done; a heading or a receipt ends up in the summary; a
 // receipt that doesn't parse, has unknown fields or breaks the protocol's limits is applied rather than sent back to be
 // rewritten; the receipt isn't found when the message says something after it, or a code block of another kind is taken for
-// one; a code fence inside one of the receipt's strings cuts it short; a result longer than the hub takes is sent as it is;
-// a browser/login block is reported as retryable failure; a session carried on keeps to the copy of its skill it read
+// one; a code fence inside one of the receipt's strings cuts it short; a result longer than the hub takes is sent as it
+// is, or is cut through the middle of a character so its last glyph reaches the hub as garbage; a browser/login block is
+// reported as retryable failure; a session carried on keeps to the copy of its skill it read
 // before, though the skill has changed since. A rule's session title isn't the first line, so every run of it looks the
 // same in a client that names a session after its first message; or it is filled from a subject the run doesn't share.
 import assert from "node:assert/strict";
@@ -247,6 +248,23 @@ test("a result is put together and checked as the hub will check it", () => {
   assert.ok(long.result.summary!.length <= 500);
   assert.ok(!long.result.summary!.endsWith("\ud83d"), "not cut through a character");
   assert.ok(resultFrom({ outcome: "failed", error: "x".repeat(600) }, {}).result.error!.length <= 500);
+});
+
+test("a cut that lands inside a character drops the half, and only the half", () => {
+  // The cut is a UTF-16 offset, so a text made only of pairs puts the 500th unit on an even boundary and
+  // reads the same with the half-character guard and without it. One leading ASCII character moves the
+  // boundary inside a pair, which is the only alignment where the guard changes the answer.
+  const said = "a" + "😀".repeat(600);
+  for (const message of [
+    { outcome: "done" as const, summary: said },
+    { outcome: "failed" as const, error: said },
+  ]) {
+    const { result } = resultFrom(message, {});
+    const kept = (result.summary ?? result.error)!;
+    assert.ok(said.startsWith(kept), "the run's own words, minus a tail");
+    assert.ok(!/[\ud800-\udbff]$/.test(kept), "not cut through a character");
+    assert.equal([...kept].length, 250, "only the half character is dropped");
+  }
 });
 
 test("asking for a rewrite says not to redo anything", () => {
