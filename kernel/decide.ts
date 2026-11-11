@@ -647,17 +647,17 @@ const CONTROL = {
     if (!eventRule(rule))
       throw new InputError(`「${name}」是定时规则，暂停时到点不跑、不记事件，没有可补跑的；要补一轮用 run`);
     if (pauseOf(draft.view, rule, draft.now)) throw new Conflict(`规则「${name}」暂停中，先恢复再补跑`);
+    // An event stays as it came, still saying which pauses skipped it. What says it's been made up is a run of this rule
+    // holding it, and a link once made only ever moves to another run of the same rule and matter.
+    const taken = (id: number) =>
+      rows(draft.view, "run_events", { event_id: id }).some(
+        (link) => draft.view.get("runs", link.run_id)?.rule === name,
+      );
     const replayed: number[] = [];
     const runs = new Set<number>();
     for (const id of [...events].sort((a, b) => a - b)) {
       const event = draft.view.get("events", id);
-      const paused: string[] = JSON.parse(event?.paused ?? "[]");
-      // Taken off its list as it's taken: that's what keeps a second replay from handing it over again.
-      if (!event || !paused.includes(name)) continue;
-      const { paused: _paused, ...rest } = event;
-      const still = paused.filter((other) => other !== name);
-      // An emptied list goes with its field, or the index of what pauses kept back would still have it.
-      set(draft, "events", id, still.length ? { ...rest, paused: JSON.stringify(still) } : rest);
+      if (!event || !JSON.parse(event.paused ?? "[]").includes(name) || taken(id)) continue;
       runs.add(enqueue(draft, rule, id, rule.parallel ? event.subject : ""));
       replayed.push(id);
     }

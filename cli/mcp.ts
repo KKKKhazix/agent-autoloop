@@ -26,7 +26,7 @@ const specs = [
   ["tell", "用本机来源发送通知；相同编号只发一次", { key: string, text: string }, ["key", "text"]],
   [
     "pause",
-    "暂停一条规则：到点不跑、来事件不接也不排队；恢复时会列出跳过的事件",
+    "暂停一条规则：到点不跑、来事件不接也不排队；跳过的事件不会自动补，手动恢复时会列出，之后可以 replay",
     { rule: string, reason: string, until: string },
     ["rule"],
   ],

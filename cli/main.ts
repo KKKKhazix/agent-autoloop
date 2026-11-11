@@ -715,7 +715,7 @@ async function emit(args: string[]) {
   }
   const secret = text(named.key) ?? config.source?.key ?? fail("这台电脑上没有来源的密钥：用 --key");
   const answer = await client(secret, config).event(event);
-  const paused = answer.paused?.length ? `暂停中没接：${answer.paused.join("、")}，恢复时会列出` : "";
+  const paused = answer.paused?.length ? `暂停中没接：${answer.paused.join("、")}` : "";
   if (answer.routed.length) console.log(`交给了：${answer.routed.join("、")}${paused && `；${paused}`}`);
   else console.log(paused ? `记下了，${paused}。` : "记下了，没有规则接它。");
 }

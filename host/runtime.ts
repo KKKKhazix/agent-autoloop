@@ -147,7 +147,7 @@ export function cardByToken(token: string) {
 export const view = (card: Row, ref: string | null = null, links = false) =>
   query.cardView(card, environment, ref, links);
 export const unrouted = (limit = 20) => query.unrouted(getView(), limit);
-export const skipped = (rule: string, since: string, limit?: number) => skippedOf(all, rule, since, limit);
+export const skipped = (rule: string, since: string, everything = false) => skippedOf(all, rule, since, everything);
 /** Read in one snapshot: its seq is where the log stood for all of it, for a client to go on in /v1/stream from. */
 export function stateOf(now = Date.now(), before?: number) {
   db.exec("BEGIN");

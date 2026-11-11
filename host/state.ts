@@ -89,10 +89,12 @@ function tally(counted: Row[]) {
 // walking every event by id.
 const SKIPPED = `SELECT id, source, type, subject, summary, paused, received_at FROM events
   WHERE paused > '' ORDER BY +id DESC LIMIT 20`;
-// The same, for one rule since its pause began. A replay takes the rule off an event's list, so what's here is still owed.
+// The same, for one rule since its pause began, less those a replay has since handed to a run of the rule.
 const SKIPPED_BY = `FROM events WHERE paused > '' AND received_at >= ?
-  AND EXISTS (SELECT 1 FROM json_each(paused) WHERE value = ?)`;
-/** How many of the events a pause skipped come listed with it in the state; the count says how many there are in all. */
+  AND EXISTS (SELECT 1 FROM json_each(paused) WHERE value = ?)
+  AND NOT EXISTS (SELECT 1 FROM run_events JOIN runs ON runs.id = run_events.run_id
+    WHERE run_events.event_id = events.id AND runs.rule = ?)`;
+/** How many of the events a pause skipped come listed with it; the count says how many there are in all. */
 const LISTED = 20;
 
 const skippedView = ({ paused, received_at: receivedAt, ...event }: Row) => ({
@@ -101,12 +103,15 @@ const skippedView = ({ paused, received_at: receivedAt, ...event }: Row) => ({
   rules: JSON.parse(paused),
 });
 
-/** What a pause has kept from a rule since `since`, newest first: how many, and as many as `limit` of them. */
-export function skippedOf(all: Reads["all"], rule: string, since: string, limit?: number) {
-  const { count } = all<{ count: number }>(`SELECT COUNT(*) AS count ${SKIPPED_BY}`, [since, rule])[0];
+/**
+ * What a pause has kept from a rule since `since` and nothing has made up yet, newest first: how many, and the latest of
+ * them, or all of them.
+ */
+export function skippedOf(all: Reads["all"], rule: string, since: string, everything = false) {
+  const { count } = all<{ count: number }>(`SELECT COUNT(*) AS count ${SKIPPED_BY}`, [since, rule, rule])[0];
   const columns = "SELECT id, source, type, subject, summary, paused, received_at";
-  const order = `ORDER BY +id DESC${limit === undefined ? "" : " LIMIT ?"}`;
-  const events = all<Row>(`${columns} ${SKIPPED_BY} ${order}`, [since, rule, ...(limit === undefined ? [] : [limit])]);
+  const order = `ORDER BY +id DESC${everything ? "" : ` LIMIT ${LISTED}`}`;
+  const events = all<Row>(`${columns} ${SKIPPED_BY} ${order}`, [since, rule, rule]);
   return { count, events: events.map(skippedView) };
 }
 
@@ -140,7 +145,7 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     .filter((pause) => pause.until === null || Date.parse(pause.until) > now)
     .map((pause): Row => ({
       ...pause,
-      skipped: timed.has(pause.name) ? null : skippedOf(all, pause.name, pause.since, LISTED),
+      skipped: timed.has(pause.name) ? null : skippedOf(all, pause.name, pause.since),
     }));
   const pauseOf = (rule: Rules["rules"][number]) => {
     const pause = pauses.find((p) => p.name === rule.name);

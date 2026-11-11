@@ -14,8 +14,9 @@ export type Services = {
   commit: string;
   dispatch(type: string, args: any[], now: number): any;
   state(now: number, before?: number): unknown;
-  /** The events a pause has kept from a rule since it began, newest first: how many, and as many as `limit` of them. */
-  skipped(rule: string, since: string, limit?: number): { count: number; events: Row[] };
+  /** What a pause has kept from a rule since it began and nothing has made up yet, newest first: how many, and the
+   * latest of them, or all of them. */
+  skipped(rule: string, since: string, everything?: boolean): { count: number; events: Row[] };
   why(id: number): unknown;
   card(token: string): Row | undefined;
   wait(until: number, signal: AbortSignal): Promise<void>;
@@ -221,8 +222,6 @@ const CONTROL_INPUTS: Record<string, string> = {
   run: "runRule",
   replay: "replayRule",
 };
-/** How many of the events a pause skipped come listed with it; the count says how many there are in all. */
-const LISTED = 20;
 
 /** Pause, resume, run a rule now, or replay what its pause skipped: the owner's, kept in the log. */
 async function control(call: Call, encoded: string, action: string) {
@@ -249,7 +248,7 @@ async function control(call: Call, encoded: string, action: string) {
     const from = typeof since === "string" && /(Z|[+-]\d\d:\d\d)$/.test(since) ? Date.parse(since) : NaN;
     if (!Number.isFinite(from)) throw new InputError("since 要是带时区的 ISO 时间：补跑从这个时间起暂停时跳过的事件");
     // Picked out here and checked again as they're taken, so what another replay took in between isn't taken twice.
-    const events = call.services.skipped(name, iso(from)).events.map((event) => event.id);
+    const events = call.services.skipped(name, iso(from), true).events.map((event) => event.id);
     return json(act(call, type, name, events));
   }
   const done = action === "resume" ? act(call, type, name) : act(call, type, name, holder, given);
@@ -257,7 +256,7 @@ async function control(call: Call, encoded: string, action: string) {
   // A schedule lets its moments pass and keeps no events. Read once a resume has lifted the pause, the list is whole:
   // nothing can join it any more.
   const rule = ruleOf(call.rules, name);
-  const skipped = rule && !eventRule(rule) ? null : call.services.skipped(name, done.paused.since, LISTED);
+  const skipped = rule && !eventRule(rule) ? null : call.services.skipped(name, done.paused.since);
   return json({ ...done, paused: { ...done.paused, skipped } });
 }
 
