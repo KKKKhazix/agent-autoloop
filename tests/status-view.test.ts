@@ -2,6 +2,7 @@
 // Agent reading the output, or show up despite NO_COLOR; a Chinese, Japanese or Korean character is counted as one column,
 // so columns after it drift and lines wrap past the edge; what waits for the owner sinks below what only reports; a
 // notice dealt with spreads its whole text over the list, or loses it, though that's the only place what `tell` said is read.
+// A paused rule doesn't say how many events it has let go by since when, which ones, or that there are more than it lists.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { colorFor, render, width } from "../cli/status.ts";
@@ -107,4 +108,45 @@ test("what waits for the owner comes first, then what's going on, then what only
   assert.doesNotMatch(text, /第二段/);
   assert.match(text, /https:\/\/example\.com\/x/);
   assert.doesNotMatch(text, /\]\(/, "a link shows as its words and its address, not markdown");
+});
+
+test("a paused rule says since when, how many events it has skipped, the latest of them, and that there are more", () => {
+  const event = (n: number) => ({
+    id: 100 + n,
+    source: "app",
+    type: "feedback.new",
+    subject: `#${n}`,
+    summary: `第 ${n} 条`,
+    receivedAt: `2026-11-07T01:0${n}:00.000Z`,
+  });
+  const pause = { by: "owner", until: null };
+  const lines = [
+    {
+      name: "意见",
+      every: null,
+      next: null,
+      paused: {
+        ...pause,
+        reason: "下游在修",
+        since: "2026-11-06T10:00:00.000Z",
+        skipped: { count: 7, events: [7, 6, 5, 4, 3, 2, 1].map(event) },
+      },
+    },
+    {
+      name: "早报",
+      every: "每天 9:00",
+      next: "2026-11-08T01:00:00.000Z",
+      paused: { ...pause, reason: "放假", since: "2026-11-07T00:00:00.000Z", skipped: null },
+    },
+  ];
+  const text = render({ ...state, lines }, { color: false, columns: 100 });
+  const start = text.indexOf("暂停中");
+  const section = text.slice(start, text.indexOf("\n\n", start));
+  assert.match(section, /意见：下游在修\n {4}昨天 18:00 起，跳过 7 条事件/);
+  assert.deepEqual(
+    [...section.matchAll(/09:0\d +应用 feedback\.new #(\d)：第 \d 条/g)].map((match) => match[1]),
+    ["7", "6", "5", "4", "3"],
+  );
+  assert.match(section, /共 7 条，这里列出最近 5 条/);
+  assert.match(section, /早报：放假\n {4}08:00 起$/);
 });
