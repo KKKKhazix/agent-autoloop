@@ -9,7 +9,8 @@
 // turn that won't exit; the raw messages of a broken Claude run become the reason it failed. A receipt an Agent wrote
 // and then lost because a background task called it back for another turn is dropped, so the card it asked for never
 // exists and the work looks untouched; or, carried along, it replaces one the last turn wrote wrongly, so a cancelled
-// review comes back. A line of output that's JSON
+// review comes back. Claude's tokens leave out what it read from its cache while the others' count it, so the same
+// work reads as a fraction of Codex's. A line of output that's JSON
 // but no message, like `null`, stops a plugin reading anything. A command line's placeholder pass rewrites the prompt
 // itself — a `{cwd}` or a `$&` the person wrote arrives as the folder or as `{prompt}` — so the program is asked
 // something other than what the event said. A built-in agent starts the program it finds, not the one its rules name,
@@ -104,7 +105,7 @@ test("Claude Code: reading its result", () => {
   assert.deepEqual(claude.read(`noise\n${line({})}\n`, 0, ""), {
     text: "好了",
     session: "s",
-    usage: { input: 10, output: 2, cached: 6 },
+    usage: { input: 16, output: 2, cached: 5 },
     sessionUsage: { cost: 0.5 },
     finished: true,
   });
