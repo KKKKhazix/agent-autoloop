@@ -290,9 +290,10 @@ GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 // Card：这张卡片现在的样子。内容创建后不变，只有状态会变
 { "id": 56, "version": 2, "ref": null, "kind": "ask", "state": "open",
   "title": "…", "text": "…", "options": ["…", "…"], "recommend": 0,
-  "choice": null, "answer": null, "by": null, "result": null, "link": null }
+  "choice": null, "answer": null, "by": null, "result": null, "link": null, "rule": "…" }
 ```
 
+- `rule` 是创建这张卡片的规则或别处定时任务的名字，可能没有（比如中台自己的告警，标题就写着从哪来）。卡片从很多地方来，自带的飞书、桌面、Webhook 通道、卡片网页和 `agent-autoloop status` 都写明“来源：<rule>”，标题就是这个名字时不重复；自己写的通道也照这样。
 - `ref` 是空的就发一条新的；不是空的就把那条改成现在的样子，改不了就直接报告。
 - 发完报告：`POST /v1/cards/56/delivered { "version": 2, "ref": "om_xxx" }`。没报告的过一分钟会再给你。**支持幂等键的平台，发新消息只用卡片编号，不带版本**（飞书改不动已经结束的卡片时另发一条，这一条才带版本）。平台不支持时无法保证去重，Webhook 模板可能在报告丢失后重发。
 - 发不出去：`POST /v1/cards/56/failed { "version": 2, "error": "…" }`。第一次发送隔得越来越久地重试，一小时后放弃（卡片还开着，`agent-autoloop status` 看得到）；通道一直没来领不算在内。
@@ -450,7 +451,7 @@ Node 请求转换层只把 Node 的请求变成 Request；文件、SQLite 连接
 
 ### 通道模板与命令行示例
 
-Webhook 通道的 `config.json` 配置使用 `use: "webhook"`、`url` 和 `platform`，后者可选 `dingtalk`、`wecom`、`slack`、`discord`。不写 platform 时可用 `body` 自定义模板，字符串里的 `{text}` 替换为卡片内容。四个模板对照官方文档：[钉钉](https://open.dingtalk.com/document/orgapp/custom-bot-send-message-type)、[企微](https://developer.work.weixin.qq.com/document/path/91770)、[Slack](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)、[Discord](https://discord.com/developers/docs/resources/webhook#execute-webhook)。企微在标题后显示创建卡片的规则名，把普通网址显示为“打开链接”，把无选项通知的结案地址显示为“点击处理”，不再另列“1. 已处理”；卡片里写的链接标记和尖括号换成全角照字显示，不会被画成链接、标签或提及。钉钉和企微检查响应的 `errcode`，Slack 检查 `ok`；Discord 禁止文字触发提及。超过企微 2048 字节或 Discord 2000 字的卡片会报告失败，不截断问题或回答链接。Webhook 本身没有幂等保证，消息发送成功但报告丢失时可能重发。
+Webhook 通道的 `config.json` 配置使用 `use: "webhook"`、`url` 和 `platform`，后者可选 `dingtalk`、`wecom`、`slack`、`discord`。不写 platform 时可用 `body` 自定义模板，字符串里的 `{text}` 替换为卡片内容。四个模板对照官方文档：[钉钉](https://open.dingtalk.com/document/orgapp/custom-bot-send-message-type)、[企微](https://developer.work.weixin.qq.com/document/path/91770)、[Slack](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)、[Discord](https://discord.com/developers/docs/resources/webhook#execute-webhook)。企微把普通网址显示为“打开链接”，把无选项通知的结案地址显示为“点击处理”，不再另列“1. 已处理”；卡片里写的链接标记和尖括号换成全角照字显示，不会被画成链接、标签或提及。钉钉和企微检查响应的 `errcode`，Slack 检查 `ok`；Discord 禁止文字触发提及。超过企微 2048 字节或 Discord 2000 字的卡片会报告失败，不截断问题或回答链接。Webhook 本身没有幂等保证，消息发送成功但报告丢失时可能重发。
 
 桌面通知 `desktop` 是新安装默认打开的通道：macOS 用 `osascript`，Linux 用 `notify-send`，Windows 用 PowerShell 的系统托盘通知。通知标题是“Agent 问你一个问题”，正文是卡片标题和“运行 agent-autoloop status 查看”；Unix 的文字通过 `--` 后的参数传入；Windows 把 JSON 数据编码后交给固定脚本解码，不把文字当 PowerShell 执行。没有图形会话时不调用通知程序，报告 `skipped-<卡片编号>`，不反复打扰；卡片仍可通过命令行查看和回答。有图形会话但通知命令不存在或失败时报告 `failed`，由中台安排重试。卡片更新只报告，不重复弹出。
 
