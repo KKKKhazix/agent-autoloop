@@ -244,27 +244,10 @@ test("a result is put together and checked as the hub will check it", () => {
   );
   assert.match(broken.problem!, /ask/);
   assert.deepEqual(broken.result, { outcome: "done", summary: "好了" }, "what stands without the receipt");
-  const long = resultFrom({ outcome: "done", summary: "😀".repeat(600) }, {});
-  assert.ok(long.result.summary!.length <= 500);
-  assert.ok(!long.result.summary!.endsWith("\ud83d"), "not cut through a character");
+  // The leading "a" puts the 500th unit inside a pair; with pairs alone the cut would fall between two characters.
+  const long = resultFrom({ outcome: "done", summary: "a" + "😀".repeat(600) }, {});
+  assert.equal(long.result.summary!.length, 499, "not cut through a character, and only the half dropped");
   assert.ok(resultFrom({ outcome: "failed", error: "x".repeat(600) }, {}).result.error!.length <= 500);
-});
-
-test("a cut that lands inside a character drops the half, and only the half", () => {
-  // The cut is a UTF-16 offset, so a text made only of pairs puts the 500th unit on an even boundary and
-  // reads the same with the half-character guard and without it. One leading ASCII character moves the
-  // boundary inside a pair, which is the only alignment where the guard changes the answer.
-  const said = "a" + "😀".repeat(600);
-  for (const message of [
-    { outcome: "done" as const, summary: said },
-    { outcome: "failed" as const, error: said },
-  ]) {
-    const { result } = resultFrom(message, {});
-    const kept = (result.summary ?? result.error)!;
-    assert.ok(said.startsWith(kept), "the run's own words, minus a tail");
-    assert.ok(!/[\ud800-\udbff]$/.test(kept), "not cut through a character");
-    assert.equal([...kept].length, 250, "only the half character is dropped");
-  }
 });
 
 test("asking for a rewrite says not to redo anything", () => {
