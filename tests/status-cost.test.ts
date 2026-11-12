@@ -58,6 +58,15 @@ test("today is the rules' day; each figure says how many rounds didn't report it
   );
 });
 
+test("rounds recorded before input counted the cache don't show a share of more than all of it", () => {
+  // Claude's input once left its cache out while cached took in reads and writes.
+  const old = [ended("2026-11-03T01:00:00Z", { input: 10, output: 2, cached: 60000 })];
+  assert.equal(
+    spendLine(old, now, "Asia/Shanghai"),
+    "今天      1 轮 · 12 Token · 费用没上报\n最近 7 天 1 轮 · 12 Token · 费用没上报",
+  );
+});
+
 test("nothing reported is said to be nothing reported, not zero; nothing run is zero rounds", () => {
   const quiet = [ended("2026-11-03T01:00:00Z", null), ended("2026-11-03T01:30:00Z", {})];
   assert.equal(

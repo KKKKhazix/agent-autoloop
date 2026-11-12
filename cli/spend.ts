@@ -10,7 +10,8 @@ function tally(label: string, { rounds, tokens, cached, cost, missingTokens, mis
   const notes = (...said: string[]) => (said.some(Boolean) ? `（${said.filter(Boolean).join("；")}）` : "");
   const missing = (silent: number) => (silent ? `${silent} 轮没上报` : "");
   // Read from a cache, a token costs a fraction of the price, so a total mostly made of them overstates the bill.
-  const fromCache = cached > 0 && tokens > 0 ? `其中缓存 ${Math.round((cached / tokens) * 100)}%` : "";
+  // Rounds recorded before Claude's input took in its cache can make the share more than all of it; those say nothing.
+  const fromCache = cached > 0 && cached <= tokens ? `其中缓存 ${Math.round((cached / tokens) * 100)}%` : "";
   const shownTokens =
     missingTokens === rounds
       ? "Token 没上报"
