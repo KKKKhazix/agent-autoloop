@@ -453,7 +453,7 @@ Node 请求转换层只把 Node 的请求变成 Request；文件、SQLite 连接
 
 Webhook 通道的 `config.json` 配置使用 `use: "webhook"`、`url` 和 `platform`，后者可选 `dingtalk`、`wecom`、`slack`、`discord`。不写 platform 时可用 `body` 自定义模板，字符串里的 `{text}` 替换为卡片内容。四个模板对照官方文档：[钉钉](https://open.dingtalk.com/document/orgapp/custom-bot-send-message-type)、[企微](https://developer.work.weixin.qq.com/document/path/91770)、[Slack](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)、[Discord](https://discord.com/developers/docs/resources/webhook#execute-webhook)。企微把普通网址显示为“打开链接”，把无选项通知的结案地址显示为“点击处理”，不再另列“1. 已处理”；卡片里写的链接标记和尖括号换成全角照字显示，不会被画成链接、标签或提及。钉钉和企微检查响应的 `errcode`，Slack 检查 `ok`；Discord 禁止文字触发提及。超过企微 2048 字节或 Discord 2000 字的卡片会报告失败，不截断问题或回答链接。Webhook 本身没有幂等保证，消息发送成功但报告丢失时可能重发。
 
-桌面通知 `desktop` 是新安装默认打开的通道：macOS 用 `osascript`，Linux 用 `notify-send`，Windows 用 PowerShell 的系统托盘通知。通知标题是“Agent 问你一个问题”，正文是卡片标题和“运行 agent-autoloop status 查看”；Unix 的文字通过 `--` 后的参数传入；Windows 把 JSON 数据编码后交给固定脚本解码，不把文字当 PowerShell 执行。没有图形会话时不调用通知程序，报告 `skipped-<卡片编号>`，不反复打扰；卡片仍可通过命令行查看和回答。有图形会话但通知命令不存在或失败时报告 `failed`，由中台安排重试。卡片更新只报告，不重复弹出。
+桌面通知 `desktop` 是新安装默认打开的通道：macOS 用 `osascript`，Linux 用 `notify-send`，Windows 用 PowerShell 的系统托盘通知。通知标题是“Agent 问你一个问题”，正文是卡片标题、“来源：<规则名>”（卡片带规则且标题不是规则名时）和“运行 agent-autoloop status 查看”；Unix 的文字通过 `--` 后的参数传入；Windows 把 JSON 数据编码后交给固定脚本解码，不把文字当 PowerShell 执行。没有图形会话时不调用通知程序，报告 `skipped-<卡片编号>`，不反复打扰；卡片仍可通过命令行查看和回答。有图形会话但通知命令不存在或失败时报告 `failed`，由中台安排重试。卡片更新只报告，不重复弹出。
 
 `examples/worker.sh` 和 `examples/channel.sh` 只用 shell 内置命令、curl、jq。设置 `AGENT_AUTOLOOP_URL`、`AGENT_AUTOLOOP_KEY` 后运行；`AGENT_AUTOLOOP_ONCE=1` 只领一次。接单示例交回 `AGENT_AUTOLOOP_RECEIPT` 中的 JSON，默认交回完成；通道示例把卡片输出到终端，再报告送达。它们是短任务示例，不适合长任务；长任务使用 `worker/` 的心跳、停止和恢复。`tests/examples.test.ts` 在通过协议一致性检查的临时中台上实际运行两个脚本，覆盖提问、送达、回答、继续和错误密钥。
 
