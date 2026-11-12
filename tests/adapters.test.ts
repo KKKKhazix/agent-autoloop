@@ -14,7 +14,8 @@
 // itself — a `{cwd}` or a `$&` the person wrote arrives as the folder or as `{prompt}` — so the program is asked
 // something other than what the event said. A built-in agent starts the program it finds, not the one its rules name,
 // so a wrapper that sends Claude Code to another service is never run. A service tier the rules name for Codex never
-// reaches its command line, so the run takes whatever tier the machine's own Codex config has that day.
+// reaches its command line, so the run takes whatever tier the machine's own Codex config has that day. A program
+// missing for a moment, as while an update reinstalls it, stays missing until the worker restarts.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -388,6 +389,16 @@ test("a plain command's prompt reaches the program as it was written, whatever i
 
 test("a program that isn't there says so", () => {
   assert.throws(() => findProgram("surely-not-installed-anywhere"), /找不到 surely-not-installed-anywhere/);
+});
+
+test("a program missing at one lookup is found at the next once it's back", () => {
+  const program = join(setup("adapters-reinstall"), "reinstalled-agent");
+  assert.throws(() => findProgram("reinstalled-agent", () => [program]), /找不到 reinstalled-agent/);
+  writeFileSync(program, "", { mode: 0o755 });
+  assert.equal(
+    findProgram("reinstalled-agent", () => [program]),
+    program,
+  );
 });
 
 test("a line of output that's JSON but no message is noise to every plugin", () => {
