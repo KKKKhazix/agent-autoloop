@@ -161,6 +161,8 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 **内置 Agent 走第三方网关。** Claude Code、Codex 要接第三方模型服务，或者启动前要先设好环境变量，写一个设好变量再启动它的小脚本，在 Agent 里写 `"program": "脚本路径"`，会话续接和用量统计照旧，见[说明](skills/agent-autoloop/SKILL.md#接一个-agent)。
 
+想让反馈初筛等重复任务少用主力模型的 Token，可以参考 [HiRoute 模型路由示例](examples/recipes/hiroute/README.md)，用现有的 Claude Code 或 Codex 插件跑一轮并查看实际用量。
+
 **其他命令行 Agent 一行接入。** 设置 `use: "command"` 并传入命令数组，`{prompt}` 作为独立参数传递，不会被当成 shell 代码执行。下面的命令整理自各家官方文档，我们还没有逐个跑过：
 
 | Agent | 接入命令 |

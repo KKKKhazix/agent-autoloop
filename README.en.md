@@ -163,6 +163,8 @@ Built-in plugins ship with the program and are enabled through configuration. Us
 
 **Built-in agents through another service.** To send Claude Code or Codex to a third-party model service, or to set environment variables before it starts, write a small script that sets them and starts the program, then put `"program": "/path/to/script"` on the agent. Session resumption and usage reporting still work. See the [guide](skills/agent-autoloop/SKILL.md#接一个-agent).
 
+The [HiRoute routing recipe](examples/recipes/hiroute/README.en.md) shows how to use the existing Claude Code or Codex plugin for routine feedback triage and check how many primary-model tokens the task used.
+
 **Other CLI agents connect in one line.** Set `use: "command"` and pass a command array; `{prompt}` is a single argument, never evaluated as shell code. These commands come from each tool's official docs, and we have not run each of them yet:
 
 | Agent | Command |

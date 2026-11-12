@@ -1,0 +1,28 @@
+{
+  "sources": { "hiroute-demo": { "name": "HiRoute demo" } },
+  "agents": {
+    "hiroute-claude": {
+      "name": "Claude Code via HiRoute",
+      "worker": "my-computer",
+      "use": "claude",
+      "model": "sonnet",
+      "access": "read"
+    },
+    "hiroute-codex": {
+      "name": "Codex via HiRoute",
+      "worker": "my-computer",
+      "use": "codex",
+      "program": "/absolute/path/to/codex-via-hiroute.sh",
+      "access": "read"
+    }
+  },
+  "rules": [
+    {
+      "name": "HiRoute feedback triage",
+      "when": { "source": "hiroute-demo", "types": ["hiroute.demo"] },
+      "to": "hiroute-claude",
+      "cwd": "~/autoloop-hiroute-demo",
+      "prompt": "Read feedback.txt in the working directory. Return one line per item in the original order, with its ID, one label (bug, feature or question), and a short reason. Do not edit files, send replies or access the network."
+    }
+  ]
+}
