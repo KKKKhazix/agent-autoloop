@@ -140,6 +140,7 @@ Each recipe includes sample rules and setup instructions (written in Chinese).
 | [Website watch](examples/recipes/website-watch/README.md) | Check status and expected content every five minutes; wake the agent on a new incident, keep ongoing failures quiet, and update the card on recovery |
 | [Feishu weekly and business brief](examples/recipes/feishu-brief/README.md) | Read selected reports and tables with your permissions at 6 PM Sunday; summarize locally and send only a short summary to Feishu |
 | [Inbox triage](examples/recipes/inbox-triage/README.md) | Read unread mail from the last 24 hours at 8 AM by default; write a local checklist with reply drafts, without sending or changing the mailbox |
+| [Call transcript](examples/recipes/monid-transcript/README.md) | Opt in to read transcripts for your owned AgentLine number through [Monid](https://docs.monid.ai?utm_source=github&utm_campaign=oss-pr&utm_content=kkkkhazix-agent-autoloop&aid=OSS-KKKKHAZIX-AGENT-AUTOLOOP) |
 | [PR delivery](skills/agent-autoloop/SKILL.md#交付流水线) | Add `deliver` to a PR to review it, wait for CI, merge, wait for deployment, and verify the live version |
 
 **To enable one:** open its instructions. If the recipe includes a task Skill, put it in your agent's skills directory. Merge the sample rules into `~/.agent-autoloop/rules.json`, replace worker names and paths, then run `agent-autoloop check`.

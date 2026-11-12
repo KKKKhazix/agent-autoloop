@@ -138,6 +138,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 | [网站巡检](examples/recipes/website-watch/README.md) | 每 5 分钟检查状态和关键内容，首次异常交给 Agent，持续异常不重复通知，恢复后更新原卡片 |
 | [飞书周报与业务摘要](examples/recipes/feishu-brief/README.md) | 周日 18 点按你的权限读汇报和指定表格，生成本地摘要；飞书只发简短摘要，完整稿留在本机 |
 | [收件箱分诊](examples/recipes/inbox-triage/README.md) | 默认每天 8 点读过去 24 小时的未读邮件，写成清单和回复草稿；不发送、不改邮箱状态 |
+| [通话转写](examples/recipes/monid-transcript/README.md) | 主动通过 [Monid](https://docs.monid.ai?utm_source=github&utm_campaign=oss-pr&utm_content=kkkkhazix-agent-autoloop&aid=OSS-KKKKHAZIX-AGENT-AUTOLOOP) 读取自己拥有的 AgentLine 号码的通话转写 |
 | [PR 自动交付](skills/agent-autoloop/SKILL.md#交付流水线) | 打上 `deliver` 标签后，审查、等 CI、合并、等发布并核对线上版本 |
 
 **启用：** 打开对应说明。模板带任务 Skill 时，把它放进所用 Agent 的 skills 目录。把示例规则合入 `~/.agent-autoloop/rules.json`，替换电脑名和路径，再运行 `agent-autoloop check`。
