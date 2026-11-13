@@ -1,7 +1,52 @@
 # 在 WSL2 中启动真实 Agent 和前端
 
+已完成本机 WSL 部署后，可直接双击仓库根目录的 `start.cmd`，自动检查并启动前后端、复制本人密钥并打开浏览器。详见[Windows 一键启动说明](one-click-startup.md)。
+
 这份文档可以独立使用：在本机 `WSL2` 中运行真实后端、命令行 `Agent` 和前端流程操作台。采用前台运行方式，关闭终端后不会作为系统服务自动启动。
 
+## 本机已部署：直接启动
+
+本节对应 `2026-11-13` 在当前电脑完成的部署，首次安装和初始化已经执行。发行版为 `Ubuntu`，用户为 `edy`，后端为 `http://127.0.0.1:3350`。由于 `Windows` 的 `5173` 端口被其他项目占用，本项目前端改为 `http://127.0.0.1:5193`。
+
+打开一个 `PowerShell` 窗口启动后端，保持窗口运行：
+
+```powershell
+wsl -d Ubuntu -u edy -- bash /home/edy/.agent-autoloop-local/start-backend.sh
+```
+
+再打开一个 `PowerShell` 窗口启动前端，保持窗口运行：
+
+```powershell
+wsl -d Ubuntu -u edy -- bash /home/edy/.agent-autoloop-local/start-frontend.sh
+```
+
+在 `Windows` 浏览器打开 `http://127.0.0.1:5193`。如果终端提示已经在跑或端口被占用，先检查本项目是否已经启动，不要重复启动第二份。
+
+读取本人密钥时，另开一个 `PowerShell` 窗口进入 `WSL`：
+
+```powershell
+wsl -d Ubuntu -u edy
+```
+
+进入 `Linux` 提示符后执行：
+
+```bash
+source "$HOME/.agent-autoloop-local/env.sh"
+node --input-type=module -e 'import { readFileSync } from "node:fs"; const c = JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_HOME + "/config.json", "utf8")); console.log("本人密钥：", c.owner);'
+```
+
+将输出粘贴到网页的“本人密钥”输入框，点击“连接中台”。刷新网页后需要重新连接。
+
+本机使用中转站。两个启动脚本会加载 `/home/edy/.agent-autoloop-local/env.sh`，其中设置 `CODEX_HOME=/mnt/c/Users/EDY/.codex`，沿用已有的中转站配置和本人完成的授权；没有把中转站密钥写入仓库，也无需执行官方账号的浏览器登录。该路径下的配置与运行记录会由两边的 `Codex` 共用，后续不要删除或移动它。
+
+要触发新的真实试跑，在已经加载上述环境的 `WSL` 窗口执行：
+
+```bash
+cd /mnt/d/github/agent-autoloop
+node --disable-warning=ExperimentalWarning bin/agent-autoloop.ts try
+```
+
+试跑会消耗中转站模型额度。在网页回答卡片后，查看后续轮次是否完成。日常停止按文末“停止和退出”处理。以上脚本用于手动启动，没有注册系统服务或开机自启；本文其他章节保留通用安装步骤，前端端口以本节为准。
 ## 启动前准备
 
 - 使用 `Windows 11` 或 `Windows 10 2004`（内部版本 `19041`）及以上版本。尚未安装 `WSL2` 时，先按下面的“第零步”安装。
@@ -127,8 +172,10 @@ command -v npm
 ```bash
 sudo apt-get update
 sudo apt-get install -y curl ca-certificates git
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh | bash
-source ~/.bashrc
+curl -fSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh -o /tmp/agent-autoloop-nvm-install.sh && bash /tmp/agent-autoloop-nvm-install.sh
+export NVM_DIR="$HOME/.nvm"
+source "$NVM_DIR/nvm.sh"
+command -v nvm
 nvm install 24
 nvm alias default 24
 nvm use 24
@@ -138,21 +185,56 @@ npm --version
 
 `sudo` 要求输入的是创建 `Ubuntu` 用户时设置的密码，输入时不显示字符。`nvm` 用来在当前 `Linux` 用户下安装和管理 `Node.js`；上面使用固定版本的官方安装脚本。每条命令成功后再执行下一条，遇到下载失败先解决网络问题。
 
+**如果提示 `Command 'nvm' not found`：** 说明当前终端还没加载 `nvm`，或安装没有成功。在当前 `WSL` 窗口先检查：
+
+```bash
+ls -l "$HOME/.nvm/nvm.sh"
+```
+
+如果文件存在，在当前窗口加载并确认：
+
+```bash
+export NVM_DIR="$HOME/.nvm"
+source "$NVM_DIR/nvm.sh"
+command -v nvm
+```
+
+最后一条应输出 `nvm`，然后再执行 `nvm install 24`。如果提示文件不存在，回到上面的安装命令，从 `sudo apt-get update` 开始执行；下载或安装报错时先解决错误，不要直接继续执行 `nvm install 24`。这里的安装脚本会将加载配置写入用户的 shell 配置；新窗口仍找不到时，可执行 `source ~/.bashrc`，或者重新使用上面的显式加载命令。
+
+不要按终端的相似命令建议安装 `nvme`、`nvim` 等包，它们不是 `nvm`。
+
 ### 1.2 检查并登录命令行 `Agent`
 
-本文默认使用 `Codex CLI`，在 `WSL` 中检查：
+本文默认使用 `Codex CLI`。先在当前 `WSL` 窗口使用前一步安装的 `Linux` 版 `Node.js`，再检查命令来自哪里：
 
 ```bash
-codex --version
+export NVM_DIR="$HOME/.nvm"
+source "$NVM_DIR/nvm.sh"
+nvm use 24
+command -v node
+command -v npm
 command -v codex
+npm config get prefix
 ```
 
-如果还没有在当前 `WSL` 环境安装，在完成 `1.1` 后执行：
+如果上一节使用的是已有的 `Linux` 版 `Node.js` 而没有安装 `nvm`，只执行上面的四条检查命令。`node` 和 `npm` 必须来自 `Linux` 安装。如果 `codex` 指向 `/mnt/d/nodejs/global/...` 或其他 `Windows` 安装，说明当前调用的是另一平台的程序，需要在 `WSL` 单独安装；即使 `node --version` 正常，也不代表 `codex` 的平台正确。
+
+使用本文的 `nvm` 安装方式时，先确认 `nvm use 24` 成功，`command -v node` 和 `command -v npm` 均指向 `/home/你的用户名/.nvm/...`，然后执行：
 
 ```bash
-npm install -g @openai/codex
+npm install --global --prefix "$NVM_BIN/.." --include=optional @openai/codex@latest
+hash -r
+command -v codex
 codex --version
 ```
+
+`--prefix "$NVM_BIN/.."` 明确将程序安装到当前 `nvm` 版本的 `Linux` 目录，避免沿用指向 `Windows` 的全局安装目录；`--include=optional` 包含当前平台的可选依赖。安装完成后，`command -v codex` 应指向 `/home/你的用户名/.nvm/versions/node/v24.../bin/codex`。以上任一步报错都先停下处理，不要继续初始化项目。
+
+如果使用其他已确认的 `Linux` 版 `Node.js` 安装方式，先确认 `npm config get prefix` 指向 `Linux` 的安装目录，再按该安装方式的权限要求执行 `npm install --global --include=optional @openai/codex@latest`。
+
+**如果报 `Missing optional dependency @openai/codex-linux-x64`，并且错误路径在 `/mnt/d/nodejs/global/...`：** 本文遇到过的是 `WSL` 调用了 `Windows` 安装的 `Codex`。按上面的 `nvm` 检查、指定安装目录、重新安装和 `hash -r` 步骤处理，然后用 `command -v codex` 确认路径已切换。无需往 `Windows` 安装中补装 `Linux` 平台包。若错误路径已经位于 `Linux` 安装目录，仍可先用上面的 `--include=optional` 安装命令重新安装，失败时保留安装过程的完整报错。
+
+如果已经有可用的中转站配置，先设置该配置所在的 `CODEX_HOME` 再检查可用性；不要为中转站配置重复执行官方账号登录。本机沿用配置的方法见本文开头。以下浏览器登录步骤适用于使用官方账号的情况。
 
 然后检查登录状态：
 
@@ -332,6 +414,10 @@ exit
 
 ## 相关说明
 
+- [在 WSL 中打开 Windows 项目并使用 Codex](wsl-windows-project-codex.md)
+
+- [本机部署验收记录](wsl2-deployment-verification.md)
+
 - [前后端启动总览与 Windows 演示模式](frontend-backend-startup.md)
 - [前端配置、构建与静态部署](../frontend/README.md)
 - [后端安装说明](../INSTALL.md)
@@ -345,4 +431,5 @@ exit
 - [Microsoft：设置 Linux 用户名和密码](https://learn.microsoft.com/en-us/windows/wsl/setup/environment#set-up-your-linux-username-and-password)
 - [nvm：官方安装与使用说明](https://github.com/nvm-sh/nvm#installing-and-updating)
 - [OpenAI：Codex CLI](https://developers.openai.com/codex/cli)
+- [npm：全局安装目录说明](https://docs.npmjs.com/cli/v11/configuring-npm/folders/)
 - [OpenAI：Codex CLI 登录命令](https://developers.openai.com/codex/cli/reference#codex-login)
