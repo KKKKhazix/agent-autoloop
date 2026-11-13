@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { shallowRef } from "vue";
 import type { ConnectionProps, ConnectionEmits } from "../types/console";
 defineProps<ConnectionProps>();
 const emit = defineEmits<ConnectionEmits>();
-const key = shallowRef("");
-function connect() {
-  emit("connect", key.value.trim());
-  key.value = "";
+// Autofill may update the DOM without emitting input; submit the visible value rather than a stale model.
+function connect(event: SubmitEvent) {
+  const form = event.currentTarget as HTMLFormElement;
+  const key = String(new FormData(form).get("owner") ?? "").trim();
+  if (!key) return;
+  emit("connect", key);
+  form.reset();
 }
 </script>
 <template>
@@ -20,13 +22,13 @@ function connect() {
       <div class="input-row">
         <input
           id="owner-key"
-          v-model="key"
+          name="owner"
           type="password"
           autocomplete="off"
           placeholder="输入本人密钥"
           required
           :disabled="busy"
-        /><button class="primary" :disabled="busy || !key.trim()">{{ busy ? "连接中…" : "连接中台" }}</button
+        /><button class="primary" :disabled="busy">{{ busy ? "连接中…" : "连接中台" }}</button
         ><button v-if="connected" type="button" @click="emit('disconnect')">断开</button>
       </div>
     </form>
