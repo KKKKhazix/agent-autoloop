@@ -5,6 +5,7 @@
 // otherwise, so they're given every time; nobody is there to approve anything, so a call that needs it is refused rather than
 // left waiting. It has no desktop session to open.
 import { execFileSync } from "node:child_process";
+import { commandLine } from "../../host/command.ts";
 import { findProgram, tail, type Adapter, type Reading, type Usage } from "../../worker/agents.ts";
 import { addUsage } from "../../protocol/validate.ts";
 
@@ -17,11 +18,14 @@ const WHY_NOT: Record<string, string> = {
   "max-tokens": "这一轮用完了输出上限",
 };
 
-/** dsh reports each step's tokens as inputTokens / outputTokens / cacheReadTokens. */
+/** dsh reports each step's tokens as inputTokens / outputTokens / cacheReadTokens / cacheWriteTokens. Its inputTokens
+ * leave out the cache's reads and writes; `input` counts all of it, as Codex's does. */
 function stepUsage(reported: any): Usage | undefined {
   if (!reported || typeof reported !== "object") return undefined;
   const step: Usage = {};
-  if (typeof reported.inputTokens === "number") step.input = reported.inputTokens;
+  const count = (value: unknown) => (typeof value === "number" ? value : 0);
+  if (typeof reported.inputTokens === "number")
+    step.input = reported.inputTokens + count(reported.cacheReadTokens) + count(reported.cacheWriteTokens);
   if (typeof reported.outputTokens === "number") step.output = reported.outputTokens;
   if (typeof reported.cacheReadTokens === "number") step.cached = reported.cacheReadTokens;
   return Object.keys(step).length ? step : undefined;
@@ -29,7 +33,7 @@ function stepUsage(reported: any): Usage | undefined {
 
 export default {
   command: (turn) => [
-    findProgram("dsh"),
+    turn.program ?? findProgram("dsh"),
     "headless",
     "--json",
     "--permission-mode",
@@ -78,9 +82,9 @@ export default {
     }
     return reading;
   },
-  check() {
+  check(program) {
     try {
-      const help = execFileSync(findProgram("dsh"), ["headless", "--help"], {
+      const help = execFileSync(...commandLine([program ?? findProgram("dsh"), "headless", "--help"]), {
         encoding: "utf8",
         timeout: 20_000,
         stdio: ["ignore", "pipe", "pipe"],

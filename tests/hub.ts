@@ -1,6 +1,7 @@
 // The hub's inputs by name, for tests and measuring scripts. What runs for real takes them at the doors in kernel/http.ts,
 // through `execute`. Import it after the environment is set, as host/runtime.ts has to be.
 import { db, execute, getView, rules, type KeyKind } from "../host/runtime.ts";
+import { beforeCleanup } from "./helpers.ts";
 import { evolve, keyOf, rows, type Row, type Table } from "../kernel/evolve.ts";
 import * as query from "../kernel/query.ts";
 import type { Job } from "../protocol/job.ts";
@@ -8,10 +9,13 @@ import type { Rejected } from "../protocol/validate.ts";
 
 export * from "../host/runtime.ts";
 export { RulesError } from "../protocol/rules.ts";
+beforeCleanup.push(() => {
+  if (db.isOpen) db.close();
+});
 
 export const ruleNamed = (name: string) => rules.rules.find((rule) => rule.name === name);
 
-type EventAck = { event: number; duplicate: boolean; routed: string[] };
+type EventAck = { event: number; duplicate: boolean; routed: string[]; paused: string[] };
 export const ingest = (source: string, input: unknown, now = Date.now()): EventAck =>
   execute("ingest", [source, input], now);
 export const claimNext = (worker: string, claim: string, now = Date.now()): Job | null =>
@@ -31,6 +35,7 @@ export const createCard = (spec: Row, now = Date.now()) => execute("createCard",
 type CardAck = { card: number; duplicate: boolean };
 export const tell = (key: string, title: string, text: string, now = Date.now()): CardAck =>
   execute("tell", [key, title, text], now);
+export const ask = (task: string, question: object, now = Date.now()): CardAck => execute("ask", [task, question], now);
 type Answer = { choice?: number; text?: string; by?: string; channel?: string; ref?: string };
 export const answer = (id: number, given: Answer, now = Date.now()): { changed: boolean; state: string } =>
   execute("answer", [id, given], now);

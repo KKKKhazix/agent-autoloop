@@ -124,6 +124,9 @@ const validAsk = (ask: Item) =>
       (ask.recommend as number) >= 0 &&
       (ask.recommend as number) < ask.options.length));
 
+/** A question as a receipt asks it, here asked by a task elsewhere. */
+export const isAsk = (value: unknown) => isItem(value) && validAsk(value as Item);
+
 const validNotice = (notice: Item) =>
   only(notice, ["title", "text", "key", "fyi"]) &&
   text(notice.title, 200) &&

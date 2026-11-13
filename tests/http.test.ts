@@ -304,12 +304,15 @@ test("a card's link is a plain page: it shows that card as words, runs nothing, 
   assert.match(page.headers.get("content-type")!, /^text\/html/);
   assert.ok(!/<script|<b>|<i>/.test(page.text), page.text);
   assert.ok(page.text.includes("&lt;script&gt;alert(1)&lt;/script&gt;链接答"));
+  assert.match(page.text, /<p class="from">来源：[^<]+<\/p>/, "the page says which rule the card came from");
   assert.match(page.headers.get("content-security-policy")!, /default-src 'none'/);
   assert.equal(page.headers.get("referrer-policy"), "no-referrer");
   assert.equal(page.headers.get("cache-control"), "no-store");
   assert.equal(stored(id).state, "open", "looking at it, as a chat app previewing the link does, answers nothing");
   const forms = page.text.split("<form").slice(1);
   assert.equal(forms.length, 2);
+  assert.match(forms[0], /<button name="choice" value="0" class="best" autofocus>/);
+  assert.equal(page.text.split("autofocus").length - 1, 1, "Enter submits only the focused recommended option");
   assert.ok(!forms[1].includes('name="choice"'), "Enter in the text box doesn't pick an option");
 
   assert.equal((await call("/c/made-up")).status, 404);
@@ -325,6 +328,15 @@ test("a card's link is a plain page: it shows that card as words, runs nothing, 
   assert.equal((await form(path, "choice=0")).status, 303);
   assert.equal(stored(id).choice, 1, "only the first press counts");
   assert.equal((await call(`${path}.json`)).status, 404);
+});
+
+test("a card link focuses its first option when the agent recommends none", async () => {
+  const { path } = await linkFor(66, {
+    ask: [{ title: "没有推荐项", text: "选一个", options: ["甲", "乙"] }],
+  });
+  const page = await call(path);
+  assert.match(page.text, /<button name="choice" value="0" autofocus>/);
+  assert.equal(page.text.split("autofocus").length - 1, 1);
 });
 
 test("a card's link lasts a week: after that it neither answers nor shows the card", async () => {

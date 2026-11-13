@@ -1,8 +1,9 @@
-// The cost line in `agent-autoloop status`, from the hub's completion-time totals. Failure cases: "today" is the
+// The cost lines in `agent-autoloop status`, from the hub's completion-time totals. Failure cases: "today" is the
 // machine's or UTC's day and not the rules' time zone; a price nobody reported is counted as zero, or rounds that didn't report
 // are passed over in silence; a round that never started is counted, or one that's only waiting to try again; a week's worth
 // of rounds is cut off at the first page of 60, or a run stuck in the queue since long ago ends the paging early.
-// A run created before the reporting window can finish today behind many old completed runs.
+// A run created before the reporting window can finish today behind many old completed runs. Tokens read from a cache, a
+// small part of the price, aren't told apart, so a day mostly served from cache reads as many times what it cost.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -12,7 +13,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
 import { setup } from "./helpers.ts";
-import { spendLine as formatSpending } from "../cli/spend.ts";
+import { spendLines } from "../cli/spend.ts";
 import { spendingOf } from "../host/state.ts";
 import { dayStart } from "../kernel/cron.ts";
 
@@ -30,9 +31,9 @@ function spendLine(
     db.exec("CREATE TABLE runs (claimed_at TEXT, finished_at TEXT, usage TEXT)");
     const insert = db.prepare("INSERT INTO runs VALUES (?, ?, ?)");
     for (const run of runs) insert.run(run.claimedAt, run.finishedAt, run.usage && JSON.stringify(run.usage));
-    return formatSpending(
+    return spendLines(
       spendingOf(<T>(sql: string, args: SQLInputValue[] = []) => db.prepare(sql).all(...args) as T[], now, timezone),
-    );
+    ).join("\n");
   } finally {
     db.close();
   }
@@ -40,7 +41,7 @@ function spendLine(
 
 test("today is the rules' day; each figure says how many rounds didn't report it", () => {
   const runs = [
-    ended("2026-11-03T01:00:00Z", { input: 5000, output: 5000 }),
+    ended("2026-11-03T01:00:00Z", { input: 5000, output: 5000, cached: 4000 }),
     ended("2026-11-03T00:30:00Z", null),
     // 01:00 on the 3rd in Shanghai: today there, though it's still the 2nd in UTC.
     ended("2026-11-02T17:00:00Z", { input: 1000, output: 234, cost: 0.5 }),
@@ -52,8 +53,17 @@ test("today is the rules' day; each figure says how many rounds didn't report it
   ];
   assert.equal(
     spendLine(runs, now, "Asia/Shanghai"),
-    "今天 3 轮 · 1.1 万 Token（1 轮没上报） · $0.50（2 轮没上报）" +
-      "    最近 7 天 5 轮 · 2.1 万 Token（1 轮没上报） · $1.50（2 轮没上报）",
+    "今天      3 轮 · 1.1 万 Token（其中缓存 36%；1 轮没上报） · $0.50（2 轮没上报）\n" +
+      "最近 7 天 5 轮 · 2.1 万 Token（其中缓存 19%；1 轮没上报） · $1.50（2 轮没上报）",
+  );
+});
+
+test("rounds recorded before input counted the cache don't show a share of more than all of it", () => {
+  // Claude's input once left its cache out while cached took in reads and writes.
+  const old = [ended("2026-11-03T01:00:00Z", { input: 10, output: 2, cached: 60000 })];
+  assert.equal(
+    spendLine(old, now, "Asia/Shanghai"),
+    "今天      1 轮 · 12 Token · 费用没上报\n最近 7 天 1 轮 · 12 Token · 费用没上报",
   );
 });
 
@@ -61,9 +71,9 @@ test("nothing reported is said to be nothing reported, not zero; nothing run is 
   const quiet = [ended("2026-11-03T01:00:00Z", null), ended("2026-11-03T01:30:00Z", {})];
   assert.equal(
     spendLine(quiet, now, "Asia/Shanghai"),
-    "今天 2 轮 · Token 没上报 · 费用没上报    最近 7 天 2 轮 · Token 没上报 · 费用没上报",
+    "今天      2 轮 · Token 没上报 · 费用没上报\n最近 7 天 2 轮 · Token 没上报 · 费用没上报",
   );
-  assert.equal(spendLine([], now, "Asia/Shanghai"), "今天 0 轮    最近 7 天 0 轮");
+  assert.equal(spendLine([], now, "Asia/Shanghai"), "今天      0 轮\n最近 7 天 0 轮");
 });
 
 test("only rounds that ended count: not one still going, one waiting to try again, or one stopped before it started", () => {
@@ -77,7 +87,7 @@ test("only rounds that ended count: not one still going, one waiting to try agai
   ];
   assert.equal(
     spendLine(runs, now, "Asia/Shanghai"),
-    "今天 1 轮 · 10 Token · 费用没上报    最近 7 天 1 轮 · 10 Token · 费用没上报",
+    "今天      1 轮 · 10 Token · 费用没上报\n最近 7 天 1 轮 · 10 Token · 费用没上报",
   );
 });
 
@@ -117,8 +127,8 @@ test("status includes runs beyond the first page, including old runs that finish
     { env: process.env },
   );
   const lines = stdout.split("\n");
-  assert.match(lines[0], /^在跑 /);
-  assert.equal(lines[1], "今天 1 轮 · 100 Token · $1.00    最近 7 天 66 轮 · 750 Token · $1.65");
+  assert.match(lines[0], /^等你 /);
+  assert.deepEqual(lines.slice(1, 3), ["今天      1 轮 · 100 Token · $1.00", "最近 7 天 66 轮 · 750 Token · $1.65"]);
 
   for (const table of ["run_events", "runs", "events", "seen", "cards", "deliveries", "timers"] as const)
     hub.fixtureClear(table);
@@ -131,5 +141,8 @@ test("status includes runs beyond the first page, including old runs that finish
     ["--disable-warning=ExperimentalWarning", join(import.meta.dirname, "../bin/agent-autoloop.ts"), "status"],
     { env: process.env },
   );
-  assert.equal(recent.stdout.split("\n")[1], "今天 1 轮 · 1000 Token · $9.00    最近 7 天 1 轮 · 1000 Token · $9.00");
+  assert.deepEqual(recent.stdout.split("\n").slice(1, 3), [
+    "今天      1 轮 · 1000 Token · $9.00",
+    "最近 7 天 1 轮 · 1000 Token · $9.00",
+  ]);
 });

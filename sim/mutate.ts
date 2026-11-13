@@ -5,19 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const edits: [string, string, string, string][] = [
-  ["event-duplicate", "decide.ts", "if (existing) return { event:", "if (false && existing) return { event:"],
+  ["event-duplicate", "decide.ts", "if (existing) {", "if (false && existing) {"],
   ["source-boundary", "decide.ts", "rule.when.source === source", "true"],
   ["parallel-lane", "decide.ts", 'id, rule.parallel ? event.subject : "")', 'id, "")'],
   ["session-in-use", "decide.ts", "going.some((other) => (other.session ?? other.resume) === session)", "false"],
   ["resume-after-stop", "decide.ts", 'last?.state !== "cancelled" && ', ""],
   ["group-capacity", "decide.ts", "claimed.filter((other) => other.grp === run.grp).length <", "0 <"],
   ["lane-exclusion", "decide.ts", "!claimed.some((other) => other.grp === run.grp && other.lane === run.lane)", "true"],
-  [
-    "worker-boundary",
-    "decide.ts",
-    'run.state === "queued" &&\n    agents.includes(ruleNamed(draft, run.rule)?.to ?? "")',
-    'run.state === "queued" &&\n    true',
-  ],
+  ["worker-boundary", "decide.ts", "!agents.includes(rule.to)", "false"],
   ["retry-delay", "decide.ts", "5 * MINUTE * 2 ** (attempts - 1)", "0 * MINUTE * 2 ** (attempts - 1)"],
   [
     "receipt-replay",

@@ -6,6 +6,7 @@
 import { execFile, spawn } from "node:child_process";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 import { eachLine } from "../../host/lines.ts";
+import { commandLine } from "../../host/command.ts";
 
 /** Feishu sends these values as JSON in a string, which may be empty. */
 function safeJson(text: unknown): any {
@@ -44,46 +45,56 @@ export function render(card: Card) {
     card.kind === "notice" && card.answer
       ? [{ tag: "div", text: { tag: "plain_text", content: `处理说明：${card.answer}` } }]
       : [];
-  const noteForm =
-    card.kind === "notice"
-      ? [
-          {
-            tag: "form",
-            name: "handling_note",
-            elements: [
-              {
-                tag: "input",
-                name: "note",
-                input_type: "multiline_text",
-                rows: 2,
-                auto_resize: true,
-                max_length: 1000,
-                label: { tag: "plain_text", content: "处理说明（可不填）" },
-                label_position: "top",
-                placeholder: { tag: "plain_text", content: "比如：已回复他视频下周发；或：群发广告，不用管" },
-              },
-              {
-                tag: "button",
-                name: `handling_note_submit_${card.id}`,
-                form_action_type: "submit",
-                type: "primary",
-                text: { tag: "plain_text", content: "记录并结案" },
-              },
-            ],
+  const notice = card.kind === "notice";
+  // Both forms submit `note`; an ask uses it as the answer, a notice records it when closing the card.
+  const textForm = [
+    {
+      tag: "form",
+      name: notice ? "handling_note" : `ask_text_${card.id}`,
+      elements: [
+        {
+          tag: "input",
+          name: "note",
+          input_type: "multiline_text",
+          rows: 2,
+          auto_resize: true,
+          max_length: 1000,
+          label: { tag: "plain_text", content: notice ? "处理说明（可不填）" : "选项都不合适，就直接写回答" },
+          label_position: "top",
+          placeholder: {
+            tag: "plain_text",
+            content: notice
+              ? "比如：已回复他视频下周发；或：群发广告，不用管"
+              : "写好点“提交文字”；写了再点选项，文字不会带上",
           },
-        ]
-      : [];
+        },
+        {
+          tag: "button",
+          name: notice ? `handling_note_submit_${card.id}` : `ask_text_submit_${card.id}`,
+          form_action_type: "submit",
+          type: notice ? "primary" : "default",
+          text: { tag: "plain_text", content: notice ? "记录并结案" : "提交文字" },
+        },
+      ],
+    },
+  ];
   return {
     schema: "2.0",
     config: { update_multi: true, enable_forward: false },
     header: {
       title: { tag: "plain_text", content: card.title },
+      // Which rule or task it came from, in every state: cards from many places reach one person.
+      ...(card.rule && card.rule !== card.title
+        ? { subtitle: { tag: "plain_text", content: `来源：${card.rule}` } }
+        : {}),
       template: card.state === "open" ? "blue" : card.state === "closed" ? "grey" : "green",
     },
     body: {
       elements: [
         ...(card.text ? [{ tag: "markdown", content: card.text }] : []),
-        ...(card.state === "open" ? [...noteForm, ...card.options.map(option)] : [...afterwards, ...noteSaid]),
+        ...(card.state === "open"
+          ? [...(notice ? textForm : []), ...card.options.map(option), ...(notice ? [] : textForm)]
+          : [...afterwards, ...noteSaid]),
       ],
     },
   };
@@ -91,12 +102,14 @@ export function render(card: Card) {
 
 export default async function feishu({ hub, options, log, signal }: ChannelContext) {
   const program = (options.lark as string | undefined) ?? "lark-cli";
-  const lark = async (args: string[], input: string) => {
+  const lark = async (args: string[], input?: string) => {
     const printed = await new Promise<string>((resolve, reject) => {
-      const child = execFile(program, args, { encoding: "utf8", timeout: 60_000, signal }, (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      const child = execFile(
+        ...commandLine([program, ...args]),
+        { encoding: "utf8", timeout: 60_000, signal },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       );
-      child.stdin!.on("error", reject);
+      child.stdin!.on("error", input === undefined ? () => {} : reject);
       child.stdin!.end(input);
     });
     const out = JSON.parse(printed);
@@ -115,8 +128,7 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   async function sendMessage(key: string, content: string) {
     const target = ["--user-id", owner, "--as", "bot", "--msg-type", "interactive"];
     const once = ["--idempotency-key", key];
-    return (await lark(["im", "+messages-send", ...target, ...once, "--content", "-"], content)).data
-      .message_id as string;
+    return (await lark(["im", "+messages-send", ...target, ...once, "--content", content])).data.message_id as string;
   }
 
   async function deliver() {
@@ -162,27 +174,40 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
     const value = safeJson(event.action_value);
     // A form's submit button can't carry a value, so its name holds the card's number.
     const named = /^handling_note_submit_(\d+)$/.exec(String(event.action_name ?? ""));
-    const cardId = Number.isInteger(value?.card) ? value.card : named ? Number(named[1]) : null;
+    const words = /^ask_text_submit_(\d+)$/.exec(String(event.action_name ?? ""));
+    const cardId = Number.isInteger(value?.card)
+      ? value.card
+      : named
+        ? Number(named[1])
+        : words
+          ? Number(words[1])
+          : null;
     if (!Number.isInteger(cardId)) return;
-    // A notice's only option is that it's been handled, so submitting the form picks it.
-    const choice = Number.isInteger(value?.choice) ? value.choice : form ? 0 : null;
-    if (choice === null) return;
     const note = typeof form?.note === "string" ? form.note : undefined;
-    const given: { choice: number; by?: string; ref?: string; text?: string } = {
-      choice,
+    const given: { choice?: number; by?: string; ref?: string; text?: string } = {
       by: event.operator_id,
       ref: event.message_id,
     };
-    if (note !== undefined) given.text = note;
+    if (words) {
+      // An ask card's text form answers with the words alone; an empty one is no answer at all.
+      if (!note || !note.trim()) return;
+      given.text = note;
+    } else {
+      // A notice's only option is that it's been handled, so submitting its form picks it.
+      const choice = Number.isInteger(value?.choice) ? value.choice : form ? 0 : null;
+      if (choice === null) return;
+      given.choice = choice;
+      if (note !== undefined) given.text = note;
+    }
     const answer = await hub.answer(cardId, given);
-    const how = form ? "note submitted" : "answered";
+    const how = words ? "text submitted" : form ? "note submitted" : "answered";
     log(`card ${cardId}: ${how} by ${event.operator_id}, ${answer.changed ? "counted" : "already settled"}`);
   }
 
   async function listen() {
     while (!signal.aborted) {
       // stdin stays open: lark-cli ends an unbounded consume when its stdin closes.
-      const consume = spawn(program, ["event", "consume", "card.action.trigger", "--as", "bot"], {
+      const consume = spawn(...commandLine([program, "event", "consume", "card.action.trigger", "--as", "bot"]), {
         stdio: ["pipe", "pipe", "pipe"],
       });
       // Unheard, this would end the whole hub. A process that never started still closes, which starts it again below.

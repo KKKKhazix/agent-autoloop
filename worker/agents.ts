@@ -4,7 +4,7 @@
 // rules.json.
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
+import { findOnPath } from "../host/command.ts";
 import { loadPlugin } from "../host/plugins.ts";
 import type { Usage } from "../protocol/validate.ts";
 
@@ -18,8 +18,12 @@ export type Turn = {
   cwd: string;
   model?: string;
   effort?: string;
+  /** The service tier to run at, in the agent program's own words; plugins whose program has none ignore it. */
+  tier?: string;
   access: Access;
   command?: string[];
+  /** The program a built-in plugin starts instead of the one it finds: a wrapper that sets things up and runs it. */
+  program?: string;
   contextFile: string;
   folder: string;
 };
@@ -43,8 +47,8 @@ export type Adapter = {
   read(stdout: string, code: number | null, stderr: string): Reading;
   /** Where a person can open this session. */
   link?(session: string): string;
-  /** Whether it's installed and signed in: what's wrong, in words a person can act on, or nothing. */
-  check?(): string | null;
+  /** Whether it's installed and signed in, as `program` if its rules name one: what's wrong, in words a person can act on, or nothing. */
+  check?(program?: string): string | null;
 };
 
 const adapters = new Map<string, Adapter>();
@@ -57,25 +61,30 @@ export async function adapterFor(use: string): Promise<Adapter> {
   return adapter;
 }
 
-const found = new Map<string, string | null>();
+// Only hits are kept: an update can leave a program missing for a moment (`npm install -g` removes the old one
+// first), and a kept miss would fail every later run until the worker restarts.
+const found = new Map<string, string>();
 
 /** Where a program is: on the login shell's PATH (launchd and systemd start with a bare one), or in one of these. */
 export function findProgram(name: string, elsewhere: () => string[] = () => []) {
-  if (!found.has(name)) {
-    const shell = process.env.SHELL ?? "/bin/sh";
+  let program = found.get(name);
+  if (!program) {
     let onPath: string | null = null;
-    try {
-      const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
-        encoding: "utf8",
-        timeout: 15_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      onPath = printed.trim().split("\n").at(-1) || null;
-    } catch {}
-    found.set(name, onPath ?? elsewhere().find(existsSync) ?? null);
+    if (process.platform === "win32") onPath = findOnPath(name, [".exe", ".com", ".cmd", ".ps1"]);
+    else {
+      try {
+        const printed = execFileSync(process.env.SHELL ?? "/bin/sh", ["-lc", `command -v ${name}`], {
+          encoding: "utf8",
+          timeout: 15_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        onPath = printed.trim().split("\n").at(-1) || null;
+      } catch {}
+    }
+    program = onPath ?? elsewhere().find(existsSync);
+    if (!program) throw new Error(`找不到 ${name}：先装好并登录`);
+    found.set(name, program);
   }
-  const program = found.get(name);
-  if (!program) throw new Error(`找不到 ${name}：先装好并登录`);
   return program;
 }
 

@@ -2,7 +2,8 @@
 // the worker's adapter reads, one JSON object per line.
 import { spawn } from "node:child_process";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { commandLine } from "../../host/command.ts";
 import { eachLine } from "../../host/lines.ts";
 import { versionName } from "../../host/version.ts";
 import type { Turn } from "../../worker/agents.ts";
@@ -37,7 +38,7 @@ export function permission(turn: Pick<Turn, "access" | "cwd">, params: any) {
     const target = resolved(location.path);
     if (target === null) return false;
     const path = relative(realpathSync(turn.cwd), target);
-    return path !== ".." && !path.startsWith("../") && !isAbsolute(path);
+    return path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
   };
   const editsInside =
     turn.access === "edit" && tool.kind === "edit" && tool.locations?.length > 0 && tool.locations.every(inside);
@@ -51,7 +52,8 @@ export async function bridge(turn: Turn) {
   // The last go may have done its work in this session, so whatever breaks now says nothing about whether a new session
   // would do it again. Only the agent's own no takes this back; see goOn.
   if (turn.resume) console.log(JSON.stringify({ session: turn.resume, started: true }));
-  const child = spawn(turn.command[0], turn.command.slice(1), { cwd: turn.cwd, stdio: ["pipe", "pipe", "inherit"] });
+  const [program, args] = commandLine(turn.command);
+  const child = spawn(program, args, { cwd: turn.cwd, stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
   let next = 0;
   let session = "";
@@ -162,7 +164,10 @@ export async function bridge(turn: Turn) {
     collecting = true;
     const prompt = [{ type: "text", text: turn.prompt }];
     const result = await rpc("session/prompt", { sessionId: session, prompt });
-    if (result.stopReason !== "end_turn" || !text.trim()) throw new Error(`ACP 没有完成这一轮：${result.stopReason}`);
+    if (result.stopReason !== "end_turn") throw new Error(`ACP 没有完成这一轮：${result.stopReason}`);
+    // end_turn with nothing said is not a turn that stopped early: an agent whose model refused answers this way, and the
+    // old reason quoted "end_turn" back as if it had failed, leaving no cause to look for.
+    if (!text.trim()) throw new Error("ACP 说这一轮结束了，但没有回文字");
     console.log(JSON.stringify({ session, text, finished: true }));
   } catch (error) {
     // Now and not on the way out: the agent, or what it left holding its output, can keep this process here for good,
