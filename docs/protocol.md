@@ -15,7 +15,7 @@
 
 一台电脑上用时，一条命令把三样都跑在一个进程里，它们之间照样走这份协议。
 
-**中台没有界面。** 你和它打交道靠通道和命令行。想要一个页面或大屏，用「本人」一节的几个请求自己做，它和命令行是同等的客户端。
+**内核不提供界面。** 通道、命令行和仓库内的独立[流程操作台](../frontend/README.md)使用相同的协议。操作台在 `frontend/` 独立安装、构建和运行，不改变中台接口、插件和调度；也可以用「本人」一节的请求写自己的客户端。
 
 ## 六个词
 
@@ -57,7 +57,8 @@
     "parallel": 3,                                         // 写了就按对象分事项：同一对象一次一轮，这一组最多 3 轮，还受接单程序的 worker.capacity 限制（默认 2）
     "resume": true,                                        // 同一事项的新事件接着上一轮的会话，默认每次开新会话
     "tell": "needed",                                      // always 每轮做成都发（没事可做、没跑成不发）/ needed 只在有卡片时（默认）/ never 只压住回执里的通知，提问和中台自己的告警照发
-    "emits": { "source": "shop", "types": ["pr.*"] }      // 回执里能发什么事件，不写就不能发
+    "emits": { "source": "shop", "types": ["pr.*"] },     // 回执里能发什么事件，不写就不能发
+    "channels": ["feishu"]                                 // 这条规则的卡片和通知只发到这几个通道，不写就发到所有通道
   }],
   "elsewhere": [{ "name": "每周清理", "source": "shop", "to": "claude", "cron": "0 6 * * 0", "where": "Claude 应用的定时任务" }]
 }
@@ -227,6 +228,8 @@ GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 
 ## 本人：看全局、回答、结案、停止
 
+独立操作台使用带本人鉴权的 `/v1/stream` 事实流触发状态与详情读取，以 `Vue Flow` 呈现只读运行画布；断线暂停动画，按日志序号续传。它支持轮次追溯、回答、结案和请求停止；停止请求已提交不等于进程已停止，界面以中台返回的状态为准。它只在内存中持有本人密钥，发送事件必须另填来源密钥。开发与预览用服务端 `AGENT_AUTOLOOP_URL` 固定 `/v1` 代理目标，正式部署使用同源静态托管及固定反向代理，对外使用 `HTTPS`。启动与部署见[操作台说明](../frontend/README.md)，现有 `/v1` 约定保持兼容。
+
 ```
 GET  /v1/state              Authorization: Bearer <本人的密钥>
 → 200 { "totals", "cards", "recentCards", "agents", "channels", "sources", "lines", "elsewhere", "runs", "nextBefore", "hasMore", "unrouted", "spending", "now", "timezone" }
@@ -353,6 +356,7 @@ Webhook 通道的 `config.json` 配置使用 `use: "webhook"`、`url` 和 `platf
 | `protocol/` | 类型、JSON Schema、输入校验、HTTP 客户端与一致性检查 |
 | `worker/` | 接单、Agent 进程、心跳与停止、回执读取和提交 |
 | `cli/`、`bin/` | 用户命令、MCP 与命令行启动入口 |
+| `frontend/` | 独立流程操作台客户端，经现有协议读取状态和提交本人操作 |
 | `plugins/` | Agent、事件、通道和交付插件，统一发现入口 |
 | `examples/recipes/` | 完整场景的规则、任务 Skill 与启用说明 |
 | `examples/plugins/`、`examples/skills/`、`examples/*.sh` | 最小插件、独立任务手册和 curl/jq 示例 |
@@ -364,7 +368,7 @@ Webhook 通道的 `config.json` 配置使用 `use: "webhook"`、`url` 和 `platf
 
 现成场景与内置插件的入口见 [README](../README.md#拿来即用的场景模板)，开发模板见[写插件](plugins.md)。插件文件名仍使用协议中的 `source.ts`，对应面向用户的“事件插件”。
 
-`npm run benchmark` 打印冷启动、空闲和千连接内存、逐条落盘写入、派活 p99、排队很深时被挡下的心跳 p99 和模拟吞吐，不设达标线。数字在 README，是 Apple M5 Pro 上的本地实测，不代表服务器容量；不通过改变采样时间或主动触发 GC 降低读数。日志只追加，不压缩，磁盘占用仍随历史增长。常驻内存不保存全部历史，待处理工作及返回结果仍会占用内存；统计总量仍需遍历数据库索引。没有总览页、工作流画布、Agent 记忆、模型路由、多租户或插件市场。
+`npm run benchmark` 打印冷启动、空闲和千连接内存、逐条落盘写入、派活 p99、排队很深时被挡下的心跳 p99 和模拟吞吐，不设达标线。数字在 README，是 Apple M5 Pro 上的本地实测，不代表服务器容量；不通过改变采样时间或主动触发 GC 降低读数。日志只追加，不压缩，磁盘占用仍随历史增长。常驻内存不保存全部历史，待处理工作及返回结果仍会占用内存；统计总量仍需遍历数据库索引。`frontend/` 提供独立流程总览和操作台；不提供拖拽编排、规则编辑、Agent 记忆、模型路由、多租户或插件市场。
 
 ### 历史增长实测
 

@@ -36,6 +36,19 @@ AGENT_AUTOLOOP_REPO=/path/to/agent-autoloop sh /path/to/agent-autoloop/install.s
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
 
+## 可选：流程操作台
+
+操作台是源码仓库内独立的 `frontend/` 客户端，安装器不会替用户安装前端依赖或启动页面。先启动中台，再在源码仓库根目录运行：
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+打开终端打印的本机地址，输入 `config.json` 中的本人密钥（`owner`）。它能读取状态、回答、结案和停止；发送事件要单独输入来源密钥。凭据只留在页面内存中，不写入源码、构建产物或网址，也不自动读取用户配置。
+
+地址不同时，启动前设置服务端环境变量 `AGENT_AUTOLOOP_URL`，开发和预览只向该固定目标代理 `/v1`。页面通过 `SSE` 实时事实流更新，不修改规则或另做调度。`npm --prefix frontend run build` 生成 `frontend/dist/`，`npm --prefix frontend run preview` 用于本机预览。正式部署用同源静态服务器和固定反向代理，对外使用 `HTTPS`。完整配置见[操作台说明](frontend/README.md)。中台支持的平台和安装方式不因独立前端改变。
+
 ## 临时 HOME、CI 或没有服务管理器
 
 使用临时 HOME 时不要装系统服务，不改真实用户的 shell 配置和 Agent 配置。保留调用者给定的 `AGENT_AUTOLOOP_HOME`；用真实 `CODEX_HOME` 只为了沿用已经完成的 Codex 登录。

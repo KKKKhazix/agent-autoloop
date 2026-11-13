@@ -13,7 +13,9 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 续接会话也只算这次新增的用量。`~/.agent-autoloop/worker/usage/` 存着相减要用的累计值，没有记录的续接（比如删了这个目录）这次不报 Codex 的 Token 和 Claude Code 的费用，下一次恢复正常。本人打开链接在同一个会话里接着聊用掉的量，会算进下一次续接。旧回执不重算。
 
-这里没有网页。用户想要一个页面看全局，就替他写一个：读 `GET /v1/state`，密钥是 `config.json` 的 `owner`，请求见 `docs/protocol.md` 的「本人」一节。
+仓库提供独立[流程操作台](../../frontend/README.md)：在源码仓库根目录运行 `npm --prefix frontend ci`、`npm --prefix frontend run dev`，打开终端打印的本机地址。输入 `config.json` 的本人密钥 `owner` 后，通过 `SSE` 实时事实流更新全局状态；可追溯轮次、回答、结案和请求停止。发送事件必须单独输入来源密钥。凭据只在页面内存中，不写源码、网址或构建产物。
+
+地址不同时，启动前用服务端环境变量 `AGENT_AUTOLOOP_URL` 固定开发与预览的 `/v1` 代理目标。`npm --prefix frontend run build` 构建独立静态产物，正式部署使用同源静态托管及固定反向代理，对外使用 `HTTPS`。安装器不自动启动操作台；它不编辑规则、不接管调度，仍只读写现有协议，见 `docs/protocol.md` 的「本人」一节。
 
 ## 改规则
 
@@ -75,7 +77,7 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 
 ## 接一个通道
 
-配置在两处：`rules.json` 的 `channels` 登记（`answerers` 是谁能回答，没写时通道里谁都能回答，`doctor` 会提醒），`config.json` 的 `channels` 写密钥和选项。`agent-autoloop key new channel <名字>` 拿密钥（先问用户）。改了 `config.json` 要 `agent-autoloop service install` 重启。
+配置在两处：`rules.json` 的 `channels` 登记（`answerers` 是谁能回答，没写时通道里谁都能回答，`doctor` 会提醒），`config.json` 的 `channels` 写密钥和选项。`agent-autoloop key new channel <名字>` 拿密钥（先问用户）。改了 `config.json` 要 `agent-autoloop service install` 重启。默认每张卡片发到所有通道；某条规则的卡片只想发到某几个通道，在这条规则里写 `"channels": ["feishu"]`。
 
 **桌面通知**：新装的中台默认开着（`plugins/desktop/channel.ts`），两处各有一个 `desktop`。卡片第一次发送时，macOS 用 `osascript`、Linux 用 `notify-send` 弹一条通知，标题为“Agent 问你一个问题”，正文是卡片标题和“运行 agent-autoloop status 查看”，不能在通知上回答。没有图形会话时安静跳过，问题仍在；通知命令失败时报告失败，不会让中台退出。接了别的通道可以留着它；不想要就把两处的 `desktop` 都删掉，再重启。以前装的中台不会自动加上它。
 

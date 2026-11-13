@@ -16,7 +16,7 @@ Most of us use command-line agents like Claude Code or Codex by babysitting a te
 
 - **One machine, one install command.** Runs on your Mac or Linux machine. No cloud server or inbound ports required.
 - **Connect a new agent in one line.** No SDK, no agent source code to fork. Any CLI tool that takes a prompt and prints a final reply can plug in.
-- **No web dashboard.** Cards reach you on Feishu, DingTalk, WeCom, Slack, Discord, or desktop notifications when you are needed. Everything else is one command away.
+- **CLI and a standalone console.** Cards reach you on Feishu, DingTalk, WeCom, Slack, Discord, or desktop notifications when you are needed. The independent [flow console](frontend/README.md) also shows the loop and lets you answer cards, resolve them, and stop runs.
 
 ## Get started
 
@@ -66,6 +66,19 @@ The numbers match the diagram above:
 5. **One tap resumes it.** Your answer picks up the original conversation and finishes the job.
 
 Anything the agent can handle alone takes the auto-loop at the top of the diagram: finish outright, or schedule a follow-up check (say, in 30 minutes) without bothering you.
+
+## Flow console
+
+`frontend/` is an independent `Vue` client. Start the hub, then run these commands from a source checkout:
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+Open the local address printed by the command and enter the owner key (`owner` in `config.json`). The console updates its Vue Flow canvas through the authenticated SSE fact stream, shows run history, and supports answering cards, resolving them, and requesting cancellation. Sending events requires a separate source key. Keys stay in page memory and must be entered again after reloading.
+
+Set the server-side `AGENT_AUTOLOOP_URL` before starting if the hub has a different address. Same-origin `/v1` requests go to this fixed target. `npm --prefix frontend run build` produces `frontend/dist/`. Production hosting needs a static server and fixed same-origin reverse proxy, with `HTTPS` for external access. Frontend dependencies are separate; the hub still has zero runtime dependencies. The installer does not start the console. See the [console guide](frontend/README.md) for details (in Chinese).
 
 ## Day-to-day usage
 
@@ -209,7 +222,7 @@ Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledge
 | Held-back heartbeat p99 with 5,000 queued | 1.66 ms |
 | Startup at 1.1 million facts | 99.8 ms |
 | Kernel lines (with comments and blanks) | about 1,650 |
-| Runtime dependencies | 0 |
+| Hub runtime dependencies (standalone frontend excluded) | 0 |
 
 As history grows, the status summary slows down and the log and indexes keep using disk. The first start after a format change rebuilds from the log, which took 43.1 seconds for 1.1 million facts. [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
 
@@ -222,6 +235,7 @@ For automated workloads, providers generally recommend using API keys rather tha
 ## Documentation
 
 - [Installation guide](INSTALL.md)
+- [Standalone flow console](frontend/README.md)
 - [Configuration & delivery pipeline manual](skills/agent-autoloop/SKILL.md)
 - [Writing plugins](docs/plugins.md)
 - [Full HTTP protocol specification](docs/protocol.md)
@@ -240,6 +254,7 @@ For automated workloads, providers generally recommend using API keys rather tha
 | `worker/` | Claim work, run agents, handle heartbeats and cancellation, read and submit receipts |
 | `cli/`, `bin/` | User commands and entry point: status, answers, `why`, MCP, updates, and uninstall |
 | `plugins/` | Built-in agent, event, channel, and delivery plugins |
+| `frontend/` | Standalone flow console with its own dependencies and build, connecting through the existing protocol |
 | `examples/recipes/` | Complete recipes with rules, a task Skill, and setup instructions |
 | `examples/plugins/`, `examples/skills/`, `examples/*.sh` | Minimal plugin templates, standalone task guides, and Shell examples |
 | `skills/agent-autoloop/` | The hub's configuration and operation manual, also made available to agents during installation |
