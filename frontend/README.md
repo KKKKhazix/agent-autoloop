@@ -1,5 +1,7 @@
 # 流程运行台
 
+已完成本机 WSL 部署后，可直接双击仓库根目录的 `start.cmd`，自动检查并启动前后端、复制本人密钥并打开浏览器。详见[Windows 一键启动说明](../docs/one-click-startup.md)。
+
 从零启动请按[前后端启动步骤](../docs/frontend-backend-startup.md)操作，包含 `Windows PowerShell` 演示模式和 `WSL2` 完整运行。
 
 独立的 `Vue 3` 客户端，通过原有 `/v1` 接口读取状态、查看轮次时间线、回答卡片、结案、停止及发送来源事件。不改中台内核，不提供规则编辑或拖拽编排。
