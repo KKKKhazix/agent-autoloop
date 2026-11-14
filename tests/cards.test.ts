@@ -16,6 +16,7 @@
 // in meanwhile loses the session of the answer in it, or has it wiped by what had none. A run with events from two
 // sources is given, or closes, cards that have no source. A channel that takes a card and never reports gets it for ever.
 // A card closed while its first message is on the way never gets that message updated.
+// A channel whose program keeps coming but whose last card didn't get through looks fine in the state (issue #290).
 // A rule that lists its channels has its cards, and the notices of its runs, sent to others as well; one that lists none
 // stops reaching every channel; a notice of nobody's rule reaches only some. With defaultChannels, a card that names no
 // channels of its own (a tell, the hub's own alert, a task elsewhere asking, a rule without a list) still reaches every
@@ -34,7 +35,7 @@ import { formatWhy } from "../cli/why.ts";
 setup("cards");
 const { ingest } = await import("./hub.ts");
 const { cancel, claimNext, execute, finish, heartbeat, started, sweep, why } = await import("./hub.ts");
-const { answer, resolve, nextCard, delivered, failed, tell, cardByToken, getView } = await import("./hub.ts");
+const { answer, resolve, nextCard, delivered, failed, tell, cardByToken, getView, stateOf } = await import("./hub.ts");
 const { AuthError, InputError, NotFound } = await import("../kernel/errors.ts");
 const { all, one, run } = await import("./storage.ts");
 
@@ -487,6 +488,17 @@ test("defaultChannels takes every card that names no channels of its own; a rule
       assert.equal(nextCard("plain", at(1))?.id, id);
     },
   );
+});
+
+test("the state says when a channel's last card didn't get through, and stops saying so once one does", () => {
+  clean();
+  const chat = (now: number) => stateOf(now).channels.find((channel) => channel.id === "chat")!;
+  const id = tell("source:app:k", "应用", "周报来了", at(0)).card;
+  failed("chat", id, nextCard("chat", at(0))!.version, "session not ready", at(0));
+  assert.deepEqual(chat(at(0)).lastFailure, { card: id, tries: 1, error: "session not ready", givenUp: false });
+  assert.equal(stateOf(at(0)).channels.find((channel) => channel.id === "plain")!.lastFailure, undefined);
+  delivered("chat", id, nextCard("chat", at(1))!.version, "om_1", at(1));
+  assert.equal(chat(at(1)).lastFailure, undefined);
 });
 
 test("a failed send is retried further and further apart, then given up within the hour; a channel that never came hasn't failed", () => {

@@ -317,6 +317,8 @@ POST /v1/runs/12/cancel     {}
 
 `agent-autoloop status`、`answer`、`resolve`、`stop` 就是这几个请求。
 
+`channels` 里的 `online` 只说明通道程序还在来领卡片，不说明卡片送到了：最近一张卡片没送到时，这个通道多一项 `lastFailure`（`card`、`tries`、通道报的 `error`，`givenUp` 表示试满了一小时、已经放弃；卡片在送到前被结掉也不会再发），送到了或还没发过就没有这一项，`agent-autoloop doctor` 照它提醒。
+
 整份状态在同一个快照里读出，`seq` 是那时的日志序号：自己做看板的，先取状态，再从 `GET /v1/stream?after=<seq>` 接着读，不漏也不重。`cards`、`recentCards` 在这里多带两项：`lane` 是卡片所在的事项（写了 `parallel` 的规则是事件的对象，别的规则是空字符串），`about` 是提问时留给接着干的那一轮的说明。通道和卡片页拿不到这两项。旧客户端忽略这些字段即可。
 
 `GET /healthz` 不带密钥，返回 `{ "ok": true, "commit": "<中台运行的版本>" }`；`doctor`、服务状态和一致性检查都用它判断中台是否在线。
