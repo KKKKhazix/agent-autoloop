@@ -116,15 +116,57 @@ export function dayStart(now: number, zone: string) {
 // of Node.
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六", "日"];
 
-/** A common schedule in plain words (每天 18:00, 每周日 06:00, 工作日 09:00, 每月 1 日 04:00); any other as written. */
+const twoDigits = (value: number) => String(value).padStart(2, "0");
+
+function ranges(values: Iterable<number>) {
+  const spans: number[][] = [];
+  for (const value of values) {
+    const last = spans.at(-1);
+    if (last && last[1] + 1 === value) last[1] = value;
+    else spans.push([value, value]);
+  }
+  return spans.map(([first, last]) => (first === last ? String(first) : `${first} 至 ${last}`)).join("、");
+}
+
+/** Describe any valid schedule using the same fields and day matching as nextRun. */
 export function describeCron(text: string) {
-  const [minute, hour, day, month, weekday] = text.trim().split(/\s+/);
-  const number = /^\d+$/;
-  if (!number.test(minute) || !number.test(hour) || month !== "*" || !parseCron(text)) return text;
-  const at = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
-  if (day === "*" && weekday === "*") return `每天 ${at}`;
-  if (day === "*" && number.test(weekday)) return `每周${WEEKDAYS[Number(weekday)]} ${at}`;
-  if (day === "*" && weekday === "1-5") return `工作日 ${at}`;
-  if (number.test(day) && weekday === "*") return `每月 ${Number(day)} 日 ${at}`;
-  return text;
+  const cron = parseCron(text);
+  if (!cron) return "无效的定时规则";
+  const { minutes, hours, days, months, weekdays, anyDay, anyWeekday } = cron;
+  const either = !anyDay && !anyWeekday;
+  const date = days.size === 31 ? "" : `${ranges(days)} 日`;
+  const week = weekdays.size === 7 ? "" : [...weekdays].map((day) => `周${WEEKDAYS[day]}`).join("、");
+  const month = months.size === 12 ? "" : `${ranges(months)} 月`;
+  let calendar = "每天";
+  if (!either || (date && week)) {
+    if (date && week) calendar = `${month ? month + "的 " : "每月 "}${date}${either ? "或" : "且为"}${week}`;
+    else if (date) calendar = `${month ? month + "的 " : "每月 "}${date}`;
+    else if (week) {
+      calendar = week === "周一、周二、周三、周四、周五" ? "工作日" : `每${week}`;
+      if (month) calendar = `${month}的${calendar}`;
+    }
+  }
+  if (calendar === "每天" && month) calendar = `${month}每天`;
+
+  if (hours.length === 1 && minutes.length === 1) return `${calendar} ${twoDigits(hours[0])}:${twoDigits(minutes[0])}`;
+  const step = minutes[1];
+  if (
+    hours.length === 24 &&
+    minutes[0] === 0 &&
+    step &&
+    60 % step === 0 &&
+    minutes.length === 60 / step &&
+    minutes.every((minute, index) => minute === index * step)
+  ) {
+    const interval = step === 1 ? "每分钟" : `每 ${step} 分钟`;
+    return calendar === "每天" ? interval : `${calendar}，${interval}`;
+  }
+  const withinHour =
+    minutes.length === 60
+      ? "每分钟"
+      : minutes.length === 1 && minutes[0] === 0
+        ? "每小时整点"
+        : `每小时第 ${minutes.length === 1 ? minutes[0] : minutes.map(twoDigits).join("、")} 分钟`;
+  if (hours.length < 24) return `${calendar} ${ranges(hours)} 时，${withinHour}`;
+  return calendar === "每天" ? withinHour : `${calendar}，${withinHour}`;
 }
