@@ -833,7 +833,7 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
         : delivery.tries >= RESEND_AT.length
           ? { given_up: 1 }
           : { not_before: iso(firstTry + RESEND_AT[delivery.tries] * MINUTE) };
-    put(draft, "deliveries", `${id}:${channel}`, { ...next, error: String(error).slice(0, 300) });
+    put(draft, "deliveries", `${id}:${channel}`, { ...next, error: [...String(error)].slice(0, 300).join("") });
   },
   sweep,
   tick,
