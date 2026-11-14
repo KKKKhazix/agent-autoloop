@@ -643,9 +643,9 @@ async function doctor() {
         say(channel.online, `${channel.name}${channel.online ? "在线" : "不在线"}`);
         const failure = channel.lastFailure;
         if (!failure) continue;
-        const what = `${channel.name}最近一张卡片（#${failure.card}）没送到：${failure.error}`;
-        if (failure.givenUp) say(false, `${what}，已经不再重试`);
-        else console.log(`○ ${what}，试了 ${failure.tries} 次，还在重试`);
+        // Not "still retrying": a card closed before it got through is never tried again, though its failure stays the last.
+        const tried = `试了 ${failure.tries} 次${failure.givenUp ? "，已经不再重试" : ""}`;
+        say(false, `${channel.name}最近一张卡片（#${failure.card}）没送到：${failure.error}（${tried}）`);
       }
       const manual = path.join(ROOT, "skills", "agent-autoloop", "SKILL.md");
       if (!state.channels.length) {
