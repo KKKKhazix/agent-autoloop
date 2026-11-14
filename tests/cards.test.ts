@@ -8,7 +8,7 @@
 // what was done once its run finishes; a run resolves a card outside what it was given to check, or a bad id spoils its own
 // result; resolving wakes nobody. Delivery: a channel gets a card it has, gets none it should, loses a report and sends a second
 // message (the ref sticks, and a stale report doesn't undo a newer one); a stale failure delays a newer version; a failed
-// send retries at once, or for ever; a channel that never came counts as having failed; a card solved before it was sent
+// send retries at once, or for ever; the failure text it keeps ends on half a character; a channel that never came counts as having failed; a card solved before it was sent
 // bothers the owner; two channels don't each get their own copy; an answer in one channel doesn't update the other.
 // Words on an answer or a notice that aren't text crash instead of being refused; an answer to a card whose rule has gone
 // crashes or starts something; closing or reporting a failure on a card that isn't there, or wasn't handed over, crashes.
@@ -514,6 +514,13 @@ test("a failed send is retried further and further apart, then given up within t
   failed("chat", asking, 1, "旧的失败", at(1));
   assert.ok(nextCard("chat", at(1)), "a stale failure doesn't delay the update");
   assert.equal(v2.version, 2);
+  // What the channel reported is what the column keeps: a cut counted in code units leaves half a character behind for good.
+  clean();
+  const reported = "x".repeat(299) + "😀";
+  const { card: kept } = tell("source:app:k2", "应用", "周报来了", at(0));
+  const handed = nextCard("chat", at(0))!;
+  failed("chat", kept, handed.version, reported, at(0));
+  assert.equal(one<{ error: string }>("SELECT error FROM deliveries WHERE channel = 'chat'")!.error, reported);
 });
 
 test("a channel that takes a card and never reports stops getting it: after the last try, or once an hour is up", () => {
