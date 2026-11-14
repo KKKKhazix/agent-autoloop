@@ -362,6 +362,23 @@ function opening(about: string) {
   return chars.length > 60 ? `${chars.slice(0, 60).join("")}…` : chars.join("");
 }
 
+/**
+ * What a card about a failing run shows of its error: an agent's error can run to 500 characters over several lines, which a
+ * phone can't make sense of. Agents hand back the end of what they printed, the reason last, so the last line, and the end
+ * of it when it's long; the whole of it stays on the run, for `why`.
+ */
+function briefError(error: string, run: number) {
+  const line =
+    error
+      .split("\n")
+      .findLast((part) => part.trim())
+      ?.trim() ?? error;
+  const characters = [...line];
+  if (characters.length <= 120 && line === error) return error;
+  const cut = characters.length > 120 ? `…${characters.slice(-120).join("")}` : line;
+  return `${cut}（完整原因：agent-autoloop why ${run}）`;
+}
+
 /** A run that didn't get through waits to try again, and takes along whatever came in for the same thing meanwhile. */
 function retryLater(draft: Draft, run: Row, result: Result) {
   const { id } = run;
@@ -383,7 +400,7 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   if (attempts >= MAX_ATTEMPTS) {
     // Runs queued for this thread stay apart: they came in since, and get their own count and their own go.
     const summary = `连续 ${MAX_ATTEMPTS} 次没跑成，不再自动重试`;
-    const words = `连续 ${MAX_ATTEMPTS} 次自动处理没跑完（卡在：${error}），不再自动重试。解决后重新触发这件事，它会从头开始。`;
+    const words = `连续 ${MAX_ATTEMPTS} 次自动处理没跑完（卡在：${briefError(error, id)}），不再自动重试。解决后重新触发这件事，它会从头开始。`;
     put(draft, "runs", id, failure);
     stopRun(draft, run, "stopped", summary, words);
     return rejected;
@@ -401,7 +418,7 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   if (!result.notice?.some((notice) => !notice.fyi) && attempts === 3) {
     const clock = { timeZone: draft.rules.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" } as const;
     const time = new Intl.DateTimeFormat("zh-CN", clock).format(notBefore);
-    const words = `连续 3 次自动处理没跑完（卡在：${error}），${time} 会自动再试。`;
+    const words = `连续 3 次自动处理没跑完（卡在：${briefError(error, id)}），${time} 会自动再试。`;
     notify(draft, `run:${id}:failing`, run.rule, words, threadOf(run));
   }
   assignQueued(draft, draft.view.get("runs", id)!);
