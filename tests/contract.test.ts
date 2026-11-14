@@ -65,6 +65,7 @@ test("the prompt says what to do and how to end, but not what anyone wrote", () 
   assert.match(text, /删数据、花钱/);
   assert.match(text, /没跑成：/);
   assert.match(text, /没事可做：/);
+  assert.match(text, /做成了什么[\s\S]*提交号、内部编号放括号里/);
   assert.match(text, /```agent-autoloop/);
   assert.ok(!text.includes("王某"));
   assert.ok(!text.includes("管理员权限"));
