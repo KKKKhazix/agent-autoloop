@@ -292,10 +292,11 @@ test("a failed run comes back later with what came in meanwhile, in its own sess
   assert.equal(told()[0].state, "closed", "once it has worked the failing card closes by itself");
 });
 
-test("the failing card carries the first line of a long error, cut short, and says where the whole of it is", () => {
+test("the failing card carries the last line of a long error, its end when it's long, and says where the whole of it is", () => {
   clean();
   ingest("app", note(1), at(0));
-  const error = "x".repeat(200) + "\n第二行的建议";
+  // As agents hand it back: the end of their output, cut through a line at the start, the reason last.
+  const error = "ermes/cache/ws), 前面被截掉的日志\n" + "x".repeat(80) + "y".repeat(120);
   let job = claim("w1", at(0))!;
   finish(job.run, job.token, { outcome: "failed", error }, at(1));
   job = claim("w1", at(6))!;
@@ -303,9 +304,9 @@ test("the failing card carries the first line of a long error, cut short, and sa
   job = claim("w1", at(17))!;
   finish(job.run, job.token, { outcome: "failed", error }, at(18));
   const text = told()[0].text;
-  assert.ok(text.includes(`卡在：${"x".repeat(120)}…`), text);
-  assert.ok(!text.includes("x".repeat(121)), text);
-  assert.ok(!text.includes("第二行"), text);
+  assert.ok(text.includes(`卡在：…${"y".repeat(120)}（`), text);
+  assert.ok(!text.includes("x"), text);
+  assert.ok(!text.includes("前面被截掉"), text);
   assert.ok(text.includes(`agent-autoloop why ${job.run}`), text);
 });
 

@@ -362,23 +362,24 @@ function opening(about: string) {
   return chars.length > 60 ? `${chars.slice(0, 60).join("")}…` : chars.join("");
 }
 
-/** A run that didn't get through waits to try again, and takes along whatever came in for the same thing meanwhile. */
 /**
  * What a card about a failing run shows of its error: an agent's error can run to 500 characters over several lines, which a
- * phone can't make sense of. The first line, cut short; the whole of it stays on the run, for `why`.
+ * phone can't make sense of. Agents hand back the end of what they printed, the reason last, so the last line, and the end
+ * of it when it's long; the whole of it stays on the run, for `why`.
  */
 function briefError(error: string, run: number) {
   const line =
     error
       .split("\n")
-      .find((part) => part.trim())
+      .findLast((part) => part.trim())
       ?.trim() ?? error;
   const characters = [...line];
   if (characters.length <= 120 && line === error) return error;
-  const cut = characters.length > 120 ? `${characters.slice(0, 120).join("")}…` : line;
+  const cut = characters.length > 120 ? `…${characters.slice(-120).join("")}` : line;
   return `${cut}（完整原因：agent-autoloop why ${run}）`;
 }
 
+/** A run that didn't get through waits to try again, and takes along whatever came in for the same thing meanwhile. */
 function retryLater(draft: Draft, run: Row, result: Result) {
   const { id } = run;
   const attempts = run.attempts + 1;
