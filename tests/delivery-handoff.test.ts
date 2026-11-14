@@ -71,20 +71,24 @@ function loneUnits(text: string) {
   return at;
 }
 
-test("a cut in the owner's own words never hands the notify program half a character", () => {
-  // 300 code points but 301 code units, so a cut counted in units lands inside the last one.
-  const reason = "a".repeat(299) + "😀";
-  tellReturn(notify, "example/app", 7, "a".repeat(40), reason);
-  const returned = JSON.parse(readFileSync(notices, "utf8").trim()).text;
-  assert.deepEqual(loneUnits(returned), []);
-  assert.ok(returned.includes(reason));
+test(
+  "a cut in the owner's own words never hands the notify program half a character",
+  { skip: process.platform === "win32" && "the fake notify program runs by its #! line, which Windows doesn't read" },
+  () => {
+    // 300 code points but 301 code units, so a cut counted in units lands inside the last one.
+    const reason = "a".repeat(299) + "😀";
+    tellReturn(notify, "example/app", 7, "a".repeat(40), reason);
+    const returned = JSON.parse(readFileSync(notices, "utf8").trim()).text;
+    assert.deepEqual(loneUnits(returned), []);
+    assert.ok(returned.includes(reason));
 
-  writeFileSync(notices, "");
-  // 600 code points but 601 code units, for the longer cut the question path makes.
-  const asked = "a".repeat(599) + "😀";
-  const url = "https://github.com/example/app/issues/8";
-  tellQuestion(notify, "example/app", { number: 8, title: "要决定", body: asked, html_url: url });
-  const question = JSON.parse(readFileSync(notices, "utf8").trim()).text;
-  assert.deepEqual(loneUnits(question), []);
-  assert.ok(question.includes(asked));
-});
+    writeFileSync(notices, "");
+    // 600 code points but 601 code units, for the longer cut the question path makes.
+    const asked = "a".repeat(599) + "😀";
+    const url = "https://github.com/example/app/issues/8";
+    tellQuestion(notify, "example/app", { number: 8, title: "要决定", body: asked, html_url: url });
+    const question = JSON.parse(readFileSync(notices, "utf8").trim()).text;
+    assert.deepEqual(loneUnits(question), []);
+    assert.ok(question.includes(asked));
+  },
+);
