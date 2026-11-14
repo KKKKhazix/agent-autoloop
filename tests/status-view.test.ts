@@ -2,6 +2,7 @@
 // Agent reading the output, or show up despite NO_COLOR; a Chinese, Japanese or Korean character is counted as one column,
 // so columns after it drift and lines wrap past the edge; what waits for the owner sinks below what only reports; a
 // notice dealt with spreads its whole text over the list, or loses it, though that's the only place what `tell` said is read.
+// One long schedule pushes every other schedule past the terminal edge.
 // A paused rule doesn't say how many events it has let go by since when, which ones, or that there are more than it lists,
 // or prints one of them wider than the terminal.
 // The replay command it prints, copied as it is, runs something else: a rule name with $ or a backquote expands, one
@@ -203,4 +204,18 @@ test("on Windows the replay command quotes the way PowerShell reads single quote
   assert.equal(replayCommand("O’Reilly", since, true), `agent-autoloop replay 'O’’Reilly' --since ${since}`);
   assert.equal(replayCommand("‘羊毛’; rm x", since, true), `agent-autoloop replay '‘‘羊毛’’; rm x' --since ${since}`);
   assert.equal(replayCommand("‚a‛", since, true), `agent-autoloop replay '‚‚a‛‛' --since ${since}`);
+});
+
+test("long schedules wrap without widening the other rows", () => {
+  const every =
+    "工作日 9 至 17 时，每小时第 " + Array.from({ length: 30 }, (_, i) => String(2 * i + 1)).join("、") + " 分钟";
+  const output = render(
+    { ...state, lines: [...state.lines, { name: "长定时", every, next: state.lines[0].next }] },
+    { color: false, columns: 80 },
+  );
+  const section = output.split("\n定时\n")[1].split("\n\n")[0];
+  assert.ok(section.split("\n").every((line) => width(line) <= 80));
+  assert.match(section, /早报.*每天 9:00.*下次/);
+  assert.match(section, /每小时第/);
+  assert.match(section, /59 分钟/);
 });

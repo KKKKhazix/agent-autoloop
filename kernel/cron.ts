@@ -118,9 +118,11 @@ const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六", "日"];
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
+const ascending = (values: Iterable<number>) => [...values].sort((a, b) => a - b);
+
 function ranges(values: Iterable<number>) {
   const spans: number[][] = [];
-  for (const value of values) {
+  for (const value of ascending(values)) {
     const last = spans.at(-1);
     if (last && last[1] + 1 === value) last[1] = value;
     else spans.push([value, value]);
@@ -135,7 +137,12 @@ export function describeCron(text: string) {
   const { minutes, hours, days, months, weekdays, anyDay, anyWeekday } = cron;
   const either = !anyDay && !anyWeekday;
   const date = days.size === 31 ? "" : `${ranges(days)} 日`;
-  const week = weekdays.size === 7 ? "" : [...weekdays].map((day) => `周${WEEKDAYS[day]}`).join("、");
+  const week =
+    weekdays.size === 7
+      ? ""
+      : ascending(weekdays)
+          .map((day) => `周${WEEKDAYS[day]}`)
+          .join("、");
   const month = months.size === 12 ? "" : `${ranges(months)} 月`;
   let calendar = "每天";
   if (!either || (date && week)) {

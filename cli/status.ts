@@ -287,11 +287,24 @@ export function render(state: any, { color, columns }: { color: boolean; columns
   const timed = [...state.lines.filter((line: any) => line.every), ...state.elsewhere];
   if (timed.length) section(heading("定时"));
   const ruleRoom = Math.max(0, ...timed.map((line: any) => width(line.name)));
-  const everyRoom = Math.max(0, ...timed.map((line: any) => width(line.every)));
-  for (const line of timed) {
-    const head = `  ${pad(line.name, ruleRoom)}  ${pad(line.every, everyRoom)}  下次 ${when(line.next)}`;
-    const [where] = line.where ? wrap(`（在别处：${line.where}）`, room - width(head), 1) : [""];
-    say(`  ${pad(line.name, ruleRoom)}  ${pad(line.every, everyRoom)}  ${dim("下次")} ${when(line.next)}${dim(where)}`);
+  const schedules = timed.map((line: any) => ({ ...line, nextText: when(line.next) }));
+  const nextRoom = Math.max(0, ...schedules.map((line: any) => width(line.nextText)));
+  const available = room - ruleRoom - nextRoom - width("      下次 ");
+  const everyRoom = Math.max(
+    0,
+    ...schedules.map((line: any) => width(line.every)).filter((w: number) => w <= available),
+  );
+  for (const line of schedules) {
+    const next = `${dim("下次")} ${line.nextText}`;
+    const place = line.where ? `（在别处：${line.where}）` : "";
+    if (width(line.every) > available) {
+      for (const part of wrap(`${line.name}  下次 ${line.nextText}`, room - 2)) say(`  ${part}`);
+      for (const part of wrap(line.every + place, room - 4)) say(`    ${part}`);
+      continue;
+    }
+    const head = `  ${pad(line.name, ruleRoom)}  ${pad(line.every, everyRoom)}  ${next}`;
+    const [where] = wrap(place, room - width(head), 1);
+    say(head + dim(where));
   }
 
   const unrouted = state.unrouted.slice(0, 5);

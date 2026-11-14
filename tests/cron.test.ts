@@ -78,6 +78,7 @@ test("common schedules read in plain words", () => {
   assert.equal(describeCron("0 18 * * *"), "每天 18:00");
   assert.equal(describeCron("0 6 * * 0"), "每周日 06:00");
   assert.equal(describeCron("0 9 * * 1-5"), "工作日 09:00");
+  assert.equal(describeCron("0 9 * * 5,4,3,2,1"), "工作日 09:00");
   assert.equal(describeCron("0 4 1 * *"), "每月 1 日 04:00");
   assert.equal(describeCron("*/5 * * * *"), "每 5 分钟");
   assert.equal(describeCron("0 * * * *"), "每小时整点");
