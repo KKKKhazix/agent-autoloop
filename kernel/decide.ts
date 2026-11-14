@@ -336,9 +336,18 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   return jobOf(draft.view, draft.view.get("runs", run.id)!, draft.env);
 }
 
+function clearFiredTimers(draft: Draft, run: Row) {
+  // A fired timer supplies context to its queued/retrying run; keep it until no future claim can need that context.
+  // The facts log retains the full timer row and its event link after this projection entry is removed.
+  const eventIds = eventsOf(draft.view, run.id).map((event) => event.id);
+  if (!eventIds.length) return;
+  for (const timer of rows(draft.view, "timers", { event_id: eventIds })) set(draft, "timers", timer.id, null);
+}
+
 /** Ends a run nothing will pick up again, and says so. */
 function stopRun(draft: Draft, run: Row, why: string, summary: string, words: string) {
   put(draft, "runs", run.id, { state: "cancelled", finished_at: draft.at, summary });
+  clearFiredTimers(draft, run);
   closeStopped(draft, run.id, summary);
   notify(draft, `run:${run.id}:${why}`, run.rule, words, threadOf(run));
 }
@@ -454,6 +463,7 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
   }
   // The source whose event this run took reads them back (`eventOutcome`); nothing else links them to the run.
   if (emitted.length) put(draft, "runs", id, { emitted: JSON.stringify(emitted) });
+  clearFiredTimers(draft, run);
   return rejected;
 }
 
@@ -481,6 +491,7 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
       summary: result.summary ?? "",
       cancel_at: null,
     });
+    clearFiredTimers(draft, run);
     closeStopped(draft, id, "已停止");
   } else if (result.outcome === "failed") rejected = retryLater(draft, run, result);
   else rejected = applyReceipt(draft, run, result);
@@ -585,11 +596,13 @@ function tick(draft: Draft) {
     const rule = ruleNamed(draft, timer.rule);
     const event = { id: `timer:${timer.id}`, type: "timer.due", subject: timer.lane, hops: timer.hops ?? 0 };
     const eventId = recordEvent(draft, timer.source, event, rule ? [rule.name] : []);
-    put(draft, "timers", timer.id, { event_id: eventId });
-    if (rule) enqueue(draft, rule, eventId, timer.lane, timer.agent === rule.to ? timer.session : null);
-    else {
+    if (rule) {
+      put(draft, "timers", timer.id, { event_id: eventId });
+      enqueue(draft, rule, eventId, timer.lane, timer.agent === rule.to ? timer.session : null);
+    } else {
       const [, words] = ruleGone(timer.rule, `到期的复查「${opening(timer.about)}」`);
       notify(draft, `timer:${timer.id}:rule-gone`, timer.rule, words, { rule: timer.rule, lane: timer.lane });
+      set(draft, "timers", timer.id, null);
     }
   }
   sweep(draft);
@@ -769,6 +782,7 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     if (!run) throw new NotFound("没有这一轮");
     if (run.state === "queued") {
       put(draft, "runs", id, { state: "cancelled", finished_at: draft.at });
+      clearFiredTimers(draft, run);
       closeStopped(draft, id, "已停止");
     } else if (run.state === "claimed") put(draft, "runs", id, { cancel_at: draft.at });
     else throw new InputError("这一轮已经结束了");
