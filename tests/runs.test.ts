@@ -16,6 +16,7 @@
 // or marks it as stopping.
 // Reloading rules must not combine an old agent with a new folder, or change an already claimed job and its worker.
 // Rule and agent limits must hold across different subjects and rules, without losing their separate queued work.
+// A card about a failing run hands the owner an agent's whole multi-line error.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -289,6 +290,23 @@ test("a failed run comes back later with what came in meanwhile, in its own sess
   job = claim("w1", at(80))!;
   finish(job.run, job.token, { outcome: "done", summary: "好了" }, at(81));
   assert.equal(told()[0].state, "closed", "once it has worked the failing card closes by itself");
+});
+
+test("the failing card carries the first line of a long error, cut short, and says where the whole of it is", () => {
+  clean();
+  ingest("app", note(1), at(0));
+  const error = "x".repeat(200) + "\n第二行的建议";
+  let job = claim("w1", at(0))!;
+  finish(job.run, job.token, { outcome: "failed", error }, at(1));
+  job = claim("w1", at(6))!;
+  finish(job.run, job.token, { outcome: "failed", error }, at(7));
+  job = claim("w1", at(17))!;
+  finish(job.run, job.token, { outcome: "failed", error }, at(18));
+  const text = told()[0].text;
+  assert.ok(text.includes(`卡在：${"x".repeat(120)}…`), text);
+  assert.ok(!text.includes("x".repeat(121)), text);
+  assert.ok(!text.includes("第二行"), text);
+  assert.ok(text.includes(`agent-autoloop why ${job.run}`), text);
 });
 
 test("after ten failures in a row a run stops, tells the owner once, and newer events still get done", () => {
