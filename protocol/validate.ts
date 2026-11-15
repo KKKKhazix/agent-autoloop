@@ -10,8 +10,17 @@ export const ANSWER_REF = 500;
 /** A channel's own reference to the message it sent. */
 export const DELIVERY_REF = 500;
 export type Later = { key: string; at?: string; about?: string; cancel?: boolean };
-export type Ask = { title: string; text: string; options: string[]; recommend?: number; about?: string; key?: string };
-export type Notice = { title: string; text: string; key?: string; fyi?: boolean };
+/** `to` names a person registered in rules.json, whom the rule allows: the card is theirs to answer. */
+export type Ask = {
+  title: string;
+  text: string;
+  options: string[];
+  recommend?: number;
+  about?: string;
+  key?: string;
+  to?: string;
+};
+export type Notice = { title: string; text: string; key?: string; fyi?: boolean; to?: string };
 export type Usage = { input?: number; output?: number; cached?: number; cost?: number };
 
 /** Missing figures stay missing: zero is a price or token count that was actually reported. */
@@ -109,8 +118,13 @@ export function dateTime(value: unknown): boolean {
   return month >= 1 && month <= 12 && day >= 1 && day <= daysIn[month - 1] && hour < 24 && minute < 60 && second < 60;
 }
 
+/** Whom a card is for: a person's id, as rules.json registers it. */
+const recipient = (value: unknown) =>
+  value === undefined || (typeof value === "string" && /^[a-z][a-z0-9-]*$/.test(value));
+
 const validAsk = (ask: Item) =>
-  only(ask, ["title", "text", "options", "recommend", "about", "key"]) &&
+  only(ask, ["title", "text", "options", "recommend", "about", "key", "to"]) &&
+  recipient(ask.to) &&
   text(ask.title, 200) &&
   text(ask.text, 4000) &&
   optional(ask.about, 4000) &&
@@ -124,11 +138,13 @@ const validAsk = (ask: Item) =>
       (ask.recommend as number) >= 0 &&
       (ask.recommend as number) < ask.options.length));
 
-/** A question as a receipt asks it, here asked by a task elsewhere. */
-export const isAsk = (value: unknown) => isItem(value) && validAsk(value as Item);
+/** A question as a receipt asks it, here asked by a task elsewhere: no rule allows it to name anyone. */
+export const isAsk = (value: unknown) =>
+  isItem(value) && !Object.hasOwn(value as Item, "to") && validAsk(value as Item);
 
 const validNotice = (notice: Item) =>
-  only(notice, ["title", "text", "key", "fyi"]) &&
+  only(notice, ["title", "text", "key", "fyi", "to"]) &&
+  recipient(notice.to) &&
   text(notice.title, 200) &&
   text(notice.text, 4000) &&
   optional(notice.key, 100) &&
@@ -169,6 +185,13 @@ export function parseResult(input: unknown): Result {
     throw new InputError("summary、error、session 最多 500 字");
   }
   if (!validUsage(result.usage)) throw new InputError("usage 要是对象，里面要是有限的非负数字");
+  // Said by itself: the Agent is asked to write the receipt again, and has to know which part of the card to fix.
+  for (const kind of ["ask", "notice"]) {
+    const cards = result[kind];
+    if (Array.isArray(cards) && cards.some((card) => isItem(card) && !recipient((card as Item).to))) {
+      throw new InputError(`${kind} 的 to 要是规则许可的人的编号（小写字母、数字和 -），不写就是发给本人`);
+    }
+  }
   if (!listOf(result.ask, 5, validAsk)) {
     throw new InputError("ask 每一项要有 title、text 和 2 到 5 个 options，recommend 是其中一个的序号，最多 5 项");
   }

@@ -68,6 +68,39 @@ function checkFields(issues: string[], where: string, value: unknown, spec: Fiel
   }
 }
 
+/** An address is who may answer there, and the hub checks a channel's `by` against it, so it has the same limit. */
+const isAddress: Check = (value) => isText(value) && [...(value as string)].length <= 500;
+
+/** Each person reachable on some channel that sends by recipient, and no address shared: it would answer for both. */
+function checkPeople(issues: string[], rules: Rules) {
+  const taken = new Map<string, string>();
+  for (const [id, person] of Object.entries(rules.people ?? {})) {
+    if (!ID.test(id)) issues.push(`人的编号${ID_WORDS}：${id}`);
+    const where = `人 ${id} `;
+    checkFields(issues, where, person, [
+      ["name", isText, NOT_EMPTY],
+      ["at", isObject, "要是 { 通道编号: 这个人在那个通道上的地址 }"],
+      [
+        "workers",
+        (value) => isWords(value) && (value as string[]).every(isId),
+        `要是接单程序编号的列表，${ID_WORDS}`,
+        true,
+      ],
+    ]);
+    if (!isObject(person) || !isObject(person.at)) continue;
+    for (const [channel, address] of Object.entries(person.at)) {
+      if (!Object.hasOwn(rules.channels, channel)) issues.push(`${where}的 at 不是已登记的通道：${channel}`);
+      else if (!isAddress(address)) issues.push(`${where}在通道 ${channel} 上的地址要是 500 字以内的文字`);
+      else if (taken.has(`${channel}\n${address}`)) {
+        issues.push(`${where}和 ${taken.get(`${channel}\n${address}`)} 在通道 ${channel} 上的地址相同，回答分不清是谁`);
+      } else taken.set(`${channel}\n${address}`, id);
+    }
+    if (!Object.keys(person.at).some((channel) => rules.channels[channel]?.people === true)) {
+      issues.push(`${where}在写了 "people": true 的通道上都没有地址，发给他的卡片送不出去`);
+    }
+  }
+}
+
 const nameOf = (entry: unknown) => (isObject(entry) && typeof entry.name === "string" ? entry.name : "");
 
 function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string>, now: number) {
@@ -91,6 +124,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["tell", (value) => TELLS.includes(value as string), `只能是 ${TELLS.join("、")}`, true],
     ["emits", isObject, "要是一个对象", true],
     ["channels", isSomeWords, "要是通道编号的列表", true],
+    ["people", isSomeWords, '要是人的编号的列表，或者 ["*"]', true],
   ]);
   if (isObject(when) && "source" in when) {
     checkFields(issues, `${where}的 when `, when, [
@@ -118,6 +152,11 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
   for (const channel of isSomeWords(rule.channels) ? (rule.channels as string[]) : []) {
     if (!Object.hasOwn(rules.channels, channel)) issues.push(`${where}的 channels 不是已登记的通道：${channel}`);
   }
+  for (const person of isSomeWords(rule.people) ? (rule.people as string[]) : []) {
+    if (person !== "*" && !Object.hasOwn(rules.people ?? {}, person)) {
+      issues.push(`${where}的 people 不是已登记的人：${person}`);
+    }
+  }
   rule.group ??= rule.name;
   rule.tell ??= "needed";
 }
@@ -137,6 +176,7 @@ export function parseRules(json: string, now: number, timezone: string): Rules {
     ["agents", isObject, "要是一个对象"],
     ["channels", isObject, "要是一个对象", true],
     ["defaultChannels", isSomeWords, "要是通道编号的列表", true],
+    ["people", isObject, "要是一个对象", true],
     ["rules", Array.isArray, "要是一个列表"],
     ["elsewhere", Array.isArray, "要是一个列表", true],
   ]);
@@ -161,8 +201,10 @@ export function parseRules(json: string, now: number, timezone: string): Rules {
       ["name", isText, NOT_EMPTY],
       ["answerers", isWords, "要是文字的列表", true],
       ["links", (value) => typeof value === "boolean", "要是 true 或 false", true],
+      ["people", (value) => typeof value === "boolean", "要是 true 或 false", true],
     ]);
   }
+  checkPeople(issues, rules);
   for (const channel of rules.defaultChannels ?? []) {
     if (!Object.hasOwn(rules.channels, channel))
       issues.push(`rules.json 的 defaultChannels 不是已登记的通道：${channel}`);

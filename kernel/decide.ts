@@ -13,13 +13,24 @@ import {
   jobOf,
   openInScope,
   pauseOf,
+  recipientOf,
   routingOf,
   sourceOf,
   waitingOn,
   workerOf,
   workers,
 } from "./query.ts";
-import { cronOf, eventRule, ruleOf, SCHEDULE, typeMatches, type Rule, type Rules } from "./rules.ts";
+import {
+  addressOf,
+  cronOf,
+  eventRule,
+  peopleOf,
+  ruleOf,
+  SCHEDULE,
+  typeMatches,
+  type Rule,
+  type Rules,
+} from "./rules.ts";
 import {
   addUsage,
   ANSWER_BY,
@@ -259,16 +270,30 @@ function heldRun(draft: Draft, id: number, token: string, states: string[]) {
   return run;
 }
 
-function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row) {
+/** Makes a receipt's card, or says why not: one for someone takes a rule that may name them, as an event takes `emits`. */
+function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row): Rejected | undefined {
+  const rule = ruleNamed(draft, run.rule);
+  if (card.to !== undefined && !peopleOf(draft.rules, rule).includes(card.to)) {
+    return { what: kind, reason: `规则「${run.rule}」没有写可以发给 ${card.to}` };
+  }
   const name = card.key ?? digest(`${card.title}\n${card.text}`).slice(0, 32);
   const session = draft.view.get("runs", run.id)!.session;
   const fyi = kind === "notice" && card.fyi === true;
-  const quiet = kind === "notice" && ruleNamed(draft, run.rule)?.tell === "never";
+  const quiet = kind === "notice" && rule?.tell === "never";
   const origin = { source: sourceOf(draft.view, run.id), agent: run.agent, session, run: run.id };
-  const key = `thread:${run.rule}:${run.lane}:${name}`;
+  // Each person's own: asking one doesn't stand in for asking another, or the owner.
+  const key = `thread:${run.rule}:${run.lane}:${name}${card.to === undefined ? "" : `:to:${card.to}`}`;
   // Closed as it's made, nothing open stops it coming again: a run trying again says it once.
   if (fyi && rows(draft.view, "cards", { key, run_id: run.id }, 1).length) return;
   createCard(draft, { ...card, hops: hopsOf(draft, run), key, kind, fyi, quiet, ...threadOf(run), ...origin });
+}
+
+/** A receipt's cards of one kind; the ones it may not send are turned down one by one and the rest still go. */
+function cardsFromReceipt(draft: Draft, run: Row, kind: "ask" | "notice", result: Result, rejected: Rejected[]) {
+  for (const card of result[kind] ?? []) {
+    const refused = cardFromReceipt(draft, run, kind, card);
+    if (refused) rejected.push(refused);
+  }
 }
 
 /** Notices what has gone quiet: a worker that stopped coming, a run its worker stopped mentioning. */
@@ -390,7 +415,7 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   for (const what of ["ask", "resolve", "later", "events"] as const) {
     for (const _ of result[what] ?? []) rejected.push({ what, reason: "没跑成的一轮只能发通知" });
   }
-  for (const notice of result.notice ?? []) cardFromReceipt(draft, run, "notice", notice);
+  cardsFromReceipt(draft, run, "notice", result, rejected);
   const failure = { attempts, error, ...unclaimed };
   if (!ruleNamed(draft, run.rule)) {
     put(draft, "runs", id, failure);
@@ -463,8 +488,8 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
     if (card) closeCard(draft, card, item.reason.trim(), `第 ${id} 轮`);
     else rejected.push({ card: item.card, reason: "不在本轮核对范围" });
   }
-  for (const ask of result.ask ?? []) cardFromReceipt(draft, run, "ask", ask);
-  for (const notice of result.notice ?? []) cardFromReceipt(draft, run, "notice", notice);
+  cardsFromReceipt(draft, run, "ask", result, rejected);
+  cardsFromReceipt(draft, run, "notice", result, rejected);
   if (rule?.tell === "always" && result.outcome === "done") {
     const once = { fyi: true, once: true, ...threadOf(run), source: sourceOf(draft.view, id), run: id };
     notify(draft, `run:${id}:done`, run.rule, summary, once);
@@ -521,9 +546,16 @@ function answer(draft: Draft, id: number, given: Row) {
   if (!card) throw new NotFound("没有这张卡片");
   if (given.channel !== undefined) {
     const allowed = draft.rules.channels[given.channel]?.answerers;
-    if (allowed && !allowed.includes(given.by ?? "")) throw new AuthError("这个人不能回答这张卡片");
+    if (card.to !== undefined) {
+      // Theirs alone: their address on this channel is who they are there, whoever else the channel lets answer.
+      const address = addressOf(draft.rules, card.to, given.channel);
+      if (address === undefined || given.by !== address) throw new AuthError("这张卡片只有收件人本人能回答");
+    } else if (allowed && !allowed.includes(given.by ?? "")) throw new AuthError("这个人不能回答这张卡片");
     const delivery = draft.view.get("deliveries", `${id}:${given.channel}`);
     if (!delivery?.ref || delivery.ref !== given.ref) throw new AuthError("不是发出去的那条消息");
+  } else if (card.to !== undefined) {
+    // Not through a channel, it's the owner's key or a link, and neither is them. The owner can still take it back.
+    throw new AuthError(`这张卡片是发给 ${card.to} 的，只有他在通道里能回答；不用他决定了就结案（resolve）`);
   }
   if (card.state !== "open") return { changed: false, state: card.state };
   if (given.by !== undefined && (typeof given.by !== "string" || [...given.by].length > ANSWER_BY)) {
@@ -536,8 +568,10 @@ function answer(draft: Draft, id: number, given: Row) {
   if (given.text !== undefined && typeof given.text !== "string") throw new InputError(`${words}要是文字`);
   const text = given.text?.trim() || null;
   if (text !== null && [...text].length > ANSWER_TEXT) throw new InputError(`${words}最多 ${ANSWER_TEXT} 字`);
+  // Kept as the person, not the address they answered from: the address belongs to the channel.
+  const by = card.to ?? given.by ?? null;
   if (card.kind === "notice") {
-    closeCard(draft, card, "已处理", given.by ?? null, text);
+    closeCard(draft, card, "已处理", by, text);
     return { changed: true, state: "closed" };
   }
   const optionCount = JSON.parse(card.options).length;
@@ -547,7 +581,7 @@ function answer(draft: Draft, id: number, given: Row) {
   const { lane: subject, title: summary, hops = 0 } = card;
   const event = { id: `card:${id}`, type: "card.answered", subject, summary, hops };
   const eventId = recordEvent(draft, card.source ?? SCHEDULE, event, rule ? [rule.name] : []);
-  const decision = { choice: given.choice ?? null, answer: text, by: given.by ?? null, decided_at: draft.at };
+  const decision = { choice: given.choice ?? null, answer: text, by, decided_at: draft.at };
   put(draft, "cards", id, { state: "decided", ...decision, answer_event: eventId, version: card.version + 1 });
   if (rule) enqueue(draft, rule, eventId, card.lane, card.agent === rule.to ? card.session : null);
   return { changed: true, state: "decided" };
@@ -556,8 +590,14 @@ function answer(draft: Draft, id: number, given: Row) {
 function nextCard(draft: Draft, channel: string) {
   const { now } = draft;
   for (const card of draft.view.deliveryCandidates(channel, now)) {
-    const reach = (card.rule ? ruleNamed(draft, card.rule)?.channels : undefined) ?? draft.rules.defaultChannels;
-    if (reach && !reach.includes(channel)) continue;
+    const to = recipientOf(draft.rules, card, channel);
+    if (card.to !== undefined) {
+      // Only where the channel's program sends by recipient and reaches them: anywhere else it would go to the owner.
+      if (draft.rules.channels[channel]?.people !== true || !to) continue;
+    } else {
+      const reach = (card.rule ? ruleNamed(draft, card.rule)?.channels : undefined) ?? draft.rules.defaultChannels;
+      if (reach && !reach.includes(channel)) continue;
+    }
     const key = `${card.id}:${channel}`;
     const delivery = draft.view.get("deliveries", key) ?? NOT_DELIVERED;
     const recentNote = card.fyi && Date.parse(card.created_at) >= now - 24 * 60 * MINUTE;
@@ -571,7 +611,9 @@ function nextCard(draft: Draft, channel: string) {
     }
     const attempt = { tries: delivery.tries + 1, first_try_at: firstTry ?? draft.at, not_before: iso(now + MINUTE) };
     put(draft, "deliveries", key, { card_id: card.id, channel, ...attempt });
-    return cardView(card, draft.env, delivery.ref, draft.rules.channels[channel]?.links === true);
+    // Whoever holds a link can answer with it, so a card that's someone's own has none.
+    const links = draft.rules.channels[channel]?.links === true && card.to === undefined;
+    return cardView(card, draft.env, delivery.ref, links, to);
   }
   return null;
 }

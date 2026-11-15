@@ -43,6 +43,8 @@ export function promptFor(job: Job, contextFile: string) {
       ? `重新加载 Skill ${rule.skill}：它可能改过，照现在的版本做。`
       : `加载 Skill ${rule.skill}。`;
   const happened = unique(context.events.map(describeEvent));
+  const people = rule.people ?? [];
+  const to = people.length ? `,"to":"收件人的编号，不写就是发给本人"` : "";
   const emits = rule.emits
     ? `,\n "events":[{"id":"这件事的固定编号","type":"${rule.emits.types.join(" 或 ")}",` +
       `"subject":"对象","summary":"一句话，200 字以内","link":"网址，没有就不写"}]`
@@ -81,8 +83,8 @@ export function promptFor(job: Job, contextFile: string) {
       "一个标记为 agent-autoloop 的代码块，里面是 JSON，用不到的字段不写；什么都不需要就不附。",
     "```agent-autoloop",
     `{"ask":[{"title":"一句话说要决定什么","text":"三行以内","options":["选项一","选项二"],"recommend":0,\
-"about":"留给接着干的自己：背景，每个选项具体怎么做","key":"这件事的固定名字"}],
- "notice":[{"title":"一句话","text":"非他亲自做不可的事：要他做什么"}],
+"about":"留给接着干的自己：背景，每个选项具体怎么做","key":"这件事的固定名字"${to}}],
+ "notice":[{"title":"一句话","text":"非他亲自做不可的事：要他做什么"${to}}],
  "resolve":[{"card":12,"reason":"在哪核实了已解决或本人已决定"}],
  "later":[{"key":"这次复查的固定名字","at":"带时区的时间，比如 2026-11-05T09:00:00+08:00",\
 "about":"到时候查什么、怎么算过"}]${emits}}`,
@@ -93,6 +95,12 @@ export function promptFor(job: Job, contextFile: string) {
     "- resolve 只结 open 里列出的卡片，要到原处核实过；一条里有几件事要全部核实才能结。" +
       "读不到依据、只是另一件事做成了，都不能算解决。还在等人的卡片不用重发，它一直开着。",
     '- 取消 waiting 里的复查：later 里写 {"key":"它的 key","cancel":true}，不写 at 和 about。',
+    ...(people.length
+      ? [
+          `- ask 和 notice 可以写 to 发给这几个人之一：${people.map(({ id, name }) => `${id}（${name}）`).join("、")}。` +
+            "发给谁的卡片只有他本人能回答，本人只能撤回；不写 to 就是发给本人。",
+        ]
+      : []),
   ].join("\n");
 }
 
@@ -169,10 +177,23 @@ export function readMessage(said: string): Message {
   return { ...message, receipt: receipt as Record<string, unknown> };
 }
 
-/** The result to hand in, checked as the hub will. What stands without the receipt comes back with the problem. */
+/** Whom a receipt names that its rule doesn't allow: the hub would turn those cards down, so the Agent rewrites it. */
+function strangers(result: Result, people: string[]) {
+  const named = [...(result.ask ?? []), ...(result.notice ?? [])].flatMap((card) => (card.to ? [card.to] : []));
+  const others = unique(named.filter((to) => !people.includes(to)));
+  if (!others.length) return undefined;
+  const allowed = people.length ? `能写的只有 ${people.join("、")}` : "这条规则不能点名，去掉 to 就是发给本人";
+  return `回执的 to 写了规则不许可的人：${others.join("、")}（${allowed}）`;
+}
+
+/**
+ * The result to hand in, checked as the hub will. What stands without the receipt comes back with the problem. `people`
+ * is whom the job's rule allows a card to be for; a job without the list allows no one.
+ */
 export function resultFrom(
   message: Message,
   extra: Pick<Result, "session" | "usage">,
+  people: string[] = [],
 ): { result: Result; problem?: string } {
   const base: Result = {
     outcome: message.outcome,
@@ -183,7 +204,9 @@ export function resultFrom(
   };
   if (message.problem) return { result: base, problem: message.problem };
   try {
-    return { result: parseResult({ ...base, ...message.receipt }) };
+    const result = parseResult({ ...base, ...message.receipt });
+    const problem = strangers(result, people);
+    return problem ? { result: base, problem } : { result };
   } catch (error) {
     if (error instanceof InputError) return { result: base, problem: error.message };
     throw error;

@@ -214,6 +214,7 @@ export function render(state: any, { color, columns }: { color: boolean; columns
     const label = card.kind === "ask" ? bold(yellow("决定")) : bold(magenta("留意"));
     say(`  ${label} ${dim(`#${card.id}`)} ${bold(card.title)}`);
     if (card.rule && card.rule !== card.title) say(dim(`${INDENT}来源：${card.rule}`));
+    if (card.to) say(dim(`${INDENT}发给：${card.to.name}`));
     for (const paragraph of (card.text ?? "").split(/\n\s*\n/).filter((one: string) => one.trim())) {
       for (const line of wrap(unlinked(paragraph), room - INDENT.length)) say(INDENT + line);
       for (const [, words, url] of paragraph.matchAll(LINK)) say(`${INDENT}${underline(words)} ${dim(url)}`);
@@ -222,8 +223,11 @@ export function render(state: any, { color, columns }: { color: boolean; columns
       card.options.forEach((option: string, index: number) => {
         say(`${INDENT}${index + 1}. ${option}${index === card.recommend ? green("（推荐）") : ""}`);
       });
-      say(dim(`${INDENT}回答：agent-autoloop answer ${card.id} <序号>`));
-    } else say(dim(`${INDENT}处理完了：agent-autoloop answer ${card.id}`));
+    }
+    // A card for someone is theirs to answer, where it was sent to them: the owner can only take it back.
+    if (card.to) say(dim(`${INDENT}等他在通道里回答；不用他了：agent-autoloop resolve ${card.id} <结果>`));
+    else if (card.kind === "ask") say(dim(`${INDENT}回答：agent-autoloop answer ${card.id} <序号>`));
+    else say(dim(`${INDENT}处理完了：agent-autoloop answer ${card.id}`));
   }
 
   const because = (event: { source: string; type: string; subject: string; summary: string }) => {

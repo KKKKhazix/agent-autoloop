@@ -3,7 +3,10 @@ export type Job = {
   run: number;
   token: string;
   attempt: number;
-  rule: Pick<Rule, "name" | "cwd" | "skill" | "prompt" | "title" | "emits">;
+  /** people: whom its receipts may address a card to; only there when the rule allows any. */
+  rule: Pick<Rule, "name" | "cwd" | "skill" | "prompt" | "title" | "emits"> & {
+    people?: { id: string; name: string }[];
+  };
   agent: {
     id: string;
     name: string;

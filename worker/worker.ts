@@ -403,7 +403,8 @@ export function createWorker({
       }
       return endWith(entry, { outcome: "failed", error: error.slice(0, 500), ...known, ...usage });
     }
-    const { result, problem } = resultFrom(readMessage(seen.text), { session, usage: entry.usage });
+    const people = (entry.job.rule.people ?? []).map((person) => person.id);
+    const { result, problem } = resultFrom(readMessage(seen.text), { session, usage: entry.usage }, people);
     if (entry.repairs && !problem && result.outcome === "failed") return discardReceipt(entry, adapter, result.error!);
     if (!problem) return endWith(entry, result);
     // Its work is done and only the receipt is wrong: it writes the receipt again, and does nothing again.

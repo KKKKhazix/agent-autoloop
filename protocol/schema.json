@@ -86,6 +86,10 @@
         "key": {
           "type": "string",
           "maxLength": 100
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
         }
       },
       "required": ["title", "text", "options"],
@@ -166,6 +170,10 @@
         },
         "fyi": {
           "type": "boolean"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
         }
       },
       "required": ["title", "text"],
@@ -461,6 +469,22 @@
               },
               "required": ["source", "types"],
               "additionalProperties": true
+            },
+            "people": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": ["id", "name"],
+                "additionalProperties": true
+              }
             }
           },
           "required": ["name", "cwd"],
@@ -621,6 +645,22 @@
         },
         "link": {
           "type": ["string", "null"]
+        },
+        "to": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "address": {
+              "type": "string"
+            }
+          },
+          "required": ["id", "name", "address"],
+          "additionalProperties": true
         }
       },
       "required": [

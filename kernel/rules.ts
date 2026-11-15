@@ -11,7 +11,10 @@ type AgentOptions = {
   timeout?: number;
 };
 export type Agent = AgentOptions & { name: string; worker: string; use: string; access: Access; maxActive?: number };
-export type Channel = { name: string; answerers?: string[]; links?: boolean };
+/** With people, the channel's program sends a card meant for someone to that person's address on it. */
+export type Channel = { name: string; answerers?: string[]; links?: boolean; people?: boolean };
+/** Someone a card can be for: where each channel reaches them, which is also who may answer it there. */
+export type Person = { name: string; at: Record<string, string>; workers?: string[] };
 export type Tell = "always" | "needed" | "never";
 type EventFilter = { source: string; types: string[] };
 type When = EventFilter | { cron: string };
@@ -23,6 +26,8 @@ type RuleOptions = RuleWords & {
   maxActive?: number;
   resume?: boolean;
   emits?: EventFilter;
+  /** Whom its receipts may address a card to, like emits for events: ids, or "*" for everyone registered. */
+  people?: string[];
 };
 /** Without channels a rule's cards reach the default ones, or every channel if there are none; with them, only those. */
 type Reach = { channels?: string[] };
@@ -48,6 +53,7 @@ export type Rules = Registered & {
   askFirst: string[];
   /** Where a card that names no channels of its own goes: a tell, the hub's own alerts, a rule without a list. */
   defaultChannels?: string[];
+  people?: Record<string, Person>;
   rules: Rule[];
   elsewhere: Elsewhere[];
 };
@@ -61,6 +67,18 @@ function typeMatch(pattern: string, type: string) {
 export const typeMatches = (patterns: string[], type: string) => patterns.some((pattern) => typeMatch(pattern, type));
 export const eventRule = (rule: Rule): rule is Rule & { when: EventFilter } => "source" in rule.when;
 export const cronOf = (rule: Rule) => (rule.when as { cron: string }).cron;
+
+/** Where a channel reaches a person, if it does: what it sends a card for them to, and who may answer it there. */
+export function addressOf(rules: Rules, person: string, channel: string): string | undefined {
+  const at = Object.hasOwn(rules.people ?? {}, person) ? rules.people![person].at : {};
+  return Object.hasOwn(at, channel) ? at[channel] : undefined;
+}
+
+/** Whom a rule's receipts may address a card to: registered people only, all of them for "*". */
+export function peopleOf(rules: Rules, rule: Rule | undefined): string[] {
+  const allowed = rule?.people ?? [];
+  return Object.keys(rules.people ?? {}).filter((id) => allowed.includes("*") || allowed.includes(id));
+}
 
 /** The rule a run, card or timer names: a rule's own, or a task elsewhere's, which only your answers to it start. */
 export function ruleOf(rules: Rules, name: string): Rule | undefined {

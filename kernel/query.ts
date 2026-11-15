@@ -1,7 +1,7 @@
 // Reading the view: what the decisions and the doors ask of it, and the shapes they hand out.
 import { credential, type Environment } from "./credentials.ts";
 import { rows, type Fact, type Row, type View } from "./evolve.ts";
-import { ruleOf, type Rule, type Rules } from "./rules.ts";
+import { addressOf, peopleOf, ruleOf, type Rule, type Rules } from "./rules.ts";
 import type { Job } from "../protocol/job.ts";
 
 export function configuration(view: View, version?: number): Rules {
@@ -96,7 +96,20 @@ export function openInScope(view: View, run: Row) {
   );
 }
 
-export function cardView(card: Row, env: Environment, ref: string | null = null, links = false) {
+/** Whom a card is for, as a channel that reaches them needs it: the person, and their address on that channel. */
+export function recipientOf(rules: Rules, card: Row, channel: string) {
+  const address = card.to === undefined ? undefined : addressOf(rules, card.to, channel);
+  if (address === undefined) return undefined;
+  return { id: card.to as string, name: rules.people![card.to].name, address };
+}
+
+export function cardView(
+  card: Row,
+  env: Environment,
+  ref: string | null = null,
+  links = false,
+  to?: { id: string; name: string; address: string },
+) {
   const { id, version, kind, state, title, text, recommend, choice, answer, by, result } = card;
   const options: string[] = kind === "ask" ? JSON.parse(card.options) : state === "open" ? ["已处理"] : [];
   const link = links ? `${env.publicUrl.replace(/\/$/, "")}/c/${credential(env, "card", id, card.created_at)}` : null;
@@ -118,12 +131,16 @@ export function cardView(card: Row, env: Environment, ref: string | null = null,
     link,
     rule: card.rule,
     ...when,
+    ...(to && { to }),
   };
 }
 
 export function jobOf(view: View, run: Row, env: Environment): Job {
   const rules = configuration(view, run.rules_version);
-  const { name, cwd, skill, prompt, title, emits } = ruleOf(rules, run.rule)!;
+  const rule = ruleOf(rules, run.rule)!;
+  const { name, cwd, skill, prompt, title, emits } = rule;
+  // Who it may address a card to, so a worker can send a receipt naming anyone else back before handing it in.
+  const people = rule.people && peopleOf(rules, rule).map((id) => ({ id, name: rules.people![id].name }));
   const { maxActive: _maxActive, ...agent } = rules.agents[run.agent];
   const events = eventsOf(view, run.id);
   const eventIds = events.map((event) => event.id);
@@ -140,7 +157,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
     run: run.id,
     token: credential(env, "run", run.id, run.issued),
     attempt: run.attempts + 1,
-    rule: { name, cwd, skill, prompt, title, emits },
+    rule: { name, cwd, skill, prompt, title, emits, ...(people && { people }) },
     agent: { ...agent, id: run.agent },
     session: run.session ?? run.resume,
     askFirst: rules.askFirst,

@@ -18,6 +18,8 @@ export type Card = {
   result: string | null;
   link: string | null;
   rule?: string;
+  /** Only on a card for someone, and only to a channel with "people": true: send it to `address`, not the owner. */
+  to?: { id: string; name: string; address: string };
 };
 export type ChannelContext = {
   hub: Pick<Hub, "nextCard" | "delivered" | "failed" | "answer">;

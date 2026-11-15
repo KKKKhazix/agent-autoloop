@@ -16,7 +16,7 @@ const VIEWS = {
   run_events: "run_id event_id",
   cards:
     "id key kind title text options recommend about state fyi quiet choice answer by result rule lane grp source " +
-    "agent session run_id answer_event version created_at decided_at closed_at",
+    "agent session run_id answer_event version created_at decided_at closed_at to",
   deliveries: "card_id channel version ref tries first_try_at not_before error given_up",
   timers: "id rule lane key source agent session about at event_id created_at",
   schedules: "rule cron next_at skipped_at",
@@ -27,7 +27,7 @@ const VIEWS = {
 
 /** Made anew at every start, so changing them takes no rebuild and no migration. */
 export const viewStatements = Object.entries(VIEWS).map(([table, columns]) => {
-  const selected = columns.split(" ").map((column) => `json_extract(data,'$.${column}') AS ${column}`);
+  const selected = columns.split(" ").map((column) => `json_extract(data,'$.${column}') AS "${column}"`);
   return `DROP VIEW IF EXISTS ${table}; CREATE VIEW ${table} AS SELECT ${selected.join(",")} FROM projections WHERE collection='${table}'`;
 });
 
@@ -132,6 +132,12 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     return { seenAt, online: seenAt !== null && now - Date.parse(seenAt) <= ONLINE };
   };
   const counts = all<Row>(COUNTS, [iso(dayStart(now, rules.timezone))]);
+  // The owner's own: which matter a card is about, what its asker left for whoever carries on, and whom it's for.
+  // Channels get neither of the first two.
+  const ownersCard = (card: Row) => {
+    const person = card.to === null ? undefined : (rules.people?.[card.to]?.name ?? card.to);
+    return { ...view(card), lane: card.lane, about: card.about, ...(person && { to: { id: card.to, name: person } }) };
+  };
   const openCards = all<Row>("SELECT * FROM cards WHERE state = 'open' ORDER BY id DESC");
   const lastDeliveries = new Map(
     all<Row>(
@@ -175,9 +181,8 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     timezone: rules.timezone,
     spending: spendingOf(all, now, rules.timezone),
     totals: { ...tally(counts), attention: openCards.length },
-    // The owner's own: which matter a card is about, and what its asker left for whoever carries on. Channels don't get them.
-    cards: openCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
-    recentCards: recentCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
+    cards: openCards.map(ownersCard),
+    recentCards: recentCards.map(ownersCard),
     timers: timers.map(({ rule, lane, key, about, at }) => ({ rule, lane, key, about, at })),
     sources: Object.entries(rules.sources).map(([id, { name }]) => {
       const events = all<Row>("SELECT COUNT(*) AS n FROM events WHERE source = ?", [id])[0].n as number;
