@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { AGENT, git, matches, PLAIN_FILE_MODES, type Reviewer, type Settings } from "./project.ts";
 import { IN_THE_APP } from "../codex/agent.ts";
 import { findProgram } from "../../worker/agents.ts";
-import { reviewSignature, selectReview, type SharedPolicy } from "./review-policy.ts";
+import { reviewCovers, reviewSignature, selectReview, type SharedPolicy } from "./review-policy.ts";
 import { ledger, renderRound } from "./review-ledger.ts";
 
 export { readSharedPolicy, selectReview, sharedPolicy, type SharedPolicy } from "./review-policy.ts";
@@ -269,7 +269,7 @@ export async function reviewDelivery(
   const signature = reviewSignature(reviewers);
   const efforts = reviewers.map((reviewer) => depth(reviewer.effort, changed.inDepth));
   // The signed round also records effective depth. Expanding xhigh on main can change it without a new PR commit.
-  const previous = verified?.signature === signature && verified.effort === efforts.join(" + ") ? verified : undefined;
+  const previous = verified && reviewCovers(verified, reviewers, efforts) ? verified : undefined;
   let since: string | undefined;
   if (previous) {
     try {
