@@ -45,4 +45,6 @@ node examples/recipes/github-development/run.mjs add "$HOME/.agent-autoloop/proj
 
 每个提交最多自动建一单。建单前再次确认没有待审 PR、待接 Issue 或目标分支变更。遇到不确定的建单结果，先在 GitHub 核对，再决定是否清除配置旁的 `.scout-<提交号>` 标记后重试。
 
+巡检执行异常按「没跑成」交回，由中台按既有退避规则重派，不把未完成的检查记为成功。建单防重标记仍然有效：若上次建单结果不确定，重派也不会再建一单，仍需先人工核对 GitHub。
+
 用 `scout-preview` 可以在待审期间查看真实源码和 CI 的巡检结论，预览只读取 GitHub。暂停「项目巡检」规则即可暂停找活。

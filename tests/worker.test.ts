@@ -24,6 +24,7 @@
 // call is run together with what came before it and counts as work done; a failed turn whose agent won't go, or leaves
 // something holding its output, or closes its output and stays, holds its place until the time limit and loses the real
 // reason.
+// A missing Codex executable must preserve the resumed session, never publish an uncreated replacement, and retry there.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -130,7 +131,14 @@ export default {
 
 let nextRun = 1;
 const job = (
-  over: { use?: string; command?: string[]; session?: string | null; timeout?: number; cwd?: string } = {},
+  over: {
+    use?: string;
+    program?: string;
+    command?: string[];
+    session?: string | null;
+    timeout?: number;
+    cwd?: string;
+  } = {},
 ) => ({
   run: nextRun++,
   token: `token-${nextRun}`,
@@ -144,6 +152,7 @@ const job = (
     use: over.use ?? "command",
     access: "edit",
     command: over.command ?? ["/bin/sh", "-c", "echo 好了"],
+    program: over.program,
     timeout: over.timeout,
   },
   context: {
@@ -608,6 +617,50 @@ test("a receipt that stays unreadable is given up on: the run ends on its first 
   const p = worker(plain);
   await until(p, () => plain.results.length === 1);
   assert.match(plain.results[0].notice[0].title, /回执读不懂/);
+});
+
+test("Codex launch failure preserves the old session through the next attempt", async () => {
+  const program = join(folder, "codex-launch-failure");
+  const ready = join(folder, "codex-ready");
+  const calls = join(folder, "codex-launch-calls");
+  writeFileSync(
+    program,
+    `#!/bin/sh
+echo "$1 $2" >> '${calls}'
+if [ ! -f '${ready}' ]; then echo 'codex: No such file or directory' >&2; exit 127; fi
+resumed=0
+for arg do if [ "$arg" = old ]; then resumed=1; fi; done
+if [ "$2" = resume ] && [ "$resumed" != 1 ]; then exit 3; fi
+printf '%s\\n' '{"type":"thread.started","thread_id":"old"}' '{"type":"turn.started"}' '{"type":"item.completed","item":{"type":"agent_message","text":"接着做完了"}}' '{"type":"turn.completed"}'
+`,
+    { mode: 0o700 },
+  );
+  const hub = fakeHub();
+  const given = job({ use: "codex", program, session: "old" });
+  hub.jobs.push(given);
+  const first = worker(hub);
+  await until(first, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "failed");
+  assert.equal(hub.results[0].session, "old");
+  assert.equal(readFileSync(calls, "utf8").trim().split("\n").length, 1);
+  writeFileSync(ready, "");
+  hub.jobs.push({ ...given, attempt: 2, session: hub.results[0].session });
+  await until(worker(hub), () => hub.results.length === 2);
+  assert.deepEqual([hub.results[1].outcome, hub.results[1].session], ["done", "old"]);
+  assert.ok(hub.starts.every(({ session }) => session === "old"));
+  assert.ok(
+    readFileSync(calls, "utf8")
+      .trim()
+      .split("\n")
+      .every((line) => line === "exec resume"),
+  );
+  rmSync(ready);
+  const fresh = fakeHub();
+  fresh.jobs.push(job({ use: "codex", program }));
+  await until(worker(fresh), () => fresh.results.length === 1);
+  assert.equal(fresh.results[0].outcome, "failed");
+  assert.equal(fresh.results[0].session, undefined, "an executable that never ran created no thread");
+  assert.equal(fresh.starts.length, 0);
 });
 
 test("a session that can't be gone on in starts a new one, once", async () => {

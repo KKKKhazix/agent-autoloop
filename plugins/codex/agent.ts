@@ -53,6 +53,7 @@ export default {
       finished?: boolean;
       started?: boolean;
       completed?: boolean;
+      resumeRejected?: boolean;
     } = {};
     for (const line of stdout.split("\n")) {
       let event: any;
@@ -83,6 +84,11 @@ export default {
     if (!completed) delete reading.text;
     if (code !== null && !completed && !reading.error) reading.error = tail(stderr) || "Codex 没有完成并留下实际结果";
     if (completed && !reading.text?.trim()) reading.error = "Codex 没有完成并留下实际结果";
+    // No turn starting is not evidence that the saved session is gone: an upgrade can briefly remove the executable.
+    // Codex owns its thread IDs; until it reports one, the worker must not publish a locally invented replacement.
+    if (!completed && !reading.started && (reading.error || !reading.session)) {
+      reading.resumeRejected = /thread\/resume[^\n]*no rollout found for thread id\b/.test(reading.error ?? stderr);
+    }
     return reading;
   },
   link: (session) => `codex://threads/${session}`,

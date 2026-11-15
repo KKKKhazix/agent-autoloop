@@ -39,6 +39,8 @@ export type Reading = {
   finished?: boolean;
   /** It has this turn's prompt, in a conversation that's there. From here on the work may be half done. */
   started?: boolean;
+  /** Explicit resume verdict. False preserves the prior session on transport/startup failure; omitted keeps legacy behavior. */
+  resumeRejected?: boolean;
 };
 export type Adapter = {
   /** Its command line for this turn. */

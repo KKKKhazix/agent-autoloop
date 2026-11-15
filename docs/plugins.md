@@ -37,6 +37,8 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 
 支持 `resume` 的插件，从 Agent 收下提示词起都要返回 `started: true`，包括运行中和出错之后。否则干到一半断了，也会被当成会话接不上，开新会话把业务重做一遍。返回了 `session` 就要按 `turn.resume` 接回原会话：没跑成的重派和写错回执的重写都靠它；接不回去的 CLI 不要返回 `session`。
 
+`read` 还可返回 `resumeRejected`：`true` 表示 CLI 明确拒绝原会话，且本轮尚未开始，可以开新会话；`false` 表示不能据此丢弃原会话，留到中台重派。暂时找不到程序、连接失败或会话正被占用都不代表会话不存在。省略时沿用旧插件按 `started` 判断的行为。Codex 只有明确报告找不到原会话记录时才允许新开；没有拿到实际会话编号的启动失败，也不把接单程序预生成的编号登记成真实会话。
+
 `usage` 是这次启动用掉的量。`input` 算全部输入，`cached` 是其中从缓存读的部分；CLI 报的输入不含缓存时（Claude Code、DSH 就是这样），插件把缓存读写加回 `input`，各家才能放在一起比。有的 CLI 只给整个会话累计到现在的数（Codex 的 Token、Claude Code 的费用），这几项放进 `sessionUsage`，同时要返回 `session`。接单程序启动前记下这个会话上次的累计值，结束后相减，和 `usage` 合起来上报；这些记录放在 `~/.agent-autoloop/worker/usage/`，接单程序中途重启也不会多算。
 
 没有记录的续接（换了电脑、升级前就有的会话）或累计值变小时，这几项这次不报，不猜；下一次续接恢复正常。其他程序在同一个会话里用掉的量分不出来，比如本人打开链接接着聊，会算进下一次续接。CLI 改成只报单次时，插件要把这几项改回 `usage`，不要靠数字大小去猜。

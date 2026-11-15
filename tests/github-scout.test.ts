@@ -1,11 +1,35 @@
 // The runner must reject unsupported evidence and never publish a second proposal for one revision.
+// A failed GitHub request must reach the hub as failed so its retry policy can wake the same work again.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { readMessage } from "../worker/contract.ts";
 // @ts-expect-error The recipe runs directly as an ES module.
 import { scout } from "../examples/recipes/github-development/scout.mjs";
+
+test("a failed scout request returns a retryable receipt", { skip: process.platform === "win32" }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "github-scout-failure-"));
+  try {
+    const config = join(dir, "project.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ repo: "owner/repo", base: "main", scout: true, verify: ["node", "check.mjs"] }),
+    );
+    writeFileSync(join(dir, "gh"), "#!/bin/sh\necho 'GitHub unavailable' >&2\nexit 1\n", { mode: 0o700 });
+    const output = execFileSync(process.execPath, ["examples/recipes/github-development/run.mjs", "scout", config], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, AGENT_AUTOLOOP_CONTEXT: join(dir, "unused") },
+    });
+    const result = readMessage(output);
+    assert.equal(result.outcome, "failed");
+    assert.match(result.error!, /项目巡检未完成/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("checks CI and source, respects pending review, and publishes one candidate per revision", async () => {
   const dir = mkdtempSync(join(tmpdir(), "github-scout-test-"));

@@ -373,7 +373,13 @@ export function createWorker({
     // One ended because its turn was over but it wouldn't exit said what it had to say first.
     const seen = read(entry, adapter, entry.finishedAt ? 0 : code);
     entry.usage = addUsage(addUsage(entry.usage, seen.usage), sessionRise(entry, seen));
-    const session = seen.session ?? (entry.turn > 0 && adapter.link ? entry.session : undefined);
+    const session =
+      seen.session ??
+      (seen.resumeRejected === false
+        ? (entry.resume ?? undefined)
+        : entry.turn > 0 && adapter.link
+          ? entry.session
+          : undefined);
     if (seen.session) entry.session = seen.session;
     const usage = entry.usage && { usage: entry.usage };
     const known = session && { session };
@@ -387,9 +393,9 @@ export function createWorker({
     if (seen.error !== undefined || !seen.text?.trim()) {
       const error = seen.error || "没留下结果";
       if (entry.repairs) return discardReceipt(entry, adapter, error);
-      // The conversation may not be there to go on in, or something else has it open: this go carries on in a new one.
-      // Not once the turn has started: a new one would do its work again. The hub tries again later, in this one.
-      if (entry.resume && !entry.triedFresh && entry.repairs === 0 && !seen.started) {
+      // An explicit refusal permits a new conversation; a startup or transport failure preserves the old one.
+      // Older plugins report only `started`, so keep their existing fallback until they supply a resume verdict.
+      if (entry.resume && !entry.triedFresh && entry.repairs === 0 && !seen.started && seen.resumeRejected !== false) {
         log(`run ${entry.run}: couldn't go on in ${entry.resume} (${error}); starting a new session`);
         entry.triedFresh = true;
         entry.resume = null;
@@ -479,7 +485,9 @@ export function createWorker({
       entry.session = seen.session;
       save(entry);
     }
-    const session = seen.session ?? (adapter.link ? entry.session : undefined);
+    const session =
+      seen.session ??
+      (seen.resumeRejected === false ? (entry.resume ?? undefined) : adapter.link ? entry.session : undefined);
     if (session && session !== entry.told) {
       try {
         await hub.started(entry.run, entry.token, { session, ...(adapter.link && { link: adapter.link(session) }) });

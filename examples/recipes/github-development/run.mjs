@@ -612,7 +612,7 @@ try {
       const reason = /^(?:E[A-Z0-9]+|SIG[A-Z0-9]+|退出码 \d+|Codex 会话未创建|巡检提交不一致)$/.test(error.message)
         ? "（" + (error.operation ? error.operation + "：" : "") + error.message + "）"
         : "";
-      receipt("项目巡检未完成" + reason + "，请检查 GitHub 连接和是否已创建 Issue。");
+      receipt("没跑成：项目巡检未完成" + reason + "，请检查 GitHub 连接和是否已创建 Issue。");
     }
   } else if (mode === "rules") console.log(JSON.stringify(rules(config), null, 2));
   else if (mode === "add") add(config);

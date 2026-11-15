@@ -333,6 +333,7 @@ test("Codex: only a finished turn's last message is its answer", () => {
     session: "t",
     finished: true,
     error: "额度用完了",
+    resumeRejected: false,
   });
   assert.equal(codex.read("", 1, "cannot resume: active writer").error, "cannot resume: active writer");
   assert.equal(codex.link!("t"), "codex://threads/t");
@@ -355,6 +356,9 @@ test("Codex: a turn that got going says so, however it ended; one that never did
   assert.equal(codex.read(lines(thread, warning), 1, "boom").started, undefined, "a warning isn't the turn");
   const missing = "Error: thread/resume: thread/resume failed: no rollout found for thread id x (code -32600)";
   assert.equal(codex.read("", 1, missing).started, undefined);
+  assert.equal(codex.read("", 1, missing).resumeRejected, true);
+  assert.equal(codex.read("", 127, "codex: No such file or directory").resumeRejected, false);
+  assert.equal(codex.read("", 1, "cannot resume: active writer").resumeRejected, false);
   assert.equal(codex.read("", 1, "cannot resume: active writer").started, undefined);
 });
 

@@ -1,0 +1,269 @@
+{
+  "date": "2026-11-15",
+  "scope": ["启动失败保留原会话", "飞书开发失败等待明确的重新执行或结束决定", "GitHub 巡检异常进入中台失败重派"],
+  "batch_patch_sha256": "f560a003dfd8879b2bcd6a5a1141ee7d4b95c2457b2af1380b75c41635816ff2",
+  "review": {
+    "reviewer": "independent_review",
+    "participated_in_implementation": false,
+    "scope": "本批13个文件相对任务前快照的差异",
+    "result": "未发现本批新增、可操作的确定缺陷",
+    "checked": ["跨轮恢复", "重复执行", "旧插件兼容", "调用方和同类路径"],
+    "method": "独立静态审查及只读历史运行证据核对",
+    "limits": "未由独立审查者重新执行测试或真实CLI",
+    "callers": "Reading 由 worker 的运行监视、结束和回执修复路径消费；createWorker 用于 host/up.ts、真实验收脚本及 worker 测试；nextAction 仅用于飞书开发入口和对应测试；巡检回执由 worker/contract.ts 解析。",
+    "real_program_evidence": "独立只读核对旧 run 871 和 run 93 的历史记录；不将旧记录或假 CLI 测试当作新代码的真实集成验收。之后另行完成下列真实 CLI 验收。",
+    "same_issue_paths": "核对 worker 回执修复、kernel 会话保留、ACP 恢复和巡检建单保留点，未发现本批新增的同类回归。"
+  },
+  "validation": {
+    "regressions": "三个回归先在旧实现失败，修复后通过；相关测试初跑失败项修正后定向重跑通过",
+    "test_commands": [
+      "node --disable-warning=ExperimentalWarning --test tests/worker.test.ts tests/adapters.test.ts tests/feishu-development.test.ts tests/github-scout.test.ts tests/github-development.test.ts tests/purity.test.ts",
+      "失败项定向重跑：worker 的 Codex launch failure、adapter 的 Codex completed result，以及 feishu-development.test.ts"
+    ],
+    "static_checks": [
+      "受影响文件及其导入依赖的 TypeScript noEmit 检查",
+      "受影响代码的 Prettier 检查",
+      "node --check examples/recipes/github-development/run.mjs",
+      "git diff --check，以及本批未跟踪文件相对快照的 whitespace 检查"
+    ],
+    "real_cli": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "node": "v24.14.0",
+      "cli": "codex-cli 0.169.0-alpha.11.1",
+      "model": "gpt-6.1-sol",
+      "passed": true,
+      "scenarios": {
+        "startupFailure": {
+          "passed": true,
+          "run": 2,
+          "seedSession": "01a1dae5-e907-7261-a8f6-23494fb24d44",
+          "resumedSession": "01a1dae5-e907-7261-a8f6-23494fb24d44",
+          "failedLaunches": 1,
+          "realResumedLaunches": 1,
+          "markerLines": 1
+        },
+        "duplicateDelivery": {
+          "passed": true,
+          "duplicateEvent": true,
+          "doneResultPosts": 2,
+          "realBusinessExecutions": 1,
+          "markerLines": 1,
+          "extraLaunchesAfterDuplicateEvent": 0
+        },
+        "nonexistentSession": {
+          "passed": true,
+          "run": 3,
+          "rejectedSession": "cdcf20a0-a75d-47b7-863d-486efcb34a90",
+          "newSession": "01a1dae6-5938-7d53-b2e0-a726b8501f88",
+          "cliLaunches": 2,
+          "markerLines": 1
+        }
+      },
+      "actualModelTurns": 3,
+      "elapsedMs": 41702,
+      "clockAdvanceMs": 300043
+    },
+    "cleanup": {
+      "remainingProcessGroups": [],
+      "credentialsRemoved": true,
+      "runtimeRemoved": true,
+      "temporaryListenerClosed": true
+    },
+    "method_notes": {
+      "failureInjection": "wrapper execs nonexistent file; no fabricated CLI output",
+      "missingSessionFixture": "nonexistent UUID inserted at the delivered Job boundary; real Codex rejects it",
+      "ackLossInjection": "actual hub result committed, then local client throws before worker receives acknowledgment",
+      "retryTiming": "temporary hub clock advanced; no wall-clock five-minute wait",
+      "preliminaryHarnessAttempt": "attempt-1-evidence contains one successful seed turn; old-error guard aborted the retry; all its processes and credentials were cleaned before final run"
+    },
+    "remaining_gaps": ["真实断网与强杀", "其他平台", "飞书及GitHub端到端操作"],
+    "cli_events": [
+      {
+        "attemptDirectory": "1-1",
+        "file": "stderr-1.log",
+        "type": "stderr-classification",
+        "missingExecutable": false,
+        "nonexistentSession": false
+      },
+      {
+        "attemptDirectory": "1-1",
+        "file": "stdout-1.log",
+        "type": "thread.started",
+        "thread_id": "01a1dae5-e907-7261-a8f6-23494fb24d44"
+      },
+      {
+        "attemptDirectory": "1-1",
+        "file": "stdout-1.log",
+        "type": "turn.started"
+      },
+      {
+        "attemptDirectory": "1-1",
+        "file": "stdout-1.log",
+        "type": "item.completed",
+        "text": "已记住 792365。"
+      },
+      {
+        "attemptDirectory": "1-1",
+        "file": "stdout-1.log",
+        "type": "turn.completed"
+      },
+      {
+        "attemptDirectory": "2-1",
+        "file": "stderr-1.log",
+        "type": "stderr-classification",
+        "missingExecutable": true,
+        "nonexistentSession": false
+      },
+      {
+        "attemptDirectory": "2-2",
+        "file": "stderr-1.log",
+        "type": "stderr-classification",
+        "missingExecutable": false,
+        "nonexistentSession": false
+      },
+      {
+        "attemptDirectory": "2-2",
+        "file": "stdout-1.log",
+        "type": "thread.started",
+        "thread_id": "01a1dae5-e907-7261-a8f6-23494fb24d44"
+      },
+      {
+        "attemptDirectory": "2-2",
+        "file": "stdout-1.log",
+        "type": "turn.started"
+      },
+      {
+        "attemptDirectory": "2-2",
+        "file": "stdout-1.log",
+        "type": "item.completed",
+        "text": "我会将记住的校验数字追加到指定文件。\n"
+      },
+      {
+        "attemptDirectory": "2-2",
+        "file": "stdout-1.log",
+        "type": "item.completed",
+        "text": "已继续 792365。"
+      },
+      {
+        "attemptDirectory": "2-2",
+        "file": "stdout-1.log",
+        "type": "turn.completed"
+      },
+      {
+        "attemptDirectory": "3-1",
+        "file": "stderr-1.log",
+        "type": "stderr-classification",
+        "missingExecutable": false,
+        "nonexistentSession": true
+      },
+      {
+        "attemptDirectory": "3-1",
+        "file": "stderr-2.log",
+        "type": "stderr-classification",
+        "missingExecutable": false,
+        "nonexistentSession": false
+      },
+      {
+        "attemptDirectory": "3-1",
+        "file": "stdout-2.log",
+        "type": "thread.started",
+        "thread_id": "01a1dae6-5938-7d53-b2e0-a726b8501f88"
+      },
+      {
+        "attemptDirectory": "3-1",
+        "file": "stdout-2.log",
+        "type": "turn.started"
+      },
+      {
+        "attemptDirectory": "3-1",
+        "file": "stdout-2.log",
+        "type": "item.completed",
+        "text": "我会执行指定的本地写入。\n"
+      },
+      {
+        "attemptDirectory": "3-1",
+        "file": "stdout-2.log",
+        "type": "item.completed",
+        "text": "新会话完成。"
+      },
+      {
+        "attemptDirectory": "3-1",
+        "file": "stdout-2.log",
+        "type": "turn.completed"
+      }
+    ],
+    "result_submissions": [
+      {
+        "run": 1,
+        "outcome": "done",
+        "session": "01a1dae5-e907-7261-a8f6-23494fb24d44"
+      },
+      {
+        "run": 2,
+        "outcome": "failed",
+        "session": "01a1dae5-e907-7261-a8f6-23494fb24d44"
+      },
+      {
+        "run": 2,
+        "outcome": "done",
+        "session": "01a1dae5-e907-7261-a8f6-23494fb24d44"
+      },
+      {
+        "run": 2,
+        "outcome": "done",
+        "session": "01a1dae5-e907-7261-a8f6-23494fb24d44"
+      },
+      {
+        "run": 3,
+        "outcome": "done",
+        "session": "01a1dae6-5938-7d53-b2e0-a726b8501f88"
+      }
+    ],
+    "cli_launches": [
+      {
+        "phase": "seed",
+        "resume": null,
+        "executableAvailable": true
+      },
+      {
+        "phase": "startup-failure",
+        "resume": "01a1dae5-e907-7261-a8f6-23494fb24d44",
+        "executableAvailable": false
+      },
+      {
+        "phase": "resume",
+        "resume": "01a1dae5-e907-7261-a8f6-23494fb24d44",
+        "executableAvailable": true
+      },
+      {
+        "phase": "fresh",
+        "resume": "cdcf20a0-a75d-47b7-863d-486efcb34a90",
+        "executableAvailable": true
+      },
+      {
+        "phase": "fresh",
+        "resume": null,
+        "executableAvailable": true
+      }
+    ]
+  },
+  "source_sha256": {
+    "worker/worker.ts": "1d75e9fce1d346d99ac1cee1e255f1569f81fd694cca2bf474157500f7fda08b",
+    "worker/agents.ts": "2b902eeefabe8666af2672158bbb0358095221f7a8d17910898d6f73bc15e194",
+    "plugins/codex/agent.ts": "a68755a5e4c06b71931b509e86d2ffe6b551de9d16a254cdd97e857c09bf7544",
+    "tests/worker.test.ts": "ab9589a9d686c58e7f3e5d172a788a59a890f11b8d5ede94f3b8ad8598e19777",
+    "tests/adapters.test.ts": "0dee74a2baacc484296ebe2ad24c9a5107bbba2111e754af8a39e9f383c9c050",
+    "examples/recipes/feishu-intake/development.ts": "235e8b82ff176284539b75c8f5226c2904448f65109976d01631ceadcadfcb41",
+    "tests/feishu-development.test.ts": "c44fc77d3f735e3b7ccf19d71b10ad6feba73db5ff1b9f199603a58bf2e1ca2e",
+    "examples/recipes/feishu-intake/README.md": "90f47c90da598d4d475b7b43e44f96ca901f4d410a8f2c9b6c9f5201a034fbb8",
+    "examples/recipes/github-development/run.mjs": "f51502a8a135d097f00ba1326525665ca9d6cde8b45ca4ef840766e218cccdca",
+    "tests/github-scout.test.ts": "6883c5eab2c1bb828395a69034468449e2c72bd21a74969aaf3399e67ebccd7f",
+    "examples/recipes/github-development/README.md": "a6e038d012665696f8619dd6c15f60a2794dad66b00cb8932ddb8d9e21f7fa68",
+    "docs/plugins.md": "7b1ab57e1934bce8577526fbb8ab4d4237e713baf6b0ab16f5a168326c2d6e62",
+    "docs/protocol.md": "d2daa2341b6ae93f91e2bc432c12bf0804bbc53f8c8c643d792ab220acbba80f"
+  },
+  "deferred_unchanged": ["GitHub 推送前失败后的候选代码保留风险", "飞书需求或回答转交失败后的持久化重投风险"],
+  "baseline_commit": "9fcfe15239d1d0486f73f6226829cad987f670ef",
+  "status": "仅本地代码和隔离环境验证就绪；未推送、部署或重启线上服务。"
+}

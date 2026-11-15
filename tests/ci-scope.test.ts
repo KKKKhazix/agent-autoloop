@@ -3,14 +3,23 @@
 // them; code, or text a test reads, counts as text and runs nothing; a file nobody has sorted out yet skips the tests; a move
 // out of kernel/ counts only where it landed; what reaches main skips the tests, so a commit whose run was cancelled or replaced is never checked; a diff
 // that can't be read means less checking rather than more.
+// A draft becoming ready must trigger a new PR check instead of leaving its earlier draft checks as the only evidence.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 
 const script = join(import.meta.dirname, "..", "scripts", "ci-scope.sh");
+
+test("the PR gate starts a fresh check when a draft becomes ready", () => {
+  const workflow = readFileSync(join(import.meta.dirname, "..", ".github/workflows/check.yml"), "utf8");
+  const events = /^  pull_request:\r?\n((?:^    .*\r?\n)+)/m.exec(workflow)?.[1] ?? "";
+  for (const event of ["ready_for_review", "opened", "synchronize", "reopened"]) {
+    assert.match(events, new RegExp(`\\b${event}\\b`), `missing PR event: ${event}`);
+  }
+});
 const dir = mkdtempSync(join(tmpdir(), "agent-autoloop-ci-scope-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
