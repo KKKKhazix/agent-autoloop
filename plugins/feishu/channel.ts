@@ -3,6 +3,7 @@
 // one place.
 //   "channels": { "feishu": { "key": "…", "user": "ou_xxx" } } in config.json
 //   "channels": { "feishu": { "name": "飞书", "answerers": ["ou_xxx"] } } in rules.json: who may answer.
+//   With "people": true there too, a card for someone registered in rules.json goes to their open_id in `people.*.at`.
 import { execFile, spawn } from "node:child_process";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 import { eachLine } from "../../host/lines.ts";
@@ -124,9 +125,10 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   const updateMessage = (ref: string, content: string) =>
     lark(["im", "messages", "patch", "--message-id", ref, "--as", "bot", "--data", "-"], JSON.stringify({ content }));
 
-  /** Sends the card's words as a new message, or hands back the one an earlier try with this key already made. */
-  async function sendMessage(key: string, content: string) {
-    const target = ["--user-id", owner, "--as", "bot", "--msg-type", "interactive"];
+  /** Sends the card's words as a new message, or hands back the one an earlier try with this key already made. A card
+   * for someone goes to them; the hub hands such cards only to a channel registered with "people": true. */
+  async function sendMessage(card: Card, key: string, content: string) {
+    const target = ["--user-id", card.to?.address ?? owner, "--as", "bot", "--msg-type", "interactive"];
     const once = ["--idempotency-key", key];
     return (await lark(["im", "+messages-send", ...target, ...once, "--content", content])).data.message_id as string;
   }
@@ -155,10 +157,10 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
             // A settled one has no buttons: a second card is worse than one, a card frozen at the version before the answer
             // is worse than both. The key has the version so that a retry of this one makes no third.
             log(`card ${card.id}: couldn't update ${ref} (${error}); sending it again`);
-            await sendMessage(`agent-autoloop-card-${card.id}-v${card.version}`, content);
+            await sendMessage(card, `agent-autoloop-card-${card.id}-v${card.version}`, content);
           }
           // The key is the card alone, not its version: a report that got lost must not make a second message.
-        } else ref = await sendMessage(`agent-autoloop-card-${card.id}`, content);
+        } else ref = await sendMessage(card, `agent-autoloop-card-${card.id}`, content);
         await hub.delivered(card.id, card.version, ref);
       } catch (error) {
         log(`card ${card.id} not sent: ${error}`);
