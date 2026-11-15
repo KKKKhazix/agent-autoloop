@@ -984,6 +984,19 @@
         },
         "at": {
           "type": "string"
+        },
+        "to": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": ["id", "name"],
+          "additionalProperties": true
         }
       },
       "required": ["card", "title", "text", "at"],

@@ -279,10 +279,13 @@ function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row): Rejec
   const name = card.key ?? digest(`${card.title}\n${card.text}`).slice(0, 32);
   const session = draft.view.get("runs", run.id)!.session;
   const fyi = kind === "notice" && card.fyi === true;
-  const quiet = kind === "notice" && rule?.tell === "never";
+  // The rule keeps its notices from the owner. One for someone else is theirs to hear: unsent it would stay open unseen.
+  const quiet = kind === "notice" && rule?.tell === "never" && card.to === undefined;
   const origin = { source: sourceOf(draft.view, run.id), agent: run.agent, session, run: run.id };
-  // Each person's own: asking one doesn't stand in for asking another, or the owner.
-  const key = `thread:${run.rule}:${run.lane}:${name}${card.to === undefined ? "" : `:to:${card.to}`}`;
+  const thread = `thread:${run.rule}:${run.lane}:${name}`;
+  // Each person's own, so asking one doesn't stand in for asking another, or the owner. Their id comes first and holds
+  // no colon: no name an Agent gives a card can make one key read as another's.
+  const key = card.to === undefined ? thread : `to:${card.to}:${thread}`;
   // Closed as it's made, nothing open stops it coming again: a run trying again says it once.
   if (fyi && rows(draft.view, "cards", { key, run_id: run.id }, 1).length) return;
   createCard(draft, { ...card, hops: hopsOf(draft, run), key, kind, fyi, quiet, ...threadOf(run), ...origin });
@@ -440,7 +443,8 @@ function retryLater(draft: Draft, run: Row, result: Result) {
     set(draft, "runs", other.id, null);
     if (other.resume) put(draft, "runs", id, { resume: other.resume });
   }
-  if (!result.notice?.some((notice) => !notice.fyi) && attempts === 3) {
+  // A notice of its own to the owner says it already. One for someone else doesn't, whether or not it was sent.
+  if (!result.notice?.some((notice) => !notice.fyi && notice.to === undefined) && attempts === 3) {
     const clock = { timeZone: draft.rules.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" } as const;
     const time = new Intl.DateTimeFormat("zh-CN", clock).format(notBefore);
     const words = `连续 3 次自动处理没跑完（卡在：${briefError(error, id)}），${time} 会自动再试。`;

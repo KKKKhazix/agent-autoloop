@@ -182,11 +182,13 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
       }),
       timers: timers.map(timerView),
       waiting: waiting.sort((a, b) => a.at.localeCompare(b.at)).map(timerView),
-      open: openInScope(view, run).map(({ id, title, text, created_at }) => ({
+      open: openInScope(view, run).map(({ id, title, text, created_at, to }) => ({
         card: id,
         title,
         text,
         at: created_at,
+        // Whose it is, when not the owner's: the same words may be out to several people, and one may need taking back.
+        ...(to !== undefined && { to: { id: to, name: rules.people?.[to]?.name ?? to } }),
       })),
       decided: decided
         .filter((card) => !answers.some((answer) => answer.id === card.id))

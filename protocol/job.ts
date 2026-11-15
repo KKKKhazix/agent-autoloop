@@ -47,7 +47,8 @@ export type Job = {
     }[];
     timers: { key: string; about: string; at: string }[];
     waiting: { key: string; about: string; at: string }[];
-    open: { card: number; title: string; text: string; at: string }[];
+    /** to: whom the card is for, when not the owner. */
+    open: { card: number; title: string; text: string; at: string; to?: { id: string; name: string } }[];
     decided: { card: number; title: string; choice: string | null; at: string }[];
   };
 };
