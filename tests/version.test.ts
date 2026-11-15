@@ -85,3 +85,30 @@ test("a commit reads the same whether its ref is a file or packed away, and a de
   if (before === undefined) delete process.env.AGENT_AUTOLOOP_COMMIT;
   else process.env.AGENT_AUTOLOOP_COMMIT = before;
 });
+
+test("an unpacked deployment says which release it is, from the environment it was started with", () => {
+  const saved = { r: process.env.AGENT_AUTOLOOP_RELEASE, c: process.env.AGENT_AUTOLOOP_COMMIT };
+  delete process.env.AGENT_AUTOLOOP_RELEASE;
+  delete process.env.AGENT_AUTOLOOP_COMMIT;
+  const tree = join(dir, "release-copy");
+  mkdirSync(tree, { recursive: true });
+  try {
+    assert.equal(releaseOf(tree), null, "an unpacked copy has no tag of its own");
+    assert.equal(versionLine(tree), "agent-autoloop 未发布（提交 dev）");
+    assert.equal(versionName(tree), "dev");
+
+    process.env.AGENT_AUTOLOOP_RELEASE = "v1.8.6";
+    assert.equal(releaseOf(tree), "v1.8.6");
+    assert.equal(versionLine(tree), "agent-autoloop v1.8.6（提交 dev）");
+    assert.equal(versionName(tree), "v1.8.6", "what other programs are told still names the release");
+
+    process.env.AGENT_AUTOLOOP_RELEASE = "not-a-version";
+    assert.equal(releaseOf(tree), null, "a value that isn't a version is not taken for one");
+    assert.equal(versionLine(tree), "agent-autoloop 未发布（提交 dev）");
+  } finally {
+    if (saved.r === undefined) delete process.env.AGENT_AUTOLOOP_RELEASE;
+    else process.env.AGENT_AUTOLOOP_RELEASE = saved.r;
+    if (saved.c === undefined) delete process.env.AGENT_AUTOLOOP_COMMIT;
+    else process.env.AGENT_AUTOLOOP_COMMIT = saved.c;
+  }
+});
