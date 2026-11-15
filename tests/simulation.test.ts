@@ -1,5 +1,6 @@
 // Failure modes: faults lose accepted events, duplicate execution or answers, exceed parallel limits, change receipts,
-// diverge from replay, or strand work after recovery; an enumerator silently skips one ordering; mutation checks do not run.
+// diverge from replay, or strand work after recovery; an enumerator silently skips one ordering; mutation checks do not run;
+// a card for someone decided by anyone else goes unnoticed.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { simulate } from "../sim/random.ts";
@@ -56,6 +57,26 @@ test("answer checks reject a run in the wrong subject lane", () => {
   const log = structuredClone(w.log);
   for (const f of log) for (const c of f.changes) if (c.table === "runs" && c.row) c.row.lane = "wrong-lane";
   assert.throws(() => invariants(evolve(new World().view, log.slice(1)), log), /原事项/);
+});
+
+test("answer checks reject a card for someone that anyone else decided", () => {
+  const w = new World();
+  w.call("createCard", {
+    key: "q",
+    kind: "ask",
+    title: "选",
+    options: ["甲", "乙"],
+    rule: "one",
+    lane: "#1",
+    grp: "shared",
+    source: "app",
+    to: "p1",
+  });
+  w.call("delivered", "team", 1, 1, "m1");
+  w.call("answer", 1, { choice: 0, by: "u1", channel: "team", ref: "m1" });
+  const log = structuredClone(w.log);
+  for (const f of log) for (const c of f.changes) if (c.table === "cards" && c.row?.by) c.row.by = "owner";
+  assert.throws(() => invariants(evolve(new World().view, log.slice(1)), log), /收件人/);
 });
 
 test("the simulation catches omitted deadlines that strand deferred work", () => {

@@ -23,7 +23,7 @@
 // session open just now, and one the agent refuses or can't go on in doesn't get a new one; a "没跑成" after a finished tool
 // call is run together with what came before it and counts as work done; a failed turn whose agent won't go, or leaves
 // something holding its output, or closes its output and stays, holds its place until the time limit and loses the real
-// reason.
+// reason. A receipt naming someone the job's rule doesn't allow is handed in for the hub to drop that card unheard.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -522,6 +522,21 @@ test("a receipt that can't be read is asked for again in the same session, doing
   assert.deepEqual(hub.results[0].notice, [{ title: "看一眼", text: "这个" }]);
   assert.equal(hub.results[0].session, "s-1");
   assert.deepEqual(hub.results[0].usage, { input: 2, output: 2 }, "both turns count; no turn reported a price");
+});
+
+test("a receipt naming someone the job's rule doesn't allow is asked for again, not handed in", async () => {
+  const hub = fakeHub();
+  const receipt = (to: string) =>
+    `session=s-9\n派好了\n\n${FENCE}agent-autoloop\n${JSON.stringify({ notice: [{ title: "接一下", text: "登录页", to }] })}\n${FENCE}\n`;
+  const wrong = said("stranger", receipt("bob"));
+  const right = said("allowed", receipt("alice"));
+  const script = `if [ -n "$1" ]; then cat "${right}"; echo "$2" > "${folder}/stranger-asked.txt"; exit 0; fi; cat "${wrong}"`;
+  const given = job({ use: "scripted", command: [script] });
+  hub.jobs.push({ ...given, rule: { ...given.rule, people: [{ id: "alice", name: "前端 A" }] } });
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.match(readFileSync(join(folder, "stranger-asked.txt"), "utf8"), /bob/);
+  assert.equal(hub.results[0].notice[0].to, "alice");
 });
 
 test("a plugin with sessions and nothing to open gets to rewrite its receipt too", async () => {

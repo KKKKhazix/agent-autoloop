@@ -71,7 +71,10 @@ esac
 }
 
 test("feishu: a card for someone goes to their address, and one for no one still goes to the owner", async () => {
-  const sends = await sent([{ ...base, to: alice }, { ...base, id: 6 }]);
+  const sends = await sent([
+    { ...base, to: alice },
+    { ...base, id: 6 },
+  ]);
   assert.equal(sends.length, 2);
   assert.ok(sends[0].includes("--user-id ou_a "), sends[0]);
   assert.ok(sends[1].includes("--user-id ou_me "), sends[1]);
