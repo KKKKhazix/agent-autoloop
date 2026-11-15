@@ -14,7 +14,7 @@
 // stays open; a notice for someone hides the alarm the owner gets when a run has failed three times; a later round can't
 // tell which of two open cards is whose; after rules.json changes, someone removed or at an old address still answers, or
 // a channel that no longer sends by recipient is still handed their cards; the channel's own click handling passes on
-// someone else's click as theirs.
+// someone else's click as theirs; `why` leaves out a note a run sent to someone.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -28,6 +28,7 @@ import { checkSchema } from "../protocol/schema.ts";
 import { parseRules, RulesError } from "../protocol/rules.ts";
 import { render as renderStatus } from "../cli/status.ts";
 import feishu from "../plugins/feishu/channel.ts";
+import { formatWhy } from "../cli/why.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agent-autoloop-people-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -341,6 +342,14 @@ test("status says whom a card is for, and how the owner takes it back rather tha
   assert.ok(text.includes(`agent-autoloop answer ${owners} `));
 });
 
+test("why shows a note the run sent to someone, as it shows one sent to the owner", () => {
+  const note = (title: string, to?: string) => ({ title, text: "改版了", fyi: true, ...(to && { to }) });
+  const { job } = receipt("全员", { notice: [note("告诉前端一声", "alice"), note("告诉本人一声")] });
+  const told = formatWhy(job.run, hub.why(job.run) as any);
+  assert.match(told, /告诉本人一声/);
+  assert.match(told, /告诉前端一声/);
+});
+
 test("the job says whom its rule may name, and a worker turns back a receipt naming anyone else", () => {
   const named = receipt("指派", {}).job;
   assert.deepEqual(named.rule.people, [{ id: "alice", name: "前端 A" }]);
@@ -379,66 +388,81 @@ test("a receipt's to is a person's id, a task elsewhere can't name anyone, and t
   assert.equal(isAsk(ask()), true);
 });
 
-test("feishu: the click of the person a card is for counts, and anyone else's on it is turned down", async () => {
-  drain("team", at(20));
-  const id = receipt("指派", { ask: [ask({ to: "alice", key: "click" })] }, at(20)).cards[0].id;
-  const clicks = join(dir, "clicks");
-  const lark = join(dir, "lark-cli");
-  // A stand-in for lark-cli: sends as om_click, and plays back the clicks once the test has written them.
-  writeFileSync(
-    lark,
-    `#!/bin/sh
+// The stand-in lark-cli is a POSIX shell script; tests/channels.test.ts, which Windows leaves out, is where the others live.
+const posixOnly = { skip: process.platform === "win32" && "POSIX 假 CLI", timeout: 60_000 };
+test(
+  "feishu: the click of the person a card is for counts, and anyone else's on it is turned down",
+  posixOnly,
+  async (t) => {
+    drain("team", at(20));
+    const id = receipt("指派", { ask: [ask({ to: "alice", key: "click" })] }, at(20)).cards[0].id;
+    const clicks = join(dir, "clicks");
+    const lark = join(dir, "lark-cli");
+    // A stand-in for lark-cli: sends as om_click, and plays back the clicks once the test has written them.
+    writeFileSync(
+      lark,
+      `#!/bin/sh
 case "$*" in
   *"event consume"*) until [ -e "${clicks}" ]; do sleep 0.05; done; cat "${clicks}"; exec sleep 30 ;;
   *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_click"}}' ;;
 esac
 `,
-    { mode: 0o755 },
-  );
-  const click = (operator: string) =>
-    JSON.stringify({
-      action_value: JSON.stringify({ card: id, choice: 0 }),
-      operator_id: operator,
-      message_id: "om_click",
-    });
-  const stop = new AbortController();
-  const heard: unknown[] = [];
-  const team = {
-    async nextCard() {
-      const card = nextCard("team", at(20));
-      if (!card) await new Promise((resolve) => setTimeout(resolve, 20));
-      return { card };
-    },
-    async delivered(card: number, version: number, ref: string) {
-      delivered("team", card, version, ref, at(20));
-      if (card === id && version === 1) writeFileSync(clicks, `${click("ou_b")}\n${click("ou_a")}\n`);
-      return {};
-    },
-    async failed() {
-      return {};
-    },
-    async answer(card: number, given: object) {
-      try {
-        heard.push(answer(card, { ...given, channel: "team" }, at(20)));
-        return heard.at(-1);
-      } catch (error) {
-        heard.push(error);
-        throw error;
-      } finally {
-        if (heard.length === 2) stop.abort();
-      }
-    },
-  };
-  // A hub that never hears both clicks fails this test; it mustn't hold up the others for ever.
-  const giveUp = setTimeout(() => stop.abort(), 5_000);
-  await feishu({ hub: team as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
-  clearTimeout(giveUp);
-  assert.ok(heard[0] instanceof AuthError, "bob's click");
-  assert.deepEqual(heard[1], { changed: true, state: "decided" });
-  assert.equal(stored(id).by, "alice");
-  const job = claimNext("w1", "after-click", at(20))!;
-  finish(job.run, job.token, { outcome: "done" }, at(20));
-});
+      { mode: 0o755 },
+    );
+    const click = (operator: string) =>
+      JSON.stringify({
+        action_value: JSON.stringify({ card: id, choice: 0 }),
+        operator_id: operator,
+        message_id: "om_click",
+      });
+    const stop = new AbortController();
+    // Out of time, the test fails; the channel and its listener are stopped all the same.
+    t.signal.addEventListener("abort", () => stop.abort());
+    const heard: unknown[] = [];
+    let clicked = false;
+    const team = {
+      async nextCard() {
+        const card = nextCard("team", at(20));
+        // Nothing left to send and the card never went out: no click will come, so there is nothing to wait for.
+        if (!card && !clicked) stop.abort();
+        if (!card) await new Promise((resolve) => setTimeout(resolve, 20));
+        return { card };
+      },
+      async delivered(card: number, version: number, ref: string) {
+        delivered("team", card, version, ref, at(20));
+        if (card === id && version === 1) {
+          clicked = true;
+          writeFileSync(clicks, `${click("ou_b")}\n${click("ou_a")}\n`);
+        }
+        return {};
+      },
+      async failed() {
+        return {};
+      },
+      async answer(card: number, given: object) {
+        try {
+          heard.push(answer(card, { ...given, channel: "team" }, at(20)));
+          return heard.at(-1);
+        } catch (error) {
+          heard.push(error);
+          throw error;
+        } finally {
+          if (heard.length === 2) stop.abort();
+        }
+      },
+    };
+    try {
+      await feishu({ hub: team as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+    } finally {
+      stop.abort();
+    }
+    assert.ok(heard[0] instanceof AuthError, "bob's click");
+    assert.deepEqual(heard[1], { changed: true, state: "decided" });
+    assert.equal(stored(id).by, "alice");
+    const job = claimNext("w1", "after-click", at(20))!;
+    finish(job.run, job.token, { outcome: "done" }, at(20));
+  },
+);
 
 test("after rules.json changes, who a card reaches and who may answer it go by the rules as they are now", () => {
   const load = (change: (rules: any) => void, now: number) => {
