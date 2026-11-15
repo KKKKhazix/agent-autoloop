@@ -20,14 +20,14 @@
 
 | 对象 | 状态与存储 | 谁在哪里改 |
 | --- | --- | --- |
-| 提问 | `cards.state`: `open → decided → done` 或 `open → closed` | `createCard` 创建；`answer` 核对本人、通道和消息 ref，只改 open，产生 `answer_event`；成功处理回答的 `applyReceipt` 才写 done；`resolve/closeCard` 表示无需决定 |
-| 通知 | 普通通知 open → closed；FYI 创建时就是 closed | `cardFromReceipt/notify/tell` 创建，本人或允许范围内的回执结案。decided 不等于执行过；续办被取消仍保留决定，不伪造 done |
-| 投递 | `deliveries[card_id:channel]` 的 `version/ref/tries/not_before/given_up` 组合：未发、已租出、重试等待、已同步、放弃 | `nextCard` 租给通道，`delivered` 确认，`failed` 排重试；卡片版本更高时更新原消息。超过窗口放弃，重复 tell 可重新启动已放弃投递 |
+| 提问 | `cards.state`: `open → decided → done` 或 `open → closed`；`cards.to` 是收件人的编号，没有就是给本人的，创建后不变 | `createCard` 创建；`answer` 核对本人、通道和消息 ref，只改 open，产生 `answer_event`；写了 `to` 的只认收件人在通道上的地址，`by` 记他的编号，本人密钥和链接都拒绝；成功处理回答的 `applyReceipt` 才写 done；`resolve/closeCard` 表示无需决定，写了 `to` 的照样能结 |
+| 通知 | 普通通知 open → closed；FYI 创建时就是 closed | `cardFromReceipt/notify/tell` 创建，本人或允许范围内的回执结案。回执的 `to` 不在规则 `people` 许可内就不建卡片、进 `rejected`；去重键带收件人。decided 不等于执行过；续办被取消仍保留决定，不伪造 done |
+| 投递 | `deliveries[card_id:channel]` 的 `version/ref/tries/not_before/given_up` 组合：未发、已租出、重试等待、已同步、放弃 | `nextCard` 租给通道，`delivered` 确认，`failed` 排重试；卡片版本更高时更新原消息。超过窗口放弃，重复 tell 可重新启动已放弃投递。写了 `to` 的卡片只租给写了 `people: true`、收件人在上面有地址的通道，不看规则的 `channels`，也不带链接 |
 | 复查 | `timers.event_id=null` 等待，非空已触发；同 `rule/lane/key` 只一个待触发 | `scheduleReview` 设置、改期、取消；`tick` 记唯一 timer.due 并派回原事项；已触发 timer 的资料留在投影直到关联 run 进入终态，供排队和重试续接使用，终态后从活动投影移除（事实日志保留完整变更）；删规则或改名后到期只留事件记录、不派发，并发通知卡片写明原规则名和复查开头 |
 | 定时计划 | `schedules.cron/next_at/skipped_at`，不是业务完成态 | `tick` 更新；错过只补最近一次，配置改变重新计时，暂停时跳过 |
 | 暂停 | `pauses[name]` 有效记录表示暂停，含 since/until；恢复删除，应答带回删掉的那条 | 本人 `pauseRule/resumeRule`、到期 `tick`。已经领取的不受影响，队列及回答复查留队，新来源事件跳过且恢复不自动补派；本人 `replayRule` 补跑 since 起跳过的事件，每条一次；暂停不能手动运行或补跑 |
 
-卡片的回答和结案只能有一个发生。失败回执只允许通知，提问、结案、复查、发事件不生效。卡片与投递版本不同只是待同步，不能理解成卡片重开。
+卡片的回答和结案只能有一个发生。写了收件人的卡片一旦决定，回答人就是这个人（`sim/invariants.ts` 查这一条）；收件人后来从 `rules.json` 里删了，卡片不再投递、没人能答，只能结案。失败回执只允许通知，提问、结案、复查、发事件不生效。卡片与投递版本不同只是待同步，不能理解成卡片重开。
 
 复查保存创建者 `agent` 与 `session`，只有规则仍派给同一 Agent 才续接；旧日志缺 agent 的复查照常到期、保留资料，不再强行沿用旧会话，仍按规则的 resume 决定是否续接当前 Agent 最近的会话。不迁移旧事实。卡片的续接已有同样归属检查。
 

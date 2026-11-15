@@ -106,6 +106,16 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 
 同一个飞书应用的卡片点击只能有一个监听，只在一台电脑上跑。
 
+**把卡片发给别人**（比如派活给同事、等他点“接受”）：卡片默认只发给用户本人。要发给别人，先和用户确认名单，再在 `rules.json` 写三处（自带的通道里只有飞书会按人发送，这一项只用假 CLI 验证过，第一次用先拿一个人试）：
+
+```json
+"channels": { "feishu": { "name": "飞书", "answerers": ["ou_用户的 open_id"], "people": true } },
+"people": { "m-fe-1": { "name": "前端 A", "at": { "feishu": "ou_这个人的 open_id" } } },
+"rules": [{ "name": "指派", "…": "…", "people": ["m-fe-1"] }]
+```
+
+规则的 `people` 是这条规则能点名的人，`["*"]` 是所有登记的人，没写就一个也点不了。Agent 在回执的 `ask`、`notice` 里写 `"to": "m-fe-1"` 就发给他，不写还是发给用户。这样的卡片只有他本人在飞书里点才算数，用户的 `answer` 会被拒绝，不用他决定了用 `agent-autoloop resolve <卡片> <结果>` 撤回；它没有回答链接，所以只会发文字的 Webhook 通道发不了。每个登记的人至少要在一个写了 `"people": true` 的通道上有地址，不然 `agent-autoloop check` 会报错。
+
 **只会发文字的（钉钉、企微的群机器人，Slack、Discord 的 Webhook）**：用 `plugins/webhook/channel.ts`，`config.json` 的通道项写 `"use": "webhook"`、`"platform": "dingtalk"` 和 `"url": "已有的 Webhook 地址"`；平台也可选 `wecom`、`slack`、`discord`。别的平台只要收 JSON POST 也能接：不写 `platform`，写 `url` 和带 `{text}` 的 `body`，比如 Telegram 写 `"url": "https://api.telegram.org/bot<机器人令牌>/sendMessage"`、`"body": { "chat_id": "…", "text": "{text}" }`。`rules.json` 里写 `"links": true`，卡片链接本身就能回答；`config.json` 的 `hub.publicUrl` 要配成手机或电脑能打开的地址。
 
 **有按钮的新通道**：在 `~/.agent-autoloop/plugins/<名字>/channel.ts` 写一个，照 `plugins/feishu/channel.ts`：循环领卡片、发或改、报告；收到点击转给 `hub.answer`。协议在 `docs/protocol.md`，用别的语言写也行，只要会发 HTTP。
