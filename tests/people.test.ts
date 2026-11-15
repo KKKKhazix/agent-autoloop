@@ -8,7 +8,13 @@
 // it back, nor a later round of the same matter; the job doesn't say whom the rule may name, so a worker can't check a
 // receipt before handing it in; the prompt of a rule that names no one changes; a question a task elsewhere asks names
 // someone; the owner's state doesn't say whom a card is for, and `status` tells the owner to answer a card only someone
-// else can.
+// else can. A card for the owner whose key happens to read like someone's (`x:to:alice`) and the card `x` for alice count
+// as one, so the later of the two is dropped without a word, or a card for no one gets a key other than it always had; a
+// rule that keeps its notices from the owner keeps them from the person they're for too, who never sees a card that then
+// stays open; a notice for someone hides the alarm the owner gets when a run has failed three times; a later round can't
+// tell which of two open cards is whose; after rules.json changes, someone removed or at an old address still answers, or
+// a channel that no longer sends by recipient is still handed their cards; the channel's own click handling passes on
+// someone else's click as theirs.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -21,6 +27,7 @@ import { isAsk, parseResult } from "../protocol/validate.ts";
 import { checkSchema } from "../protocol/schema.ts";
 import { parseRules, RulesError } from "../protocol/rules.ts";
 import { render as renderStatus } from "../cli/status.ts";
+import feishu from "../plugins/feishu/channel.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agent-autoloop-people-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -50,6 +57,15 @@ const base = {
     },
     { name: "全员", when: { source: "app", types: ["all.*"] }, to: "a1", cwd: "~/x", prompt: "派活。", people: ["*"] },
     { name: "不点名", when: { source: "app", types: ["plain.*"] }, to: "a1", cwd: "~/x", prompt: "做事。" },
+    {
+      name: "安静",
+      when: { source: "app", types: ["quiet.*"] },
+      to: "a1",
+      cwd: "~/x",
+      prompt: "做事。",
+      tell: "never",
+      people: ["alice"],
+    },
   ],
   elsewhere: [
     { name: "每周", source: "app", to: "a1", cron: "0 6 * * 0", where: "别处", cwd: "~/x", prompt: "接着做。" },
@@ -69,7 +85,7 @@ const { all, one } = await import("./storage.ts");
 let n = 0;
 /** A run of `rule` that hands in `receipt`; what it was given, what it made and what was turned down. */
 function receipt(rule: string, receiptBody: object, now = at(0)) {
-  const type = { 指派: "assign.new", 全员: "all.new", 不点名: "plain.new" }[rule]!;
+  const type = { 指派: "assign.new", 全员: "all.new", 不点名: "plain.new", 安静: "quiet.new" }[rule]!;
   ingest("app", { id: `e${++n}`, type, subject: `#${n}` }, now);
   const job = claimNext("w1", `c${n}`, now)!;
   assert.equal(job.rule.name, rule);
@@ -87,7 +103,7 @@ function drain(channel: string, now = at(0)) {
   }
   return seen;
 }
-const stored = (id: number) => one<any>('SELECT state, choice, by, "to" FROM cards WHERE id = ?', [id])!;
+const stored = (id: number) => one<any>('SELECT state, choice, by, "to", key FROM cards WHERE id = ?', [id])!;
 
 test("rules.json: people, the channels that send by recipient and what each rule may name are checked", () => {
   const check = (change: (rules: any) => void) => {
@@ -160,11 +176,62 @@ test("the same key asked of two people makes a card for each, and once for each 
   assert.equal(again.cards.length, 0, "asked again while each is still open, nothing new is made");
 });
 
-test("a later round of the matter still sees a card for someone and can take it back", () => {
+test("a card for the owner whose key reads like someone's doesn't stand in for theirs, in either order", () => {
+  const ownerFirst = receipt("全员", { ask: [ask({ key: "c1:to:alice" }), ask({ key: "c1", to: "alice" })] });
+  assert.deepEqual(
+    ownerFirst.cards.map((card) => card.to),
+    [null, "alice"],
+  );
+  const theirsFirst = receipt("全员", { ask: [ask({ key: "c2", to: "alice" }), ask({ key: "c2:to:alice" })] });
+  assert.deepEqual(
+    theirsFirst.cards.map((card) => card.to),
+    ["alice", null],
+  );
+  assert.deepEqual([ownerFirst.rejected, theirsFirst.rejected], [[], []]);
+  assert.equal(
+    stored(ownerFirst.cards[0].id).key,
+    "thread:全员::c1:to:alice",
+    "a card for no one is keyed as it always was",
+  );
+});
+
+test("a rule that keeps its notices from the owner still sends the ones for someone", () => {
+  drain("team");
+  const words = { title: "接一下", text: "登录页" };
+  const { cards } = receipt("安静", { notice: [{ ...words, to: "alice" }, words] });
+  assert.deepEqual(
+    cards.map((card) => card.to),
+    ["alice", null],
+  );
+  assert.deepEqual(
+    drain("team").map((card) => card.id),
+    [cards[0].id],
+    "theirs reaches them; the owner's stays unsent",
+  );
+});
+
+test("a notice for someone doesn't stand in for telling the owner a run has failed three times", () => {
+  ingest("app", { id: `e${++n}`, type: "assign.new", subject: `#${n}` }, at(0));
+  const notice = [{ title: "卡住了", text: "等网络", to: "alice" }];
+  let run = 0;
+  for (const minutes of [0, 6, 17]) {
+    const job = claimNext("w1", `c${n}-${minutes}`, at(minutes))!;
+    run = job.run;
+    finish(job.run, job.token, { outcome: "failed", error: "断网", notice }, at(minutes));
+  }
+  assert.equal(all("SELECT id FROM cards WHERE key = ?", [`run:${run}:failing`]).length, 1);
+  hub.cancel(run, at(17));
+});
+
+test("a later round of the matter still sees a card for someone, whose it is, and can take it back", () => {
   const asked = receipt("全员", { ask: [ask({ to: "bob", key: "withdraw" })] }).cards[0].id;
   ingest("app", { id: `e${++n}`, type: "all.new", subject: `#${n}` }, at(1));
   const job = claimNext("w1", `c${n}`, at(1))!;
-  assert.ok(job.context.open.some((open) => open.card === asked));
+  assert.deepEqual(job.context.open.find((open) => open.card === asked)?.to, { id: "bob", name: "后端 B" });
+  assert.ok(
+    job.context.open.some((open) => !("to" in open)),
+    "one for the owner is as it was",
+  );
   const { rejected } = finish(
     job.run,
     job.token,
@@ -310,4 +377,117 @@ test("a receipt's to is a person's id, a task elsewhere can't name anyone, and t
   }
   assert.equal(isAsk(ask({ to: "alice" })), false);
   assert.equal(isAsk(ask()), true);
+});
+
+test("feishu: the click of the person a card is for counts, and anyone else's on it is turned down", async () => {
+  drain("team", at(20));
+  const id = receipt("指派", { ask: [ask({ to: "alice", key: "click" })] }, at(20)).cards[0].id;
+  const clicks = join(dir, "clicks");
+  const lark = join(dir, "lark-cli");
+  // A stand-in for lark-cli: sends as om_click, and plays back the clicks once the test has written them.
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+case "$*" in
+  *"event consume"*) until [ -e "${clicks}" ]; do sleep 0.05; done; cat "${clicks}"; exec sleep 30 ;;
+  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_click"}}' ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const click = (operator: string) =>
+    JSON.stringify({
+      action_value: JSON.stringify({ card: id, choice: 0 }),
+      operator_id: operator,
+      message_id: "om_click",
+    });
+  const stop = new AbortController();
+  const heard: unknown[] = [];
+  const team = {
+    async nextCard() {
+      const card = nextCard("team", at(20));
+      if (!card) await new Promise((resolve) => setTimeout(resolve, 20));
+      return { card };
+    },
+    async delivered(card: number, version: number, ref: string) {
+      delivered("team", card, version, ref, at(20));
+      if (card === id && version === 1) writeFileSync(clicks, `${click("ou_b")}\n${click("ou_a")}\n`);
+      return {};
+    },
+    async failed() {
+      return {};
+    },
+    async answer(card: number, given: object) {
+      try {
+        heard.push(answer(card, { ...given, channel: "team" }, at(20)));
+        return heard.at(-1);
+      } catch (error) {
+        heard.push(error);
+        throw error;
+      } finally {
+        if (heard.length === 2) stop.abort();
+      }
+    },
+  };
+  // A hub that never hears both clicks fails this test; it mustn't hold up the others for ever.
+  const giveUp = setTimeout(() => stop.abort(), 5_000);
+  await feishu({ hub: team as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  clearTimeout(giveUp);
+  assert.ok(heard[0] instanceof AuthError, "bob's click");
+  assert.deepEqual(heard[1], { changed: true, state: "decided" });
+  assert.equal(stored(id).by, "alice");
+  const job = claimNext("w1", "after-click", at(20))!;
+  finish(job.run, job.token, { outcome: "done" }, at(20));
+});
+
+test("after rules.json changes, who a card reaches and who may answer it go by the rules as they are now", () => {
+  const load = (change: (rules: any) => void, now: number) => {
+    const rules = structuredClone(base);
+    change(rules);
+    hub.execute("rules", [parseRules(JSON.stringify(rules), now, "UTC")], now);
+  };
+  drain("team", at(30));
+  drain("mail", at(30));
+  const [sent, waiting] = receipt(
+    "全员",
+    { ask: [ask({ to: "alice", key: "moved" }), ask({ to: "bob", key: "moved" })] },
+    at(30),
+  ).cards.map((card) => card.id);
+  assert.equal(nextCard("team", at(30))!.id, sent);
+  delivered("team", sent, 1, "m-sent", at(30));
+  const on = { channel: "team", ref: "m-sent", choice: 0 };
+
+  // Her address changed: the old one is no longer her.
+  const moved = (rules: any) => {
+    rules.people.alice.at = { team: "ou_a2", mail: "a@x" };
+    rules.people.bob.at = { team: "ou_b", mail: "b@x" };
+  };
+  load(moved, at(31));
+  assert.throws(() => answer(sent, { ...on, by: "ou_a" }, at(31)), AuthError);
+
+  // The channel no longer sends by recipient: it's handed no more of their cards, but a message it did send still answers.
+  const undeclared = (rules: any) => {
+    moved(rules);
+    delete rules.channels.team.people;
+  };
+  load(undeclared, at(32));
+  assert.equal(nextCard("team", at(32)), null, "bob's waits for a channel that sends by recipient");
+  assert.ok(
+    drain("mail", at(32)).some((card) => card.id === waiting),
+    "where they now have an address",
+  );
+  assert.equal(answer(sent, { ...on, by: "ou_a2" }, at(32)).changed, true);
+
+  // He's no longer registered: nobody can answer for him, and the owner can only take the card back.
+  load((rules) => {
+    undeclared(rules);
+    delete rules.people.bob;
+  }, at(33));
+  assert.throws(
+    () => answer(waiting, { channel: "mail", ref: `mail-${waiting}`, choice: 0, by: "b@x" }, at(33)),
+    AuthError,
+  );
+  assert.throws(() => answer(waiting, { choice: 0, by: "本人" }, at(33)), AuthError);
+  assert.equal(resolve(waiting, "人不在了", "本人", at(33)), true);
+  load(() => {}, at(34));
 });
