@@ -64,6 +64,8 @@ export function invariants(current: View, log: Fact[], before?: Snapshot) {
       );
   for (const card of cards)
     if (card.answer_event !== null) {
+      // Whoever a card is for is the one who decided it: not the owner, a link, or someone else on the channel.
+      if (card.to !== undefined) assert.equal(card.by, card.to, "写了收件人的卡片被别人回答了");
       const event = view.tables.events[card.answer_event];
       assert.equal(event?.type, "card.answered");
       if (view.tables.config.rules.value.rules.some((r: Row) => r.name === card.rule))

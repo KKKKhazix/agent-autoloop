@@ -62,7 +62,16 @@ export function simulate(seed = 0x5eed, steps = 200000) {
           outcome: fail ? "failed" : "done",
           ...(!fail && rng(4) === 0
             ? {
-                ask: [{ title: "选择", text: "内容", options: ["甲", "乙"], key: `card-${r.id}` }],
+                // Rule one may name p1, rule two no one: there it's turned down and no card is made.
+                ask: [
+                  {
+                    title: "选择",
+                    text: "内容",
+                    options: ["甲", "乙"],
+                    key: `card-${r.id}`,
+                    ...(rng(2) && { to: "p1" }),
+                  },
+                ],
                 later: [{ key: `timer-${r.id}`, at: new Date(world.now + 60000).toISOString(), about: "复查" }],
               }
             : {}),
@@ -88,13 +97,17 @@ export function simulate(seed = 0x5eed, steps = 200000) {
         world.advance(700000);
       } else if (op === 9) {
         faults.channel++;
-        const card = world.call("nextCard", "chat");
+        // The owner's channel, or the one that sends by recipient, where whoever a card is for answers it, and only they.
+        const channel = rng(2) ? "chat" : "team";
+        const card = world.call("nextCard", channel);
         if (card) {
-          if (rng(2)) world.call("failed", "chat", card.id, card.version, "模拟断线");
+          if (rng(2)) world.call("failed", channel, card.id, card.version, "模拟断线");
           else {
-            world.call("delivered", "chat", card.id, card.version, `message-${card.id}`);
-            if (card.state === "open")
-              world.call("answer", card.id, { choice: 0, by: "owner", channel: "chat", ref: `message-${card.id}` });
+            world.call("delivered", channel, card.id, card.version, `message-${card.id}`);
+            const by = channel === "chat" ? "owner" : rng(4) ? "u1" : "u2";
+            const given = { choice: 0, by, channel, ref: `message-${card.id}` };
+            if (card.to && by !== card.to.address) assert.throws(() => world.call("answer", card.id, given), AuthError);
+            else if (card.state === "open") world.call("answer", card.id, given);
           }
         }
       } else if (op === 10) {
@@ -102,7 +115,8 @@ export function simulate(seed = 0x5eed, steps = 200000) {
         world.advance(-rng(120000));
       } else {
         const card = rows(world.view, "cards").find((c) => c.kind === "ask");
-        if (card) {
+        if (card?.to !== undefined) assert.throws(() => world.call("answer", card.id, { choice: rng(2) }), AuthError);
+        else if (card) {
           world.call("answer", card.id, { choice: rng(2) });
           world.call("answer", card.id, { choice: rng(2) });
         } else world.alarm();
