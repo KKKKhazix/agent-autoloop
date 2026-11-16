@@ -21,6 +21,7 @@ test("it prints this commit's release and the commit, with nothing installed", (
   const empty = join(dir, "nothing-installed");
   const env: NodeJS.ProcessEnv = { ...process.env, AGENT_AUTOLOOP_HOME: empty };
   delete env.AGENT_AUTOLOOP_COMMIT;
+  delete env.AGENT_AUTOLOOP_RELEASE;
   const done = spawnSync(
     process.execPath,
     ["--disable-warning=ExperimentalWarning", join(root, "bin", "agent-autoloop.ts"), "--version"],
@@ -35,6 +36,8 @@ test("it prints this commit's release and the commit, with nothing installed", (
 test("the version is the tag on this commit, and only while it's on that commit", () => {
   const before = process.env.AGENT_AUTOLOOP_COMMIT;
   delete process.env.AGENT_AUTOLOOP_COMMIT;
+  const release = process.env.AGENT_AUTOLOOP_RELEASE;
+  delete process.env.AGENT_AUTOLOOP_RELEASE;
   const repo = join(dir, "tagged");
   mkdirSync(join(repo, "vendored"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
@@ -59,6 +62,7 @@ test("the version is the tag on this commit, and only while it's on that commit"
   assert.equal(releaseOf(repo), null, "past a release it isn't that release");
   assert.equal(releaseOf(join(dir, "no-such-folder")), null);
   if (before !== undefined) process.env.AGENT_AUTOLOOP_COMMIT = before;
+  if (release !== undefined) process.env.AGENT_AUTOLOOP_RELEASE = release;
 });
 
 test("a commit reads the same whether its ref is a file or packed away, and a deployment's word counts", () => {

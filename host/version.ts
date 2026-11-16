@@ -26,7 +26,7 @@ export function commitOf(root = ROOT) {
  */
 export function releaseOf(root = ROOT) {
   const fromEnv = process.env.AGENT_AUTOLOOP_RELEASE?.trim();
-  if (fromEnv !== undefined) return /^v\d+\.\d+\.\d+(-[a-z0-9.]+)?$/.test(fromEnv) ? fromEnv : null;
+  if (fromEnv) return /^v\d+\.\d+\.\d+(-[a-z0-9.]+)?$/.test(fromEnv) ? fromEnv : null;
   try {
     if (!existsSync(path.join(root, ".git"))) return null;
     const args = ["-C", root, "tag", "--points-at", "HEAD"];
