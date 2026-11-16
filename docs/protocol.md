@@ -513,6 +513,10 @@ Apple M5 Pro、24 GB、Node 24.21.0，用 `node scripts/history.ts 1000 10000 10
 - 格式变化后首次启动要从日志全量重建：110 万条用时 43.1 秒，峰值约 141 MB，重建前后数据一致。平时重启不重放。
 - 20 万步模拟（观察项）：93.8 秒，2131 步/秒。
 
+## 发布插件
+
+发布是 `plugins/deploy` 的普通 Agent 进程，内核不认识它，和交付插件并列的另一个内置实现。项目的 `ops/deploy.json`（从 main 读，提交进仓库）写四件事：`command` 发布命令、`version` 打印要发布的版本、`probe` 读线上版本（命令，或 https URL 取 JSON 字段/正则）、`deadline` 探活秒数；`confirm: true` 时先发卡问「发布/取消」，回答「发布」这一轮才真正执行。发布命令跑完才开始探活，每 2 秒探一次，线上版本和 `version` 一致这一轮换回「发布完成」，不一致等到 `deadline` 算没跑成，重派时发布命令会再跑一次，所以发布命令必须可重复执行。规则写 `use: "deploy"`，派活的 `cwd` 是项目仓库，插件只认 `ops/deploy.json` 里写的字段。确认卡片按标题「发布 <目录名>」认回答。配法、轮询脚本和脚本模板见[场景模板](../examples/recipes/auto-deploy/README.md)。
+
 ## 交付插件
 
 交付是 `plugins/delivery` 的普通 Agent 进程，内核不认识它。项目仍用 `ops/delivery.json`，标签仍是 `deliver`、`deliver-attended`、`deliver-review`、`ask-owner`，提交状态仍为 `delivery`。审查状态默认 `agent-review`，由 `review.status` 或接单命令的 `--review-status` 指定。审查可以按项目设置，也可用 `--review-policy owner/name:路径` 从同一个仓库的 main 读取全局策略。设置格式、规则与 Ship 示例见[配置手册](../skills/agent-autoloop/SKILL.md#交付流水线)。

@@ -110,6 +110,14 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 
 **有按钮的新通道**：在 `~/.agent-autoloop/plugins/<名字>/channel.ts` 写一个，照 `plugins/feishu/channel.ts`：循环领卡片、发或改、报告；收到点击转给 `hub.answer`。协议在 `docs/protocol.md`，用别的语言写也行，只要会发 HTTP。
 
+## 发布（deploy）
+
+发布就是一条命令、还没有 GitHub PR 流程的项目（rsync 同步、`docker compose up`、脚本化平台 API），用内置 `deploy` 插件，不用调模型。规则写 `use: "deploy"`，`cwd` 指到项目仓库，Agent 只要 `name`、`worker`、`use: "deploy"`，可选 `timeout`（分钟，这一轮最长多久，首次构建镜像慢就调大）。发布命令、期望版本、线上探活写在项目仓库的 `ops/deploy.json` 里，提交进 main、随项目评审；轮询远端新提交用配方里的 `watch-git-push.sh`（`use: "command"` + `emits`），见[场景模板](../examples/recipes/auto-deploy/README.md)。
+
+`ops/deploy.json` 只认五个字段：`command` 发布命令（参数数组，不经 shell，必须可重复执行——探活超时按没跑成重派，命令会再跑一次）、`version` 打印要发布的版本（第一行）、`probe` 读线上版本（`{"command": […]}` 在项目目录跑，期望版本作为最后一个参数传入；或 `{"url": "https://…", "field": "data.commit"}` / `"pattern"` 取 JSON 字段或正则捕获，只支持 https，本机测试可用 `http://127.0.0.1`）、`deadline` 探活秒数（默认 600，每 2 秒探一次）、`confirm` 是否先发卡问「发布/取消」（默认 false）。发布命令跑完才开始探活；线上版本和 `version` 一致这一轮换回「发布完成：线上版本已核实为 …」，等到 `deadline` 还不一致算没跑成，原因里同时写期望版本和最后探到的线上版本。`confirm: true` 时卡片标题固定是「发布 <仓库目录名>」，按标题认回答；仓库目录改名后旧卡片的回答不再作数。
+
+每个仓库写一条发布规则，`parallel` 控制并发，单仓库加 `"maxActive": 1` 更稳。核实记录 `agent-autoloop why <第几轮>` 里都能查。
+
 ## 交付流水线
 
 需要这台接单电脑已有 `gh` 登录和审查程序。`delivery` 进程只执行本机插件和 main 指定的审查命令，PR 不检出、不在本机跑代码。先把项目的 `ops/delivery.json` 和审查要点放到 main：

@@ -13,6 +13,7 @@ import { after, test } from "node:test";
 import { stablePath } from "../host/node-path.ts";
 import acp from "../plugins/acp/agent.ts";
 import delivery from "../plugins/delivery/agent.ts";
+import deploy from "../plugins/deploy/agent.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "node-path-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
@@ -62,7 +63,7 @@ test("a node outside Homebrew is named as it is", () => {
   assert.equal(stablePath("/opt/node/bin/node"), "/opt/node/bin/node");
 });
 
-test("ACP and delivery start their child with that path", () => {
+test("ACP, delivery and deploy start their child with that path", () => {
   const turn = {
     prompt: "做这件事",
     session: "s",
@@ -74,4 +75,5 @@ test("ACP and delivery start their child with that path", () => {
   };
   assert.equal(acp.command(turn as never)[0], stablePath(process.execPath));
   assert.equal(delivery.command(turn as never)[0], stablePath(process.execPath));
+  assert.equal(deploy.command()[0], stablePath(process.execPath));
 });

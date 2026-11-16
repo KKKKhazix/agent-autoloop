@@ -1,0 +1,54 @@
+{
+  "timezone": "Asia/Shanghai",
+  "sources": {
+    "git": {
+      "name": "Git 仓库"
+    }
+  },
+  "agents": {
+    "git-watch": {
+      "name": "看推送脚本",
+      "worker": "my-computer",
+      "use": "command",
+      "command": ["{cwd}/watch-git-push.sh", "/绝对路径/my-project", "main"]
+    },
+    "ship": {
+      "name": "发布",
+      "worker": "my-computer",
+      "use": "deploy",
+      "timeout": 30
+    }
+  },
+  "channels": {
+    "feishu": {
+      "name": "飞书",
+      "answerers": ["ou_REPLACE_ME"]
+    }
+  },
+  "rules": [
+    {
+      "name": "看 main 推送",
+      "when": {
+        "cron": "* * * * *"
+      },
+      "to": "git-watch",
+      "cwd": "~/code/my-project",
+      "tell": "never",
+      "emits": {
+        "source": "git",
+        "types": ["git.pushed"]
+      }
+    },
+    {
+      "name": "发布",
+      "when": {
+        "source": "git",
+        "types": ["git.pushed"]
+      },
+      "to": "ship",
+      "cwd": "~/code/my-project",
+      "prompt": "把最新提交发布到线上并核实版本。",
+      "parallel": 1
+    }
+  ]
+}
