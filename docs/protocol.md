@@ -515,7 +515,7 @@ Apple M5 Pro、24 GB、Node 24.21.0，用 `node scripts/history.ts 1000 10000 10
 
 ## 发布插件
 
-发布是 `plugins/deploy` 的普通 Agent 进程，内核不认识它，和交付插件并列的另一个内置实现。项目的 `ops/deploy.json`（从 main 读，提交进仓库）写四件事：`command` 发布命令、`version` 打印要发布的版本、`probe` 读线上版本（命令，或 https URL 取 JSON 字段/正则）、`deadline` 探活秒数；`confirm: true` 时先发卡问「发布/取消」，回答「发布」这一轮才真正执行。发布命令跑完才开始探活，每 2 秒探一次，线上版本和 `version` 一致这一轮换回「发布完成」，不一致等到 `deadline` 算没跑成，重派时发布命令会再跑一次，所以发布命令必须可重复执行。规则写 `use: "deploy"`，派活的 `cwd` 是项目仓库，插件只认 `ops/deploy.json` 里写的字段。确认卡片按标题「发布 <目录名>」认回答。配法、轮询脚本和脚本模板见[场景模板](../examples/recipes/auto-deploy/README.md)。
+发布是 `plugins/deploy` 的普通 Agent 进程，内核不认识它，和交付插件并列的另一个内置实现。项目的 `ops/deploy.json`（从 main 读，提交进仓库）写四件事：`command` 发布命令、`version` 打印要发布的版本（第一行）、`probe` 读线上版本（命令，或 https URL 取 JSON 字段/正则，不跟随跳转）、`deadline` 探活秒数；`confirm: true` 时先发卡问「发布/取消」，卡片标题「发布 <目录名> <版本>」，回答按标题认——版本对不上会重新问。发布命令跑完才开始探活，每 2 秒探一次，线上版本和 `version` 一致这一轮换回「发布完成」，不一致等到 `deadline` 算没跑成，重派时发布命令会再跑一次，所以发布命令必须可重复执行，多机推送时要先自己把工作树对齐远端。规则写 `use: "deploy"`，派活的 `cwd` 是项目仓库，插件只认 `ops/deploy.json` 里写的字段。配法、轮询脚本和脚本模板见[场景模板](../examples/recipes/auto-deploy/README.md)。
 
 ## 交付插件
 

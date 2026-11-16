@@ -6,17 +6,23 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { commandLine } from "../../host/command.ts";
 
 const SETTINGS = join("ops", "deploy.json");
 const ASK_KEY = "deploy";
 const INTERVAL_SECONDS = 2;
 const DEFAULT_DEADLINE = 600;
+// Chatty publish commands (docker compose build, rsync -v) print megabytes; Node's 1 MB default would kill them.
+const MAX_BUFFER = 32 * 1024 * 1024;
 
 const tail = (text: string, length = 300) => text.trim().slice(-length);
 
+/** The first line of output is the version; lines after the first are log noise from the command. */
+const firstLine = (text: string) => text.split("\n", 1)[0]?.trim() ?? "";
+
 const run = (argv: string[]) =>
   new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-    execFile(argv[0], argv.slice(1), { timeout: 3_600_000 }, (error, stdout, stderr) => {
+    execFile(...commandLine(argv), { timeout: 3_600_000, maxBuffer: MAX_BUFFER }, (error, stdout, stderr) => {
       // A signal kill and a plain non-zero exit both land in `error`; what matters for the word we print is the code.
       const code = error && "code" in error && typeof error.code === "number" ? error.code : error ? 1 : 0;
       resolve({ code, stdout: String(stdout), stderr: String(stderr) });
@@ -99,7 +105,8 @@ function load(): Settings {
 }
 
 /** The answer to this thread's deploy question, if the owner has answered it. Cards don't carry the ask key (`about`
- *  is for timers), so the round's own title names the question. */
+ *  is for timers), so the round's own title names the question — and the title carries the version, so an answer
+ *  approves exactly the version it was asked about, never a newer push that coalesced into this thread since. */
 function decision(title: string) {
   try {
     const context = JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT!, "utf8"));
@@ -118,11 +125,12 @@ async function probeOnce(probe: Probe, expected: string): Promise<string> {
     // The expected version is the last argument, for probes that verify a server-side file against it.
     const done = await run([...probe.command, expected]);
     if (done.code !== 0) return `探活命令退出码 ${done.code}：${tail(done.stderr || done.stdout) || "没留下原因"}`;
-    return done.stdout.trim();
+    return firstLine(done.stdout);
   }
   let response: Response;
   try {
-    response = await fetch(probe.url, { signal: AbortSignal.timeout(10_000) });
+    // A redirect doesn't prove the service is up; same stance as the delivery health check.
+    response = await fetch(probe.url, { signal: AbortSignal.timeout(10_000), redirect: "error" });
   } catch (error) {
     return `HTTP ${(error as Error).message}`;
   }
@@ -153,12 +161,12 @@ const main = async () => {
     fail(`${SETTINGS} ${(error as Error).message}`);
   }
   const name = basename(process.cwd());
-  const title = `发布 ${name}`;
 
   const version = await run(settings.version);
   if (version.code !== 0)
     fail(`版本命令退出码 ${version.code}：${tail(version.stderr || version.stdout) || "没留下原因"}`);
-  const expected = version.stdout.trim();
+  const expected = firstLine(version.stdout);
+  const title = `发布 ${name} ${expected}`;
 
   if (settings.confirm) {
     const answer = decision(title);

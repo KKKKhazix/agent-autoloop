@@ -5,7 +5,9 @@
 // stderr; a version command that fails is distinguished from a probe mismatch; when the live version never matches, the
 // round fails with both the expected and the last observed version in evidence, so the owner sees the drift; an http
 // probe that isn't localhost is refused before anything runs; a URL probe reads a JSON field or a regex capture and a
-// command probe's whole output is the version. The whole loop too: a rule using `deploy` gets its round, the question
+// command probe's whole output is the version; a chatty publish command printing megabytes isn't killed by Node's
+// 1 MB default; only the first line of a version or probe command is the version; a URL probe doesn't follow redirects.
+// The whole loop too: a rule using `deploy` gets its round, the question
 // card, the answer and the verified finish through a real `up`, with the plugin loaded as an install-folder copy that
 // can't reach the engine's sources.
 import assert from "node:assert/strict";
@@ -23,13 +25,18 @@ const run = join(import.meta.dirname, "..", "plugins", "deploy", "run.ts");
 const sh = (name: string) => [process.execPath, name];
 
 /** A project dir with the given scripts plus ops/deploy.json and a context file. */
-function project(deploy: unknown, files: Record<string, string>, answers: (title: string) => unknown[] = () => []) {
+function project(
+  deploy: unknown,
+  files: Record<string, string>,
+  answers: (title: string) => unknown[] = () => [],
+  version = "v2",
+) {
   const dir = mkdtempSync(join(root, "proj-"));
   mkdirSync(join(dir, "ops"), { recursive: true });
   writeFileSync(join(dir, "ops", "deploy.json"), typeof deploy === "string" ? deploy : JSON.stringify(deploy));
   for (const [name, code] of Object.entries(files)) writeFileSync(join(dir, name), code);
   const context = join(dir, "context.json");
-  writeFileSync(context, JSON.stringify({ answers: answers(`发布 ${dir.split("/").at(-1)}`) }));
+  writeFileSync(context, JSON.stringify({ answers: answers(`发布 ${dir.split("/").at(-1)} ${version}`) }));
   return { dir, context };
 }
 
@@ -252,6 +259,70 @@ test("a URL probe reads a JSON field or a regex capture", async () => {
   }
 });
 
+test("a chatty publish command isn't killed at 1 MB of output", async () => {
+  const { dir, context } = project(
+    { command: sh("publish.cjs"), version: sh("version.cjs"), probe: { command: sh("probe.cjs") } },
+    {
+      ...SCRIPTS,
+      ...ok(
+        "publish.cjs",
+        `process.stdout.write("x".repeat(2 * 1024 * 1024)); require("node:fs").writeFileSync("live.txt", "v2");`,
+      ),
+    },
+  );
+  const done = await go(dir, context);
+  assert.equal(done.code, 0, done.stderr);
+  assert.match(done.stdout, /发布完成：线上版本已核实为 v2/);
+});
+
+test("only the first line of a version or probe command is the version", async () => {
+  const { dir, context } = project(
+    { command: sh("publish.cjs"), version: sh("version.cjs"), probe: { command: sh("probe.cjs") } },
+    {
+      ...ok("version.cjs", `console.log("v2\\nbuild warning: deprecation");`),
+      ...ok("publish.cjs", `require("node:fs").writeFileSync("live.txt", "v2");`),
+      ...ok("probe.cjs", `console.log("v2\\nssh stderr noise goes here");`),
+    },
+  );
+  const done = await go(dir, context);
+  assert.equal(done.code, 0, done.stderr);
+  assert.match(done.stdout, /发布完成：线上版本已核实为 v2/);
+});
+
+test("a URL probe doesn't follow redirects", async () => {
+  const server = createServer((req, res) => {
+    if (req.url === "/old") {
+      res.writeHead(302, { location: "/health" });
+      res.end();
+    } else {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ commit: "abc123" }));
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const { dir, context } = project(
+      {
+        command: sh("publish.cjs"),
+        version: sh("version.cjs"),
+        probe: { url: `http://127.0.0.1:${port}/old`, field: "commit" },
+        deadline: 2,
+      },
+      {
+        ...ok("publish.cjs", `require("node:fs").writeFileSync("marker.txt", "ran");`),
+        ...ok("version.cjs", `console.log("abc123");`),
+      },
+    );
+    const done = await go(dir, context);
+    assert.notEqual(done.code, 0, "a redirect must not prove the version is live");
+    assert.equal(existsSync(join(dir, "marker.txt")), true, "the deploy command did run");
+    assert.match(done.stdout, /期望「abc123」/);
+  } finally {
+    server.close();
+  }
+});
+
 test("a URL probe that errors is observed, not a crash", async () => {
   const server = createServer((req, res) => {
     res.writeHead(503);
@@ -317,14 +388,16 @@ test("an event, a confirming card, an answer, the deploy ran and verified", asyn
   writeFileSync(join(proj, "version.cjs"), `console.log("v9");`);
   writeFileSync(join(proj, "probe.cjs"), `console.log(require("node:fs").readFileSync("live.txt", "utf8").trim());`);
 
-  // The plugin as an install-folder copy: its engine import is rewritten to the bundled node-path.
+  // The plugin as an install-folder copy: its engine imports are rewritten to the files bundled beside it.
   const engine = join(import.meta.dirname, "..");
   const plugin = join(home, "plugins", "deploy");
   mkdirSync(plugin, { recursive: true });
   const agent = readFileSync(join(engine, "plugins", "deploy", "agent.ts"), "utf8");
   writeFileSync(join(plugin, "agent.ts"), agent.replaceAll("../../host/node-path.ts", "./node-path.ts"));
   writeFileSync(join(plugin, "node-path.ts"), readFileSync(join(engine, "host", "node-path.ts")));
-  writeFileSync(join(plugin, "run.ts"), readFileSync(join(engine, "plugins", "deploy", "run.ts")));
+  const runSource = readFileSync(join(engine, "plugins", "deploy", "run.ts"), "utf8");
+  writeFileSync(join(plugin, "run.ts"), runSource.replaceAll("../../host/command.ts", "./command.ts"));
+  writeFileSync(join(plugin, "command.ts"), readFileSync(join(engine, "host", "command.ts")));
 
   // `init` names the worker after this machine; a rule pointing nowhere is never picked up.
   const starter = JSON.parse(readFileSync(join(home, "rules.json"), "utf8"));
