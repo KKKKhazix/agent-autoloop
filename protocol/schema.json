@@ -908,6 +908,12 @@
         },
         "at": {
           "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": ["card", "title", "options", "choice", "chosen", "text", "about", "by", "at"],

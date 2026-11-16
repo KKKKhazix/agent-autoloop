@@ -25,7 +25,8 @@
 // ordinary notices, questions, quiet rules, and the one-day FYI delivery window must keep their existing behavior.
 // The why timeline must show receipt FYIs without adding empty closures or repeating hub-generated end notices.
 // The answers material carries the chosen text, or a 0-based choice gets read as the first option (issue #197: an Agent
-// reported 绿色 as 蓝色).
+// reported 绿色 as 蓝色). It doesn't carry the events the question was asked about, so a source can't tie what the answer
+// led to back to the id it sent (issue #320).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -130,6 +131,23 @@ test("the answers material carries the chosen text so the 0-based choice can't b
   answer(second, { text: "先备份再删", by: "me" }, at(3));
   const free = claim("w1", at(3))!;
   assert.deepEqual([free.context.answers[0].choice, free.context.answers[0].chosen], [null, "先备份再删"]);
+});
+
+test("a decision names the events it was asked about, so a source can tie the result to the id it sent", () => {
+  clean();
+  const { id } = asked(1);
+  answer(id, { choice: 1, by: "me" }, at(2));
+  const job = claim("w1", at(2))!;
+  assert.deepEqual(
+    job.context.events.map((e) => e.id),
+    [`card:${id}`],
+    "this round works on the answer alone",
+  );
+  assert.deepEqual(
+    job.context.answers.map((a) => a.events),
+    [["feedback:1:new"]],
+    "the event the question was asked about, under the id the source sent it with",
+  );
 });
 
 test("an answer while another run holds the thread joins the next run, and a merged run still carries it", () => {

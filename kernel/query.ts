@@ -149,20 +149,25 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
         const sourceName = rules.sources[source]?.name ?? source;
         return { id, source, sourceName, type, subject, summary, detail, link, receivedAt, hops: hops ?? 0 };
       }),
-      answers: answers.map(({ id: card, title, options, choice, answer: text, about, by, decided_at: at }) => {
-        const picked: string[] = JSON.parse(options);
-        return {
-          card,
-          title,
-          options: picked,
-          choice,
-          chosen: choice === null ? text : picked[choice],
-          text,
-          about,
-          by,
-          at,
-        };
-      }),
+      answers: answers.map(
+        ({ id: card, title, options, choice, answer: text, about, by, decided_at: at, run_id: asked }) => {
+          const picked: string[] = JSON.parse(options);
+          return {
+            card,
+            title,
+            options: picked,
+            choice,
+            chosen: choice === null ? text : picked[choice],
+            text,
+            about,
+            by,
+            at,
+            // The round that asked is the only way back to what the question was about: this round's own events are the
+            // answer alone, so without these a source cannot tie what the answer led to back to the id it sent (#320).
+            events: asked === null ? [] : eventsOf(view, asked).map((event) => event.key),
+          };
+        },
+      ),
       timers: timers.map(timerView),
       waiting: waiting.sort((a, b) => a.at.localeCompare(b.at)).map(timerView),
       open: openInScope(view, run).map(({ id, title, text, created_at }) => ({
