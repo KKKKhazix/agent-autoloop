@@ -370,8 +370,8 @@ export function createWorker({
 
   /**
    * The session a run is in when its CLI hasn't said. The one made up after the old one couldn't be gone on in counts once
-   * that run has started: a CLI that never got going (Codex makes up its own) has no such session, and handing it in would
-   * take the old one's place, so the retry would start over in a new one.
+   * that run has started: a CLI that never got going, or one that names its own sessions, has no such session, and handing
+   * it in would take the old one's place, so the retry would start over in a new one.
    */
   function madeUp(entry: Entry, adapter: Adapter, seen: Reading) {
     return adapter.link && (!entry.triedFresh || seen.started) ? entry.session : undefined;
