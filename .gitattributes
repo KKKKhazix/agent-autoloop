@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
+
+# Unified diffs retain their context indentation.
+plugins/feishu/fast-cli.patch -whitespace

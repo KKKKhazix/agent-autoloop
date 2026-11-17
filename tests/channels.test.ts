@@ -59,10 +59,10 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.deepEqual(blocks[1].behaviors[0].value, { card: 5, choice: 1 });
   assert.equal(blocks[1].border_color, "blue", "what's recommended stands out");
   const said = (card: Card) => JSON.stringify(render(card).body.elements);
-  assert.match(said({ ...base, state: "decided", choice: 1 }), /你选了「留着」，已记录/);
+  assert.match(said({ ...base, state: "decided", choice: 1 }), /已收到确认：留着。等待执行。/);
   assert.ok(!said({ ...base, state: "decided", choice: 1 }).includes("callback"));
   assert.match(said({ ...base, state: "done", choice: 0, result: "删了" }), /你选了「删」。已执行：删了/);
-  assert.match(said({ ...base, state: "decided", answer: "归档" }), /你选了「归档」/);
+  assert.match(said({ ...base, state: "decided", answer: "归档" }), /已收到确认：归档。等待执行。/);
   assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /不用决定了：问题自己好了/);
   assert.match(said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }), /已处理/);
   const noticeOpen = JSON.stringify(render({ ...base, kind: "notice", options: [] }).body.elements);

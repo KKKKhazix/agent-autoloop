@@ -4,6 +4,7 @@
 //   "channels": { "feishu": { "key": "…", "user": "ou_xxx" } } in config.json
 //   "channels": { "feishu": { "name": "飞书", "answerers": ["ou_xxx"] } } in rules.json: who may answer.
 import { execFile, spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 import { eachLine } from "../../host/lines.ts";
 import { commandLine } from "../../host/command.ts";
@@ -20,7 +21,7 @@ function safeJson(text: unknown): any {
 
 function outcomeOf(card: Card) {
   const chosen = card.choice === null ? card.answer : card.options[card.choice];
-  if (card.state === "decided") return `你选了「${chosen}」，已记录，等待处理。`;
+  if (card.state === "decided") return `已收到确认：${chosen}。等待执行。`;
   if (card.state === "done") return `你选了「${chosen}」。${card.result ? `已执行：${card.result}` : "已执行。"}`;
   if (card.state === "closed" && card.kind === "ask") return `不用决定了：${card.result ?? ""}`;
   return card.state === "closed" && card.result ? card.result : null;
@@ -121,8 +122,45 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   const owner = (options.user as string | undefined) ?? (await lark(["auth", "status"], "")).identities?.user?.openId;
   if (!owner) throw new Error("飞书通道要在 config.json 写 user，或者先 lark-cli auth login");
 
-  const updateMessage = (ref: string, content: string) =>
-    lark(["im", "messages", "patch", "--message-id", ref, "--as", "bot", "--data", "-"], JSON.stringify({ content }));
+  const fastCli = typeof options.fastCli === "string" ? options.fastCli : null;
+  function startPatches(cli: string) {
+    const child = spawn(...commandLine([cli, "autoloop-card-patches"]), {
+      stdio: ["pipe", "pipe", "ignore"],
+      signal,
+    });
+    child.on("error", () => {});
+    child.stdin.on("error", () => {});
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const replies = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    return { child, closed, replies };
+  }
+  let patches = fastCli ? startPatches(fastCli) : null;
+
+  async function updateMessage(ref: string, content: string) {
+    if (fastCli && !signal.aborted) {
+      const current = (patches ??= startPatches(fastCli));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          current.child.stdin.write(JSON.stringify({ ref, content }) + "\n", (error) =>
+            error ? reject(error) : resolve(),
+          );
+        });
+        const reply = await current.replies.next();
+        if (!reply.done && JSON.parse(reply.value).ok === true) return;
+        throw new Error("patch not confirmed");
+      } catch {
+        current.child.kill();
+        await current.closed;
+        patches = null;
+        if (signal.aborted) throw signal.reason;
+        log("飞书快速更新失败，用原方式重试这张卡片");
+      }
+    }
+    await lark(
+      ["im", "messages", "patch", "--message-id", ref, "--as", "bot", "--data", "-"],
+      JSON.stringify({ content }),
+    );
+  }
 
   /** Sends the card's words as a new message, or hands back the one an earlier try with this key already made. */
   async function sendMessage(key: string, content: string) {
@@ -168,8 +206,7 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   }
 
   /** Only the owner's click on the card that was sent counts; the hub checks both. */
-  async function clicked(line: string) {
-    const event = JSON.parse(line);
+  async function clicked(event: Record<string, any>) {
     const form = safeJson(event.form_value);
     const value = safeJson(event.action_value);
     // A form's submit button can't carry a value, so its name holds the card's number.
@@ -182,7 +219,7 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
         : words
           ? Number(words[1])
           : null;
-    if (!Number.isInteger(cardId)) return;
+    if (!Number.isInteger(cardId)) return "ignored" as const;
     const note = typeof form?.note === "string" ? form.note : undefined;
     const given: { choice?: number; by?: string; ref?: string; text?: string } = {
       by: event.operator_id,
@@ -190,34 +227,58 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
     };
     if (words) {
       // An ask card's text form answers with the words alone; an empty one is no answer at all.
-      if (!note || !note.trim()) return;
+      if (!note || !note.trim()) return "ignored" as const;
       given.text = note;
     } else {
       // A notice's only option is that it's been handled, so submitting its form picks it.
       const choice = Number.isInteger(value?.choice) ? value.choice : form ? 0 : null;
-      if (choice === null) return;
+      if (choice === null) return "ignored" as const;
       given.choice = choice;
       if (note !== undefined) given.text = note;
     }
     const answer = await hub.answer(cardId, given);
     const how = words ? "text submitted" : form ? "note submitted" : "answered";
     log(`card ${cardId}: ${how} by ${event.operator_id}, ${answer.changed ? "counted" : "already settled"}`);
+    return answer.changed ? "accepted" : "duplicate";
   }
 
   async function listen() {
+    let listener = fastCli;
     while (!signal.aborted) {
       // stdin stays open: lark-cli ends an unbounded consume when its stdin closes.
-      const consume = spawn(...commandLine([program, "event", "consume", "card.action.trigger", "--as", "bot"]), {
+      const toast = listener !== null && options.callbackToast === true;
+      const args = toast ? ["autoloop-card-callbacks"] : ["event", "consume", "card.action.trigger", "--as", "bot"];
+      const consume = spawn(...commandLine([listener ?? program, ...args]), {
         stdio: ["pipe", "pipe", "pipe"],
+        ...(listener &&
+          !toast && {
+            env: { ...process.env, AUTOLOOP_FEISHU_SKIP_CARD_LOOKUP: "1" },
+          }),
       });
       // Unheard, this would end the whole hub. A process that never started still closes, which starts it again below.
       consume.on("error", (error) => log(`the click listener couldn't run: ${error}`));
       const stop = () => consume.kill();
       signal.addEventListener("abort", stop);
+      consume.stdin.on("error", () => {});
       eachLine(consume.stderr, log);
-      eachLine(consume.stdout, (line) => void clicked(line).catch((error) => log(`click not handled: ${error}`)));
+      eachLine(consume.stdout, (line) => {
+        void (async () => {
+          const event = JSON.parse(line);
+          const outcome = await clicked(event).catch((error) => {
+            log(`click not handled: ${error}`);
+            return "failed";
+          });
+          if (toast && Number.isSafeInteger(event.receipt) && !consume.stdin.destroyed) {
+            consume.stdin.write(JSON.stringify({ receipt: event.receipt, outcome }) + "\n");
+          }
+        })().catch((error) => log(`click not handled: ${error}`));
+      });
       await new Promise((resolve) => consume.on("close", resolve));
       signal.removeEventListener("abort", stop);
+      if (listener && !signal.aborted) {
+        listener = null;
+        continue;
+      }
       if (!signal.aborted) {
         log("the click listener stopped; starting it again in 10 seconds");
         await new Promise((resolve) => setTimeout(resolve, 10_000));

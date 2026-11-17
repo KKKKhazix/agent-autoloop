@@ -1,0 +1,282 @@
+diff --git a/cmd/autoloop_callbacks.go b/cmd/autoloop_callbacks.go
+new file mode 100644
+index 0000000..cbf1873
+--- /dev/null
++++ b/cmd/autoloop_callbacks.go
+@@ -0,0 +1,177 @@
++// SPDX-License-Identifier: MIT
++package cmd
++
++import (
++	"bufio"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/larksuite/cli/internal/cmdutil"
++	"github.com/larksuite/cli/internal/core"
++	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
++	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
++	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
++	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
++	"github.com/spf13/cobra"
++)
++
++type callbackReply struct {
++	Receipt uint64 `json:"receipt"`
++	Outcome string `json:"outcome"`
++}
++
++type callbackBridge struct {
++	mu      sync.Mutex
++	next    uint64
++	pending map[uint64]chan string
++	out     *json.Encoder
++	log     io.Writer
++}
++
++func (b *callbackBridge) replies(in io.Reader) {
++	scan := bufio.NewScanner(in)
++	for scan.Scan() {
++		var reply callbackReply
++		if json.Unmarshal(scan.Bytes(), &reply) != nil {
++			continue
++		}
++		b.mu.Lock()
++		if ch := b.pending[reply.Receipt]; ch != nil {
++			delete(b.pending, reply.Receipt)
++			ch <- reply.Outcome
++		}
++		b.mu.Unlock()
++	}
++}
++
++func callbackValues(values map[string]interface{}) string {
++	if len(values) == 0 {
++		return ""
++	}
++	encoded, _ := json.Marshal(values)
++	return string(encoded)
++}
++
++func (b *callbackBridge) onCard(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
++	start := time.Now()
++	action := event.Event
++	if action == nil || action.Operator == nil || action.Context == nil || action.Action == nil {
++		return &callback.CardActionTriggerResponse{}, nil
++	}
++	wait := make(chan string, 1)
++	b.mu.Lock()
++	b.next++
++	id := b.next
++	b.pending[id] = wait
++	err := b.out.Encode(map[string]interface{}{
++		"receipt": id, "operator_id": action.Operator.OpenID,
++		"message_id": action.Context.OpenMessageID, "action_name": action.Action.Name,
++		"action_value": callbackValues(action.Action.Value), "form_value": callbackValues(action.Action.FormValue),
++	})
++	b.mu.Unlock()
++	defer func() {
++		b.mu.Lock()
++		delete(b.pending, id)
++		b.mu.Unlock()
++	}()
++
++	outcome := "failed"
++	if err == nil {
++		ctx, cancel := context.WithDeadline(ctx, start.Add(1800*time.Millisecond))
++		defer cancel()
++		select {
++		case outcome = <-wait:
++		case <-ctx.Done():
++		}
++	}
++
++	var response callback.CardActionTriggerResponse
++	switch outcome {
++	case "accepted":
++		response.Toast = &callback.Toast{Type: "success", Content: "已收到确认"}
++	case "duplicate":
++		response.Toast = &callback.Toast{Type: "info", Content: "这张卡片已经处理过，请查看卡片状态"}
++	case "ignored":
++		return &response, nil
++	default:
++		response.Toast = &callback.Toast{Type: "warning", Content: "暂未确认，请查看卡片状态后重试"}
++	}
++	fmt.Fprintf(b.log, "飞书卡片回调 %s，服务端处理 %d ms\n", outcome, time.Since(start).Milliseconds())
++	return &response, nil
++}
++
++// The SDK's connection URL contains connection credentials, so log only the lifecycle.
++type callbackLogger struct {
++	out   io.Writer
++	ready chan struct{}
++	once  sync.Once
++}
++
++func (*callbackLogger) Debug(context.Context, ...interface{}) {}
++func (logger *callbackLogger) Info(_ context.Context, args ...interface{}) {
++	if len(args) > 0 && strings.HasPrefix(fmt.Sprint(args[0]), "connected to ") {
++		logger.once.Do(func() { close(logger.ready) })
++		fmt.Fprintln(logger.out, "飞书卡片回调长连接已建立")
++	}
++}
++func (*callbackLogger) Warn(context.Context, ...interface{})  {}
++func (*callbackLogger) Error(context.Context, ...interface{}) {}
++
++func newAutoloopCallbacks(f *cmdutil.Factory) *cobra.Command {
++	return &cobra.Command{
++		Use:   "autoloop-card-callbacks",
++		Short: "Receive card callbacks and respond after the hub records them",
++		Args:  cobra.NoArgs,
++		RunE: func(cmd *cobra.Command, _ []string) error {
++			config, err := f.Config()
++			if err != nil {
++				return err
++			}
++			if !config.CanBot() || config.AppSecret == "" {
++				return errors.New("Feishu bot credentials unavailable")
++			}
++			ctx, cancel := context.WithCancel(cmd.Context())
++			defer cancel()
++			bridge := &callbackBridge{
++				out: json.NewEncoder(f.IOStreams.Out), log: f.IOStreams.ErrOut,
++				pending: make(map[uint64]chan string),
++			}
++			go func() {
++				bridge.replies(f.IOStreams.In)
++				cancel()
++			}()
++			d := dispatcher.NewEventDispatcher("", "").OnP2CardActionTrigger(bridge.onCard)
++			logger := &callbackLogger{out: f.IOStreams.ErrOut, ready: make(chan struct{})}
++			d.InitConfig(larkevent.WithLogger(logger))
++			listener := larkws.NewClient(config.AppID, config.AppSecret,
++				larkws.WithEventHandler(d), larkws.WithDomain(core.ResolveOpenBaseURL(config.Brand)),
++				larkws.WithLogger(logger))
++			done := make(chan error, 1)
++			go func() { done <- listener.Start(ctx) }()
++			timer := time.NewTimer(12 * time.Second)
++			defer timer.Stop()
++			select {
++			case <-ctx.Done():
++				return nil
++			case <-done:
++				return errors.New("Feishu card callback connection closed")
++			case <-timer.C:
++				return errors.New("Feishu card callback connection not ready")
++			case <-logger.ready:
++				timer.Stop()
++			}
++			select {
++			case <-ctx.Done():
++				return nil
++			case <-done:
++				return errors.New("Feishu card callback connection closed")
++			}
++		},
++	}
++}
+diff --git a/cmd/autoloop_cards.go b/cmd/autoloop_cards.go
+new file mode 100644
+index 0000000..47e19dd
+--- /dev/null
++++ b/cmd/autoloop_cards.go
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: MIT
++package cmd
++
++import (
++	"bufio"
++	"context"
++	"encoding/json"
++	"net/http"
++	"regexp"
++	"time"
++
++	"github.com/larksuite/cli/internal/client"
++	"github.com/larksuite/cli/internal/cmdutil"
++	"github.com/larksuite/cli/internal/core"
++	"github.com/larksuite/cli/internal/credential"
++	"github.com/spf13/cobra"
++)
++
++var cardMessageID = regexp.MustCompile("^om_[a-zA-Z0-9_-]+$")
++
++func newAutoloopCards(f *cmdutil.Factory) *cobra.Command {
++	return &cobra.Command{
++		Use:   "autoloop-card-patches",
++		Short: "Update Feishu cards over a single authenticated client",
++		Args:  cobra.NoArgs,
++		RunE: func(cmd *cobra.Command, _ []string) error {
++			api, err := f.NewAPIClient()
++			if err != nil {
++				return err
++			}
++			ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
++			_, _ = api.Credential.ResolveToken(ctx, credential.NewTokenSpec(core.AsBot, api.Config.AppID))
++			cancel()
++			in := bufio.NewScanner(f.IOStreams.In)
++			in.Buffer(make([]byte, 4096), 128*1024)
++			out := json.NewEncoder(f.IOStreams.Out)
++			for in.Scan() {
++				var req struct {
++					Ref     string `json:"ref"`
++					Content string `json:"content"`
++				}
++				result := map[string]bool{"ok": false}
++				if json.Unmarshal(in.Bytes(), &req) == nil && cardMessageID.MatchString(req.Ref) && len(req.Content) <= 30*1024 && json.Valid([]byte(req.Content)) {
++					ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
++					response, err := api.CallAPI(ctx, client.RawApiRequest{
++						Method: http.MethodPatch, URL: "/open-apis/im/v1/messages/" + req.Ref,
++						Data: map[string]string{"content": req.Content}, As: core.AsBot,
++					})
++					cancel()
++					result["ok"] = err == nil && api.CheckResponse(response, core.AsBot) == nil
++				}
++				if err := out.Encode(result); err != nil {
++					return err
++				}
++			}
++			return in.Err()
++		},
++	}
++}
+diff --git a/cmd/build.go b/cmd/build.go
+index ae999c8..bc9ec58 100644
+--- a/cmd/build.go
++++ b/cmd/build.go
+@@ -492,6 +492,8 @@ func assembleInternal(
+ 	rootCmd.AddCommand(doctor.NewCmdDoctorWithRecovery(f, runtime.recovery))
+ 	rootCmd.AddCommand(whoami.NewCmdWhoamiWithRecovery(f, runtime.recovery))
+ 	rootCmd.AddCommand(api.NewCmdApiWithContext(ctx, f, nil))
++	rootCmd.AddCommand(newAutoloopCards(f))
++	rootCmd.AddCommand(newAutoloopCallbacks(f))
+ 	rootCmd.AddCommand(schema.NewCmdSchemaWithVisibility(f, func(path []string) bool {
+ 		return runtime.surface.CanReference(surface.CommandID(strings.Join(path, "/")))
+ 	}, nil))
+diff --git a/events/im/card_action.go b/events/im/card_action.go
+index 678477c..85920b0 100644
+--- a/events/im/card_action.go
++++ b/events/im/card_action.go
+@@ -6,6 +6,7 @@ package im
+ import (
+ 	"context"
+ 	"encoding/json"
++	"os"
+ 	"strings"
+ 
+ 	"github.com/larksuite/cli/internal/event"
+@@ -87,7 +88,7 @@ func processCardAction(ctx context.Context, rt event.APIClient, raw *event.RawEv
+ 		Timezone:    envelope.Event.Action.Timezone,
+ 	}
+ 
+-	if out.MessageID != "" && rt != nil {
++	if out.MessageID != "" && rt != nil && os.Getenv("AUTOLOOP_FEISHU_SKIP_CARD_LOOKUP") != "1" {
+ 		out.CardContent = fetchCardUserDSL(ctx, rt, out.MessageID)
+ 	}
+ 
