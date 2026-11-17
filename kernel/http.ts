@@ -213,7 +213,7 @@ async function cardAction(call: Call, id: number, action: string) {
 const CONTROL_FIELDS: Record<string, string[]> = {
   pause: ["reason", "until"],
   resume: [],
-  run: ["subject", "reason"],
+  run: ["subject", "reason", "expectedRun", "expectedAgent", "expectedAttempts", "expectedNotBefore", "relatedRules"],
   replay: ["since"],
 };
 const CONTROL_INPUTS: Record<string, string> = {

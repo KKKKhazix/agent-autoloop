@@ -719,8 +719,70 @@ const CONTROL = {
       summary: `${by} 手动运行`,
       detail: reason,
     });
+    const guarded =
+      given &&
+      ["expectedRun", "expectedAgent", "expectedAttempts", "expectedNotBefore"].some((key) =>
+        Object.hasOwn(given, key),
+      );
+    if (guarded) {
+      const { expectedRun, expectedAgent, expectedAttempts, expectedNotBefore } = given;
+      if (
+        !Number.isSafeInteger(expectedRun) ||
+        expectedRun <= 0 ||
+        typeof expectedAgent !== "string" ||
+        !expectedAgent ||
+        !Number.isSafeInteger(expectedAttempts) ||
+        expectedAttempts < 0 ||
+        typeof expectedNotBefore !== "string" ||
+        !Number.isFinite(Date.parse(expectedNotBefore))
+      ) {
+        throw new InputError("expectedRun、expectedAgent、expectedAttempts、expectedNotBefore 必须一起填写有效值");
+      }
+      const { relatedRules = [name] } = given;
+      if (
+        !Array.isArray(relatedRules) ||
+        !relatedRules.length ||
+        relatedRules.length > 20 ||
+        new Set(relatedRules).size !== relatedRules.length ||
+        !relatedRules.includes(name) ||
+        relatedRules.some(
+          (related) => typeof related !== "string" || !draft.rules.rules.some((item) => item.name === related),
+        )
+      ) {
+        throw new InputError("relatedRules 要是包含当前规则的 1 到 20 个不重复的现有规则名");
+      }
+      const run = draft.view.get("runs", expectedRun);
+      const lane = rule.parallel ? subject : "";
+      const sameTask = (other: Row) =>
+        other.lane === lane && (relatedRules.includes(other.rule) || other.grp === run?.grp);
+      const active = rows(draft.view, "runs", { state: ["claimed", "unknown"] }).some(sameTask);
+      const asked = rows(draft.view, "cards", { state: "open", kind: "ask" }).some(sameTask);
+      // Compare the attempt too: the same run id may have been claimed and failed again since display.
+      if (
+        !run ||
+        run.rule !== name ||
+        run.grp !== rule.group ||
+        run.lane !== lane ||
+        run.state !== "queued" ||
+        !(run.attempts > 0 || run.error) ||
+        !(Date.parse(run.not_before) > draft.now) ||
+        run.attempts !== expectedAttempts ||
+        run.not_before !== expectedNotBefore ||
+        rule.to !== expectedAgent ||
+        active ||
+        asked ||
+        !eventsOf(draft.view, run.id).length ||
+        eventsOf(draft.view, run.id).some((item) => item.subject !== subject)
+      ) {
+        throw new Conflict("任务状态已变化，请刷新后重试；没有新建或重复运行任务");
+      }
+    }
+    if (!guarded && given?.relatedRules !== undefined) {
+      throw new InputError("relatedRules 只能和完整的立即重试保护字段一起填写");
+    }
     const eventId = recordEvent(draft, source, event, [name]);
-    const run = enqueue(draft, rule, eventId, rule.parallel ? subject : "");
+    const run = guarded ? given.expectedRun : enqueue(draft, rule, eventId, rule.parallel ? subject : "");
+    if (guarded) put(draft, "run_events", `${run}:${eventId}`, { run_id: run, event_id: eventId });
     // Waiting out a retry's backoff wouldn't be now: the owner asking is the go-ahead.
     put(draft, "runs", run, { manual: 1, not_before: draft.at });
     return { event: eventId, run };
