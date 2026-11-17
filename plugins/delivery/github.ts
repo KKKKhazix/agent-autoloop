@@ -139,20 +139,15 @@ export function githubHost(repo: string, io: Pick<DeliveryIO, "api" | "now">): D
     async newestCheck(config, head) {
       return (await newestRun(config, head))?.id ?? 0;
     },
-    async checks(config: Settings, head, after = 0) {
+    async checks(config: Settings, head, after = 0, startedAt = io.now?.() ?? Date.now()) {
       const { job } = config.check;
       const run = await newestRun(config, head);
-      if (!run || run.id <= after) return "waiting";
+      const now = io.now?.() ?? Date.now();
+      if (!run || run.id <= after) return now - startedAt > STALL ? "stalled" : "waiting";
       const jobs = (await io.api(`actions/runs/${run.id}/jobs?filter=latest&per_page=100`)).jobs;
-      // A queued run with no jobs for minutes on end is GitHub holding it back, not a check still running.
-      if (
-        !jobs.length &&
-        ["queued", "waiting", "pending"].includes(run.status) &&
-        (io.now?.() ?? Date.now()) - Date.parse(run.created_at) > STALL
-      )
-        return "stalled";
       const required = jobs.filter((candidate: any) => candidate.name === job || candidate.name.startsWith(`${job} (`));
-      if (!required.length) return "waiting";
+      if (!required.length)
+        return run.status !== "completed" && now - Date.parse(run.created_at) > STALL ? "stalled" : "waiting";
       if (run.status === "completed" && run.conclusion !== "success") return "failed";
       const finished = (item: any) => item.status === "completed" && item.conclusion === "success";
       return finished(run) && required.every(finished) ? "passed" : "waiting";

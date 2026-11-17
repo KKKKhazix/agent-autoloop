@@ -97,8 +97,9 @@ export async function fullCheck(
   config: Settings,
   io: DeliveryIO,
   after = 0,
+  startedAt = io.now?.() ?? Date.now(),
 ): Promise<"passed" | "waiting" | "failed" | "stalled"> {
-  return hostFor(io, config.repo).checks(config, head, after);
+  return hostFor(io, config.repo).checks(config, head, after, startedAt);
 }
 
 export async function waitLive(
@@ -303,6 +304,7 @@ export async function deliver(
       if (io.checkRecovery?.head === head) io.checkRecovery.after = after;
       await host.ready(number);
     }
+    let checkStartedAt = io.now?.() ?? Date.now();
     let merging = false;
     let autoRequested = false;
     let autoOn = current.autoMerge;
@@ -315,7 +317,7 @@ export async function deliver(
     };
     try {
       for (;;) {
-        const state = await host.checks(config, head, after);
+        const state = await host.checks(config, head, after, checkStartedAt);
         change = await host.change(number);
         autoOn = change.autoMerge;
         if (change.merged) break rounds;
@@ -350,6 +352,7 @@ export async function deliver(
           after = await host.newestCheck(config, head);
           io.checkRecovery.after = after;
           await host.ready(number);
+          checkStartedAt = io.now?.() ?? Date.now();
           continue;
         }
         if (state === "failed") {

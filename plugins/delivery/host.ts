@@ -56,9 +56,14 @@ export type DeliveryHost = {
   /** The id of the newest full-check run of a commit, or 0 without one: runs up to it were a draft's. */
   newestCheck(config: Settings, head: string): Promise<number>;
   /** The state of the change's full check: the workflow run and its required job. A run with an id up to `after`
-   * is not counted, since a draft's run passing says nothing about the change made ready. Stalled is a run the
-   * host took but never started, which only starting it over can shake loose. */
-  checks(config: Settings, head: string, after?: number): Promise<"passed" | "waiting" | "failed" | "stalled">;
+   * is not counted, since a draft's run passing says nothing about the change made ready. Stalled is no usable run
+   * or required job since `startedAt` (when the host last went ready), which only starting it over can shake loose. */
+  checks(
+    config: Settings,
+    head: string,
+    after?: number,
+    startedAt?: number,
+  ): Promise<"passed" | "waiting" | "failed" | "stalled">;
   /** The Ship runs on main, newest first: their id and page, which commit they built, whether each finished and
    * succeeded. */
   shipRuns(config: Settings): Promise<{ id: number; url: string; sha: string; completed: boolean; ok: boolean }[]>;

@@ -13,6 +13,7 @@ import { pendingEvents } from "./input.ts";
 
 const REPO = /^[\w.-]+\/[\w.-]+$/;
 const LONGEST_WAIT = 1800000;
+const STALL = 10 * 60_000;
 const DRAFT = /^Draft[:\s]+/;
 
 export function glab(args: string[], input?: object) {
@@ -47,7 +48,7 @@ const fromGitlabStatus = (status: string) =>
   status === "success" ? "success" : status === "failed" ? "failure" : "pending";
 
 /** GitLab's REST dialect, spoken once: the host's words go in, the project's paths come out. */
-export function gitlabHost(repo: string, io: Pick<DeliveryIO, "api">): DeliveryHost {
+export function gitlabHost(repo: string, io: Pick<DeliveryIO, "api" | "now">): DeliveryHost {
   void repo;
   const fileAt = async (ref: string, path: string) => {
     try {
@@ -128,10 +129,11 @@ export function gitlabHost(repo: string, io: Pick<DeliveryIO, "api">): DeliveryH
     async newestCheck(_config, head) {
       return (await newestPipeline(head))?.id ?? 0;
     },
-    async checks(_config, head, after = 0) {
+    async checks(_config, head, after = 0, startedAt = io.now?.() ?? Date.now()) {
       // Manual and skipped are waits, never a pass.
       const newest = await newestPipeline(head);
-      if (!newest || newest.id <= after) return "waiting";
+      const now = io.now?.() ?? Date.now();
+      if (!newest || newest.id <= after) return now - startedAt > STALL ? "stalled" : "waiting";
       if (newest.status === "success") return "passed";
       if (newest.status === "failed") return "failed";
       return "waiting";
