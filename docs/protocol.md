@@ -44,7 +44,7 @@
 ```jsonc
 {
   "timezone": "Asia/Shanghai", // 定时和“今天”用的时区，默认系统时区
-  "askFirst": ["删数据", "停服", "花钱", "对外发消息"], // 只有这几类事 Agent 才先问你
+  "askFirst": ["删数据", "停服", "花钱", "对外发消息", "改产品方向", "新建或轮换密钥", "修改权限"], // 只有这几类事 Agent 才先问你；不写就是这 7 类
   "sources": { "shop": { "name": "shop" }, "github": { "name": "GitHub", "adapter": "github" } },
   "agents": {
     "claude": {
