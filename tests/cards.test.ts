@@ -25,8 +25,8 @@
 // ordinary notices, questions, quiet rules, and the one-day FYI delivery window must keep their existing behavior.
 // The why timeline must show receipt FYIs without adding empty closures or repeating hub-generated end notices.
 // The answers material carries the chosen text, or a 0-based choice gets read as the first option (issue #197: an Agent
-// reported 绿色 as 蓝色). It doesn't carry the events the question was asked about, so a source can't tie what the answer
-// led to back to the id it sent (issue #320).
+// reported 绿色 as 蓝色). It doesn't carry the events the question was asked about, or after a second question only the
+// first answer, so a source can't tie what the answer led to back to the id it sent (issue #320).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -147,6 +147,15 @@ test("a decision names the events it was asked about, so a source can tie the re
     job.context.answers.map((a) => a.events),
     [["feedback:1:new"]],
     "the event the question was asked about, under the id the source sent it with",
+  );
+  // The round the answer woke asks again: its own events are that answer, but the id the source sent still comes through.
+  finish(job.run, job.token, { outcome: "done", session: "s-1", ask: [{ ...question, key: "again" }] }, at(3));
+  const again = one<{ id: number }>("SELECT id FROM cards WHERE run_id = ?", [job.run])!.id;
+  answer(again, { choice: 0, by: "me" }, at(4));
+  assert.deepEqual(
+    claim("w1", at(4))!.context.answers.map((a) => a.events),
+    [["feedback:1:new"]],
+    "a second question still names the event the source sent",
   );
 });
 

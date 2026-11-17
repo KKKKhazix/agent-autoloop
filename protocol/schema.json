@@ -916,7 +916,7 @@
           }
         }
       },
-      "required": ["card", "title", "options", "choice", "chosen", "text", "about", "by", "at"],
+      "required": ["card", "title", "options", "choice", "chosen", "text", "about", "by", "at", "events"],
       "additionalProperties": true
     },
     "context-timer": {

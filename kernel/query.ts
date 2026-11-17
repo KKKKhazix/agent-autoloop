@@ -37,6 +37,18 @@ export function eventsOf(view: View, runId: number) {
   return links.map((link) => view.get("events", link.event_id)!).sort((a, b) => a.id - b.id);
 }
 
+/** The ids of the events a round worked on, with an answer it was woken by followed back to what that question was about. */
+function askedAbout(view: View, runId: number | null, seen = new Set<number>()): string[] {
+  if (runId === null || seen.has(runId)) return [];
+  seen.add(runId);
+  const ids = eventsOf(view, runId).flatMap((event) => {
+    const cards = rows(view, "cards", { answer_event: event.id });
+    if (cards.length === 0) return [event.key];
+    return cards.flatMap((card) => (card.run_id === null ? [event.key] : askedAbout(view, card.run_id, seen)));
+  });
+  return [...new Set(ids)];
+}
+
 export function sourceOf(view: View, runId: number) {
   const sources = [...new Set(eventsOf(view, runId).map((event) => event.source))];
   return sources.length === 1 ? sources[0] : null;
@@ -164,7 +176,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
             at,
             // The round that asked is the only way back to what the question was about: this round's own events are the
             // answer alone, so without these a source cannot tie what the answer led to back to the id it sent (#320).
-            events: asked === null ? [] : eventsOf(view, asked).map((event) => event.key),
+            events: askedAbout(view, asked),
           };
         },
       ),
