@@ -197,6 +197,8 @@ function createCard(draft: Draft, spec: Row) {
   const [existing] = rows(draft.view, "cards", { key: spec.key, ...(!spec.once && { state: "open" }) }, 1, true);
   if (existing) return { card: existing.id, duplicate: true };
   const { once, run, options, fyi, quiet, routing, ...fields } = spec;
+  // Where a card goes is fixed as it is made: without a routing of its own, one naming a rule takes that rule's list
+  // as it stands now (or the notices narrowing), and never reads the rule again afterwards.
   const { channels: where, severity, answerers } = (routing as Routing | undefined) ?? noticesRouting(draft);
   const stored = {
     run_id: run ?? null,
@@ -625,10 +627,9 @@ function nextCard(draft: Draft, channel: string) {
   // channel dozing through them wakes at most one long poll later: the sleep is never billed as a delivery attempt.
   const dozing = inQuietHours(draft.rules.channels[channel]?.quiet, now, draft.rules.timezone);
   for (const card of draft.view.deliveryCandidates(channel, now)) {
-    // A card made for other channels is not this channel's to take, no matter how long it has waited.
-    // Cards that name no channels of their own fall back to their rule's list, then to defaultChannels.
-    const reach =
-      card.channels ?? (card.rule ? ruleNamed(draft, card.rule)?.channels : undefined) ?? draft.rules.defaultChannels;
+    // A card made for other channels is not this channel's to take, no matter how long it has waited. Where it goes
+    // was written on it when it was made; only a card with no list at all follows defaultChannels.
+    const reach = card.channels ?? draft.rules.defaultChannels;
     if (reach && !reach.includes(channel)) continue;
     if (dozing && card.severity !== "urgent") continue;
     const key = `${card.id}:${channel}`;
@@ -867,7 +868,13 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     const matter = key ?? digest(`${question.title}\n${question.text}`).slice(0, 32);
     const thread = { rule: name, lane: "", grp: name, source: task.source, agent: task.to };
     // A key of its own: told once for good, a notice under the same key would never get through after a question.
-    return createCard(draft, { ...question, key: `elsewhere-ask:${name}:${matter}`, kind: "ask", ...thread });
+    return createCard(draft, {
+      ...question,
+      key: `elsewhere-ask:${name}:${matter}`,
+      kind: "ask",
+      ...thread,
+      routing: ruleRouting(draft, name),
+    });
   },
   tell(draft, key, title, text) {
     const told = createCard(draft, { key, title, text, kind: "notice", fyi: true, once: true });

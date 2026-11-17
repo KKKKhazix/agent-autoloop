@@ -1,13 +1,13 @@
 // The delivery's way to GitLab: the signed-in `glab`, and bare Git objects fetched into a scratch folder. The REST
 // paths below are relative to the project; the api wrapper adds projects/<group%2Fname>/ to each.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import type { DeliveryIO } from "./delivery.ts";
 import type { Change, DeliveryHost } from "./host.ts";
 import type { DeliveryOptions } from "./github.ts";
-import { changedFiles, git, liveRelease, releaseRequired } from "./project.ts";
+import { changedFiles, git, isAncestor, liveRelease, releaseRequired } from "./project.ts";
 import { reviewDelivery } from "./review.ts";
 import { pendingEvents } from "./input.ts";
 
@@ -170,8 +170,6 @@ export function createIO(
     }
     git(bare, "fetch", "--no-tags", "origin", ...refs);
   };
-  const isAncestor = (base: string, head: string) =>
-    spawnSync("git", ["-C", bare, "merge-base", "--is-ancestor", head, base]).status === 0;
   const ancestors = new Map<string, boolean>();
   // GitLab's commit statuses carry no author, so a proof cannot be told from a forgery the way GitHub's can: whoever
   // can write one at all is a project member, and member-writable records are trusted the same either way here.
@@ -240,7 +238,7 @@ export function createIO(
       const key = `${base}:${head}`;
       if (!ancestors.has(key)) {
         fetchObjects(base, head);
-        ancestors.set(key, isAncestor(base, head));
+        ancestors.set(key, isAncestor(bare, base, head));
       }
       return ancestors.get(key)!;
     },

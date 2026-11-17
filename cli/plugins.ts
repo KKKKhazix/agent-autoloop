@@ -28,6 +28,12 @@ function git(dir: string, args: string[]): string {
   if (done.status !== 0 || done.error) fail(`git ${args[0]} 没成功：${done.stderr || done.error}`);
   return done.stdout.trim();
 }
+/** The same, for steps inside an install's try: throwing lets the caller's cleanup put things back. */
+function gitStep(dir: string, args: string[]): string {
+  const done = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  if (done.status !== 0 || done.error) throw new Error(`git ${args[0]} 没成功：${done.stderr || done.error}`);
+  return done.stdout.trim();
+}
 
 function loadLock(): Lock {
   try {
@@ -104,19 +110,19 @@ export function addPlugin(args: string[]) {
     restore !== null ? null : spawnSync("git", ["clone", "--quiet", "--", url, target], { encoding: "utf8" });
   try {
     if (restore !== null) {
-      git(target, ["fetch", "--quiet", "origin", "--tags"]);
-      git(target, ["checkout", "--quiet", restore]);
+      gitStep(target, ["fetch", "--quiet", "origin", "--tags"]);
+      gitStep(target, ["checkout", "--quiet", restore]);
     } else if (clone!.status !== 0) throw new Error(`安装失败：${clone!.stderr?.trim()}`);
     // The tag that was asked for, or the newest one there is, is the version being installed: its signature is what
     // must check out. A commit can carry several tags, so asking the checkout which one it likes would verify another
     // version's signature.
     let tag: string | undefined;
     if (ref) {
-      git(target, ["checkout", "--quiet", `refs/tags/${ref}`]);
+      gitStep(target, ["checkout", "--quiet", `refs/tags/${ref}`]);
       tag = ref;
     } else {
       const newest = versionTags(target)[0];
-      if (newest) git(target, ["checkout", "--quiet", `refs/tags/${newest}`]);
+      if (newest) gitStep(target, ["checkout", "--quiet", `refs/tags/${newest}`]);
       tag = newest;
     }
     const manifest = readManifest(target);
@@ -129,8 +135,8 @@ export function addPlugin(args: string[]) {
     const signed = tag ? verifyTag(target, tag, name) : null;
     lock[name] = {
       repo: url,
-      ref: tag ?? git(target, ["rev-parse", "--abbrev-ref", "HEAD"]),
-      commit: git(target, ["rev-parse", "HEAD"]),
+      ref: tag ?? gitStep(target, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      commit: gitStep(target, ["rev-parse", "HEAD"]),
       version: manifest?.version ?? null,
       signer: signed,
       at: new Date().toISOString(),
@@ -183,6 +189,9 @@ function list() {
 
 function remove(name: string | undefined) {
   if (!name) return fail("用法：agent-autoloop plugins remove <名字>");
+  // A name is the only thing that may be joined onto the plugins directory: anything else (`..`) would delete the
+  // home around it — the database, the master key — with one command.
+  if (!PLUGIN_NAME.test(name)) return fail(`插件名字「${name}」不能用：只能用小写字母、数字和 -`);
   const target = path.join(PLUGINS_DIR, name);
   const lock = loadLock();
   if (!existsSync(target) && !lock[name]) return fail(`没有叫 ${name} 的插件。`);

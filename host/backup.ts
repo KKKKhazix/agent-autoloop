@@ -212,7 +212,12 @@ export function restoreFrom(dir: string, { replace, now = Date.now() }: { replac
       rmSync(replaced, { recursive: true, force: true });
   }
   chmodSync(HOME, 0o700);
-  const was = existsSync(path.join(replaced ?? "", "master.key")) ? sha256(path.join(replaced!, "master.key")) : null;
+  // Only what was moved aside decides whether the key changed: joining a `replaced` of null would read the working
+  // directory, and any master.key lying there would answer for the home.
+  const was =
+    replaced !== null && existsSync(path.join(replaced, "master.key"))
+      ? sha256(path.join(replaced, "master.key"))
+      : null;
   return {
     facts: manifest.facts,
     replaced,

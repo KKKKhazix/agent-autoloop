@@ -22,6 +22,7 @@
 // stops reaching every channel; a notice of nobody's rule reaches only some. With defaultChannels, a card that names no
 // channels of its own (a tell, the hub's own alert, a task elsewhere asking, a rule without a list) still reaches every
 // channel, so several channels each repeat it (issue #221); and a rule that lists its own is held to the default.
+// Where a card goes was fixed when it was made: a rule listing channels only later never narrows a card already open.
 // Receipt FYIs must arrive closed without buttons, stay out of later open lists, and never wake work when clicked;
 // ordinary notices, questions, quiet rules, and the one-day FYI delivery window must keep their existing behavior.
 // The why timeline must show receipt FYIs without adding empty closures or repeating hub-generated end notices.
@@ -503,6 +504,23 @@ test("the state says when a channel's last card didn't get through, and stops sa
   assert.equal(stateOf(at(0)).channels.find((channel) => channel.id === "plain")!.lastFailure, undefined);
   delivered("chat", id, nextCard("chat", at(1))!.version, "om_1", at(1));
   assert.equal(chat(at(1)).lastFailure, undefined);
+});
+
+test("a rule that lists channels later doesn't narrow a card already made without a list", () => {
+  // The card was born going everywhere (issue: 协议说去向创建时定死); an owner narrowing the rule afterwards must not
+  // reach back and hide an open question from a channel it was promised to.
+  clean();
+  const { id } = asked(1);
+  assert.ok(nextCard("chat", at(0)), "chat sees the question while the rule lists no channels");
+  assert.ok(nextCard("plain", at(0)));
+  underRules(
+    (rules) => {
+      rules.rules.find((rule: { name: string }) => rule.name === "意见").channels = ["plain"];
+    },
+    () => {
+      assert.ok(nextCard("chat", at(1)), "the open card keeps where it was born to go");
+    },
+  );
 });
 
 test("a failed send is retried further and further apart, then given up within the hour; a channel that never came hasn't failed", () => {

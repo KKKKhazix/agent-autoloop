@@ -13,12 +13,14 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { credential } from "../kernel/credentials.ts";
@@ -265,4 +267,27 @@ test("恢复回到备份时的样子，改过的数据先挪到一边，恢复�
   assert.equal(listed.status, 0, listed.stderr);
   assert.match(listed.stdout, /owner owner/);
   assert.match(listed.stdout, /worker w1/);
+});
+
+test("恢复到空目录时 keyChanged 不看当前目录的 master.key", () => {
+  // Restoring into a home with nothing to replace reads no `was`: the relative path would land in whatever the
+  // process's working directory holds, and any master.key lying there would decide the answer.
+  const target = join(home, "backup-empty-home");
+  assert.equal(run("backup", target).status, 0);
+  const key = readFileSync(join(home, "master.key"), "utf8");
+  const elsewhere = mkdtempSync(join(tmpdir(), "agent-autoloop-restore-cwd-"));
+  writeFileSync(join(elsewhere, "master.key"), "not-a-real-key-in-cwd");
+  const previous = process.cwd();
+  process.chdir(elsewhere);
+  try {
+    for (const name of ["hub.db", "hub.db-wal", "hub.db-shm", "master.key", "config.json", "secrets.env", "rules.json"])
+      rmSync(join(home, name), { force: true });
+    const done = restoreFrom(target, { replace: true });
+    assert.equal(done.replaced, null, "nothing was there to replace");
+    assert.equal(done.keyChanged, false, "no replaced key, so no change to report — whatever the CWD holds");
+    assert.equal(readFileSync(join(home, "master.key"), "utf8"), key, "the backup's own key came back");
+  } finally {
+    process.chdir(previous);
+    rmSync(elsewhere, { recursive: true, force: true });
+  }
 });

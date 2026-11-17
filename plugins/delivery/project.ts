@@ -128,9 +128,13 @@ function globToRegExp(pattern: string) {
 export const matches = (name: string, patterns: string[]) =>
   patterns.some((pattern) => globToRegExp(pattern).test(name));
 
+/** Whether `base` is an ancestor of `head`: the same question everywhere a release or a sync is judged. */
+export function isAncestor(root: string, base: string, head: string) {
+  return spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd: root, stdio: "ignore" }).status === 0;
+}
+
 export function releaseRequired(root: string, base: string, head: string, patterns: string[]) {
-  const isAncestor = spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd: root, stdio: "ignore" });
-  if (isAncestor.status !== 0) return true;
+  if (!isAncestor(root, base, head)) return true;
   const records = git(
     root,
     "diff",
@@ -154,8 +158,7 @@ export function releaseRequired(root: string, base: string, head: string, patter
 /** The paths that differ between two commits, or null when one doesn't descend from the other. */
 export function changedFiles(root: string, base: string, head: string) {
   if (base === head) return [];
-  const isAncestor = spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd: root, stdio: "ignore" });
-  if (isAncestor.status !== 0) return null;
+  if (!isAncestor(root, base, head)) return null;
   return git(root, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", base, head, "--")
     .split("\0")
     .filter(Boolean);

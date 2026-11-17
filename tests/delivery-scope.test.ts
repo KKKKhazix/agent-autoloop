@@ -13,6 +13,7 @@ import {
   settings,
   matches,
   changedFiles,
+  isAncestor,
   releaseRequired,
   readMainSettings,
   liveRelease,
@@ -166,4 +167,14 @@ test("changed files come from the two commits' own trees; unknown history needs 
   assert.deepEqual(changedFiles(root, base, head)!.sort(), ["app.ts", "docs/a.md"]);
   assert.deepEqual(changedFiles(root, head, head), []);
   assert.equal(changedFiles(root, "0".repeat(40), head), null);
+});
+test("isAncestor asks one direction only: the older commit contains nothing that came after it", () => {
+  // The direction is the whole answer: backwards here reads an old release as covering a new change.
+  const base = git("rev-parse", "HEAD");
+  write("app.ts", "two");
+  const head = commit();
+  assert.equal(isAncestor(root, base, head), true, "what came before is inside what came after");
+  assert.equal(isAncestor(root, head, base), false, "what came after is not inside what came before");
+  assert.equal(isAncestor(root, head, head), true);
+  assert.equal(isAncestor(root, "0".repeat(40), head), false, "an unknown commit is in no history");
 });

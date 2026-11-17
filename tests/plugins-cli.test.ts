@@ -118,6 +118,32 @@ test("remove deletes the folder and the record, and says so when nothing is ther
   assert.match(again.stderr, /没有|装过/);
 });
 
+test("remove only ever takes a plugin name: the home around it survives .. and .", () => {
+  // A name is the only thing remove may join onto the plugins directory: otherwise `remove ..` deletes the whole
+  // home — hub.db, master.key, backups — with one command.
+  writeFileSync(join(home, "marker.txt"), "keep me");
+  for (const name of ["..", ".", "a/b", "-x", "Hello"]) {
+    const refused = cli("plugins", "remove", name);
+    assert.notEqual(refused.status, 0, `remove ${name} must be refused`);
+    assert.match(refused.stderr, /名字/);
+  }
+  assert.equal(existsSync(join(home, "marker.txt")), true, "the home is still there");
+  assert.equal(existsSync(home), true);
+});
+
+test("a first install that fails along the way leaves nothing behind", () => {
+  // Every check inside the install rolls back through the same catch: a `git` step failing there must not exit past
+  // the cleanup, or an unrecorded clone would block every later `add` until removed by hand.
+  const source = repository("halfway", { "plugin.json": manifest({ name: "halfway" }), "channel.ts": channelTs });
+  const failed = cli("add", source, "--ref", "v9.9.9");
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, /安装失败|没成功/);
+  assert.equal(existsSync(join(home, "plugins", "halfway")), false, "no orphan clone left behind");
+  assert.equal(lock()["halfway"], undefined, "and no install record either");
+  const again = cli("add", source);
+  assert.equal(again.status, 0, again.stderr, "a later install starts clean");
+});
+
 test("update --check reports a newer tag without changing anything", () => {
   const source = repository(
     "pinned",

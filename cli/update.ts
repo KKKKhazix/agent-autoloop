@@ -3,7 +3,7 @@
 // public repository follows its releases, which have passed every check, not main, which may not have yet; a copy from
 // anywhere else follows that place.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { HOME } from "../host/home.ts";
 
@@ -43,7 +43,9 @@ function upstream() {
 
 function remember(previous: string) {
   mkdirSync(HOME, { recursive: true, mode: 0o700 });
-  writeFileSync(REMEMBERED(), `${JSON.stringify({ previous }, null, 2)}\n`, { mode: 0o600 });
+  // Swapped in whole: a kill during the write must not leave half a record, which would brick going back.
+  writeFileSync(`${REMEMBERED()}.tmp`, `${JSON.stringify({ previous }, null, 2)}\n`, { mode: 0o600 });
+  renameSync(`${REMEMBERED()}.tmp`, REMEMBERED());
 }
 
 export function checkForUpdate() {

@@ -968,6 +968,32 @@ test("trouble with one run waits for the next round and holds up no other", asyn
   assert.equal(resultOf(hub, troubled).outcome, "done");
 });
 
+test("a run folder that can't even be made is this machine's trouble, not the hub's", async () => {
+  if (process.getuid!() === 0) return; // root writes anywhere; the failure can't be staged.
+  const hub = fakeHub();
+  const lines: string[] = [];
+  hub.jobs.push(job());
+  const runs = join(home, "worker", "runs");
+  mkdirSync(runs, { recursive: true });
+  chmodSync(runs, 0o500);
+  try {
+    const w = worker(hub, { log: (line: string) => lines.push(line) });
+    await w.tick();
+    assert.equal(w.entries().length, 0, "nothing was started, so nothing is held");
+    assert.ok(
+      lines.some((line) => line.includes("EACCES") || line.includes("EROFS")),
+      "the local reason is logged",
+    );
+    assert.equal(
+      lines.some((line) => line.includes("couldn't reach the hub")),
+      false,
+      "a full or locked disk says nothing about the hub",
+    );
+  } finally {
+    chmodSync(runs, 0o700);
+  }
+});
+
 /** A stand-in ACP agent the real bridge runs. Each launch adds a line to a file, for counting and for what it does next. */
 function acp(name: string, script: string) {
   const launches = join(folder, `${name}.launches`);

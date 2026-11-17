@@ -317,7 +317,14 @@ export function createWorker({
 
   async function start(job: Job) {
     const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Nowhere to put the run is this machine's trouble, not the hub's: said so here, and the round stays on the hub,
+    // which goes "unknown" on its own when the worker stops mentioning it.
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      log(`run ${job.run}: couldn't make its folder: ${error}`);
+      return;
+    }
     const entry: Entry = {
       run: job.run,
       token: job.token,
