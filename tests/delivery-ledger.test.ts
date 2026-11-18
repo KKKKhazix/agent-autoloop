@@ -3,7 +3,7 @@
 // an expanded deep-review path reuses an ordinary review, a suggestion holds the change back or needs a 处理 line, a
 // clean sync lets an unfixed blocking finding through, the round after a blocking one looks for new edge cases instead
 // of checking that finding, a third round runs instead of waiting for the owner, an owner decision written by an
-// untrusted account counts, and a reviewer renamed by the policy (an agent's deep reviewer, or the default raised to the
+// untrusted account or before the second round's findings counts, a whole-branch review forgets the last round's findings, and a reviewer renamed by the policy (an agent's deep reviewer, or the default raised to the
 // same depth) reviews the whole branch again.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -92,12 +92,14 @@ console.log(JSON.stringify({findings}));
     };
     const original = pr.body;
     const states = new Map<string, any[]>();
+    let tick = 0;
+    const at = () => new Date(Date.UTC(2026, 10, 19, 0, 0, tick++)).toISOString();
     const run = (verifyOnly = false, settings = config) =>
       reviewDelivery(repo, join(root, "snapshot"), main, pr, settings, {
         api: async (path, body, method) => {
           if (path.startsWith("statuses/")) {
             const sha = path.slice("statuses/".length);
-            states.set(sha, [{ ...body, creator: { id: 1 } }, ...(states.get(sha) ?? [])]);
+            states.set(sha, [{ ...body, creator: { id: 1 }, created_at: at() }, ...(states.get(sha) ?? [])]);
             return {};
           }
           assert.equal(path, "pulls/7");
@@ -140,8 +142,9 @@ console.log(JSON.stringify({findings}));
     commit("feature.txt", "bad change\n");
     pr.head.sha = commit("fix.txt", "still bad change\n");
     // One round isn't the owner's to settle: a decision written now doesn't skip the check.
-    states.set(pr.head.sha, [
-      { context: "delivery-owner/7", state: "success", description: "放行", creator: { id: 1 } },
+    const early = pr.head.sha;
+    states.set(early, [
+      { context: "delivery-owner/7", state: "success", description: "放行", creator: { id: 1 }, created_at: at() },
     ]);
     assert.deepEqual(await run(true), { changed: true });
     assert.match(((await run()) as { blocked: string }).blocked, /两轮.*负责人/);
@@ -152,8 +155,11 @@ console.log(JSON.stringify({findings}));
     assert.match(second.prompt, /有问题/);
     assert.match(pr.body, /第 2 轮[^\n]+挡上线 1 条，建议 0 条。\n\n已经审了两轮/);
 
-    // No third round: a new commit waits for the owner, whose decision only counts from a trusted account.
+    // A decision written before the second round didn't see its findings.
     pr.body = pr.body.replace(/处理：$/m, "处理：等负责人");
+    assert.match(((await run()) as { blocked: string }).blocked, /两轮.*负责人/);
+
+    // No third round: a new commit waits for the owner, whose decision only counts from a trusted account.
     pr.head.sha = commit("later.txt", "another try\n");
     assert.match(((await run()) as { blocked: string }).blocked, /两轮.*负责人/);
     const owner = (id: number) => ({
@@ -161,6 +167,7 @@ console.log(JSON.stringify({findings}));
       state: "success",
       description: "放行",
       creator: { id },
+      created_at: at(),
     });
     states.set(pr.head.sha, [owner(2), ...(states.get(pr.head.sha) ?? [])]);
     assert.match(((await run()) as { blocked: string }).blocked, /两轮.*负责人/);
@@ -173,7 +180,7 @@ console.log(JSON.stringify({findings}));
   }
 });
 
-test("a round after a clean one reviews the new commits in full; a new reviewer reviews the whole branch", async () => {
+test("a round after a clean one reviews the new commits in full; a new reviewer reviews the whole branch, known findings included", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-autoloop-ledger-"));
   try {
     const repo = join(root, "repo");
@@ -198,7 +205,8 @@ test("a round after a clean one reviews the new commits in full; a new reviewer 
       `import fs from 'node:fs';
 let prompt='';for await(const b of process.stdin)prompt+=b;
 fs.appendFileSync(process.argv[3],JSON.stringify({diff:fs.readFileSync(process.argv[2],'utf8'),prompt})+'\\n');
-console.log('{"findings":[]}');
+const findings=/^\\+.*bad/m.test(fs.readFileSync(process.argv[2],'utf8'))?[{level:'挡上线',title:'登录没校验',how:'每次登录',text:'谁都能进'}]:[];
+console.log(JSON.stringify({findings}));
 `,
     );
     const reviewed = join(root, "reviews.jsonl");
@@ -230,16 +238,20 @@ console.log('{"findings":[]}');
         verifyOnly,
       });
     assert.deepEqual(await run(), []);
-    pr.head.sha = commit("second.txt", "second\n");
-    assert.deepEqual(await run(), []);
+    pr.head.sha = commit("second.txt", "bad second\n");
+    assert.equal(((await run()) as unknown[]).length, 1);
     assert.match(rounds()[1].diff, /second/);
     assert.doesNotMatch(rounds()[1].diff, /first/);
     assert.doesNotMatch(rounds()[1].prompt, /这一轮核对/);
+    // A new depth reviews the whole branch afresh, and still with the finding the last round left.
+    pr.body = pr.body.replace("处理：", "处理：改了");
+    pr.head.sha = commit("third.txt", "third\n");
     const expandedDepth = { ...config, review: { ...config.review, xhigh: ["feature.txt"] } };
     assert.deepEqual(await run(true, expandedDepth), { changed: true });
-    assert.deepEqual(await run(false, expandedDepth), []);
+    await run(false, expandedDepth);
     assert.match(rounds()[2].diff, /first/);
-    assert.match(pr.body, /第 3 轮（[^\n]+，xhigh，审到 [^\n]+没有发现问题/);
+    assert.match(rounds()[2].prompt, /登录没校验/);
+    assert.match(pr.body, /第 3 轮（[^\n]+，xhigh，审到 /);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
