@@ -20,6 +20,12 @@ function visit(schema: any, item: any, path: string): string[] {
   if (schema.$ref) return visit(schemas.$defs[schema.$ref.split("/").at(-1)], item, path);
   if (schema.anyOf && !schema.anyOf.some(passes)) return [path];
   if (schema.oneOf && schema.oneOf.filter(passes).length !== 1) return [path];
+  if (schema.allOf) return schema.allOf.flatMap((part: any) => visit(part, item, path));
+  if (schema.if) {
+    const conditionHolds = visit(schema.if, item, path).length === 0;
+    const branch = conditionHolds ? schema.then : schema.else;
+    return branch ? visit(branch, item, path) : [];
+  }
   if (schema.const !== undefined && item !== schema.const) return [path];
   if (schema.enum && !schema.enum.includes(item)) return [path];
   const types: string[] = Array.isArray(schema.type) ? schema.type : [schema.type];
