@@ -817,7 +817,59 @@
               }
             },
             "required": ["table", "key", "row"],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": { "properties": { "table": { "const": "events" } } },
+                "then": {
+                  "properties": {
+                    "row": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "source": { "type": "string" },
+                        "key": { "type": "string" },
+                        "id": { "type": "integer", "minimum": 1 }
+                      },
+                      "required": ["source", "key", "id"]
+                    }
+                  }
+                }
+              },
+              {
+                "if": { "properties": { "table": { "const": "run_events" } } },
+                "then": {
+                  "properties": {
+                    "row": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "run_id": { "type": "integer", "minimum": 1 },
+                        "event_id": { "type": "integer", "minimum": 1 }
+                      },
+                      "required": ["run_id", "event_id"]
+                    }
+                  }
+                }
+              },
+              {
+                "if": { "properties": { "table": { "const": "cards" } } },
+                "then": {
+                  "properties": {
+                    "row": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "id": { "type": "integer", "minimum": 1 },
+                        "run_id": { "type": ["integer", "null"] },
+                        "state": { "type": "string" },
+                        "version": { "type": "integer", "minimum": 1 },
+                        "answer_event": { "type": ["integer", "null"] },
+                        "by": { "type": ["string", "null"] }
+                      },
+                      "required": ["id", "state", "version"]
+                    }
+                  }
+                }
+              }
+            ]
           }
         }
       },
