@@ -9,7 +9,14 @@
 // prints in quotes matches no pattern, so an exempt agent's change to a path reviewed in depth merges unreviewed.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseReview, codexCommand, declaredAgent, depth, reviewDelivery } from "../plugins/delivery/review.ts";
+import {
+  parseReview,
+  codexCommand,
+  declaredAgent,
+  depth,
+  reviewDelivery,
+  ROUND_BUDGET_MS,
+} from "../plugins/delivery/review.ts";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +31,7 @@ function reviewPullRequest(
   head: string,
   config: ReturnType<typeof settings>,
   source: { agent: string | null; required: boolean } = { agent: null, required: false },
+  budget?: () => number,
 ) {
   const pr = { number: 7, head: { sha: head }, labels: source.required ? [{ name: "deliver-review" }] : [], body: "" };
   const states = new Map<string, any[]>();
@@ -44,6 +52,7 @@ function reviewPullRequest(
     },
     statuses: (sha) => states.get(sha) ?? [],
     reviewerId: () => 1,
+    ...(budget && { budget }),
   });
 }
 test("a review must explicitly report a valid findings list", () => {
@@ -137,6 +146,8 @@ function project(review: (stand: (name: string) => string[]) => object = () => (
   const snapshot = join(root, "snapshot");
   return {
     repo,
+    snapshot,
+    config,
     main,
     git,
     identity,
@@ -301,3 +312,27 @@ test(
     assert.ok(p.reviewed());
   },
 );
+
+test("a round's budget caps a reviewer without disturbing one that finishes inside it", async () => {
+  using p = project();
+  p.write("app.ts", "export const version = 2;\n");
+  const head = p.commit();
+  const near = await p.review(head);
+  void near;
+  // A budget nearly spent still lets a stand-in reviewer that finishes at once have its say.
+  using q = project();
+  q.write("app.ts", "export const version = 3;\n");
+  assert.deepEqual(
+    await reviewPullRequest(
+      q.repo,
+      q.snapshot,
+      q.main,
+      q.commit(),
+      q.config,
+      undefined,
+      () => ROUND_BUDGET_MS - 60_000,
+    ),
+    [],
+    "预算内完成的审查照常",
+  );
+});

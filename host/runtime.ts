@@ -73,13 +73,12 @@ let current = openView(db, format, rebuilding);
 db.exec(CARD_HASH_INDEX);
 
 export const all = <T>(sql: string, params: SQLInputValue[] = []) =>
-  db
-    .prepare(sql)
+  statement(db, sql)
     .all(...params)
     .map((row) => ({ ...row }) as T);
 
 export const one = <T>(sql: string, params: SQLInputValue[] = []) => {
-  const row = db.prepare(sql).get(...params);
+  const row = statement(db, sql).get(...params);
   return row ? ({ ...row } as T) : undefined;
 };
 
@@ -252,8 +251,7 @@ export const listKeys = () =>
   all<{ kind: string; name: string; created_at: string }>("SELECT kind,name,created_at FROM keys ORDER BY kind,name");
 export const whose = (kind: string, key: string) => keyHolder(getView(), kind, key);
 export const logAfter = (after = 0, limit = -1) =>
-  db
-    .prepare("SELECT fact FROM facts WHERE seq > ? ORDER BY seq LIMIT ?")
+  statement(db, "SELECT fact FROM facts WHERE seq > ? ORDER BY seq LIMIT ?")
     .all(after, limit)
     .map((row) => query.safeFact(JSON.parse(String(row.fact))));
 

@@ -203,7 +203,7 @@ Run these from `~/.agent-autoloop/app`:
 | The full story of any round                                                                                           | `agent-autoloop why 1`            |
 | 200,000 simulated steps of network loss, dropped packets, crashes, and duplicate requests, reproducible from one seed | `node sim/random.ts 24301 200000` |
 | 1,000 process kills with no acknowledged record lost                                                                  | `node sim/crash.ts 1000 12648430` |
-| The benchmarks below                                                                                                  | `npm run benchmark`               |
+| The benchmarks below                                                                                                  | `npm run benchmark`; for history growth also `node scripts/history.ts 1000 5000` |
 
 ```text
 Round 1 · Demo
@@ -215,21 +215,23 @@ Round 1 · Demo
 
 ### Benchmarks
 
-Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledged only after its transaction is durable.
+Apple M6, Node 24.22.1. Each write is a separate request, acknowledged only after its transaction is durable. The deep-queue row is measured with 5,000 rounds queued and 1,000 long polls waiting (`BENCH_QUEUE=5000 node scripts/benchmark.ts --busy`).
 
-| Metric                                    |       Measured |
-| ----------------------------------------- | -------------: |
-| Cold start                                |       88.78 ms |
-| Idle memory                               |   59.94 MB RSS |
-| 1,000 concurrent waiting polls            |  170.49 MB RSS |
-| Durable writes                            | 2,394 events/s |
-| Dispatch p99                              |        1.82 ms |
-| Held-back heartbeat p99 with 5,000 queued |        1.66 ms |
-| Startup at 1.1 million facts              |       99.8 ms |
-| Kernel lines (with comments and blanks)   |    about 1,850 |
-| Runtime dependencies                      |              0 |
+| Metric                                              |       Measured |
+| --------------------------------------------------- | -------------: |
+| Cold start                                          |       122.24 ms |
+| Idle memory                                         | 123.45 MB RSS |
+| 1,000 concurrent waiting polls                      | 200.25 MB RSS |
+| Durable writes                                      | 2,077 events/s |
+| Dispatch p99                                        |        2.28 ms |
+| Ingest / claim / finish P50 with 5,000 queued       | 1.2 / 1.7 / 1.1 ms |
+| Held-back heartbeat p99 and empty claim P50, 5,000 queued | 1.4 / 0.6 ms |
+| First claim after 50 capacity polls wake for one event |     18.06 ms |
+| Startup and status summary at 55k facts             | 104.0 ms / 1.72 ms |
+| Kernel lines (with comments and blanks)             |          2,564 |
+| Runtime dependencies                                |              0 |
 
-As history grows, the status summary slows down and the log and indexes keep using disk. The first start after a format change rebuilds from the log, which took 43.1 seconds for 1.1 million facts. [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
+Ingest, claims, `why` and the status summary no longer slow down as history grows: the summary and `/v1/metrics` read derived counters and delivery indexes instead of scanning history, and with a deep queue only rounds actually waiting out a backoff enter the due table, while a claim with every lane taken reads no queue at all. The log and indexes keep using disk as history grows. The first start after a format change rebuilds from the log, which took 2.6 seconds for 55,000 facts. [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
 
 ## Usage and provider terms
 

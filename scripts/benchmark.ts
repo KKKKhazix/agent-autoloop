@@ -178,6 +178,23 @@ if (process.argv.includes("--server")) {
         assert.equal((await request(`/v1/work?wait=0&claim=blocked&running=${running}`, "worker")).job, null);
       });
       for (const job of held) await request(`/v1/runs/${job.run}/result`, job.token, { outcome: "done" });
+      // The herd nobody timed before: polls that can take work all wake for one event, one wins, the rest sleep again.
+      const herd = new AbortController();
+      const herdPolls = [];
+      for (let i = 0; i < 50; i++) {
+        herdPolls.push(observe(request(`/v1/work?wait=5&claim=herd${i}`, "worker", undefined, herd.signal)));
+        if (i % 16 === 15) await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const herdAt = performance.now();
+      await request("/v1/events", "source", event(2000));
+      const winner = await Promise.any(
+        herdPolls.map((poll) =>
+          poll.then((result) => (result.status === "fulfilled" && result.value.job ? result.value : Promise.reject())),
+        ),
+      );
+      const herdEventToFirstClaimMs = Number((performance.now() - herdAt).toFixed(3));
+      herd.abort();
       const ms = (values: number[], share: number) => Number(percentile(values, share).toFixed(3));
       return {
         queued,
@@ -193,6 +210,9 @@ if (process.argv.includes("--server")) {
         claimP50Ms: ms(claim, 0.5),
         finishP50Ms: ms(finish, 0.5),
         blockedClaimP50Ms: ms(blockedClaim, 0.5),
+        herdPolls: herdPolls.length,
+        herdEventToFirstClaimMs,
+        herdWinnerRun: winner.job.run,
       };
     };
     if (process.argv.includes("--busy")) {

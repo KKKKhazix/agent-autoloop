@@ -6,7 +6,7 @@ import { setTimeout } from "node:timers/promises";
 import type { DeliveryIO, DeliveryReport } from "./delivery.ts";
 import type { Change, DeliveryHost } from "./host.ts";
 import { changedFiles, git, liveRelease, releaseRequired, REPO, type Settings } from "./project.ts";
-import { readSharedPolicy, reviewDelivery } from "./review.ts";
+import { readSharedPolicy, reviewDelivery, ROUND_BUDGET_MS } from "./review.ts";
 
 const LONGEST_WAIT = 1800000;
 // A run GitHub took but never started counts as stalled after this long.
@@ -222,6 +222,7 @@ export function createIO(repo: string, folder: string, options: DeliveryOptions 
       reviewerId: () => (reviewer ??= Number(gh(["api", "user", "--jq", ".id"]))),
       verifyOnly,
       onReview: () => options.report?.("reviewing", pr.head.sha),
+      budget: () => ROUND_BUDGET_MS - (Date.now() - started),
     });
   }
   const kit = options.toolkit && options.toolkit.toLowerCase() !== repo.toLowerCase() ? github(options.toolkit) : null;

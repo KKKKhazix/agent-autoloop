@@ -3,6 +3,7 @@
 // hand, or one not old enough, goes; one folder that can't be cleared
 // stops the worker or the rest of the clearing.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -108,4 +109,25 @@ test("a folder that can't be cleared is said and leaves the rest to go", { skip:
     chmodSync(locked, 0o700);
     rmSync(stuck, { recursive: true });
   }
+});
+
+test("session baselines nobody resumed go with the runs; one in use stays", () => {
+  const usage = join(home, "worker", "usage");
+  mkdirSync(usage, { recursive: true });
+  const baseline = (session: string) =>
+    join(
+      usage,
+      `${createHash("sha256")
+        .update(JSON.stringify(["scripted", session]))
+        .digest("hex")}.json`,
+    );
+  const stale = baseline("gone");
+  writeFileSync(stale, "{}");
+  age(stale, 20);
+  const fresh = baseline("going");
+  writeFileSync(fresh, "{}");
+  const worker = createWorker({ hub: quiet() as any, name: "w1", wait: 0 });
+  worker.tidy();
+  assert.equal(existsSync(stale), false, "没人续接的基线跟着清理走了");
+  assert.equal(existsSync(fresh), true, "还在用的基线留下");
 });

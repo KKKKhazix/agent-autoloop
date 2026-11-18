@@ -136,9 +136,11 @@ export function makeHandler(commit = "dev", { limits, log = () => {} }: HandlerO
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let retryAt: number | undefined;
-  const waiting = new Set<{ until: number; done: () => void }>();
-  const wake = () => {
-    for (const waiter of [...waiting]) waiter.done();
+  /** What a long poll is waiting for, so a change that cannot matter to it lets it sleep. */
+  type Waiter = { until: number; kind: "work" | "card"; done: () => void };
+  const waiting = new Set<Waiter>();
+  const wake = (kind: "work" | "card") => {
+    for (const waiter of [...waiting]) if (waiter.kind === kind) waiter.done();
   };
   const fire = () => {
     try {
@@ -149,24 +151,36 @@ export function makeHandler(commit = "dev", { limits, log = () => {} }: HandlerO
       console.error(error);
       retryAt = Date.now() + TICK_RETRY;
     }
-    wake();
+    // What the clock brings can be anything: work for one kind, a card for the other.
+    wake("work");
+    wake("card");
     arm();
   };
+  // A change can wake a thousand polls at once, and each of them comes back to wait: arm once for the whole batch.
+  let arming = false;
   const arm = () => {
-    clearTimeout(timer);
-    if (closed) return;
-    const due = hub.one<{ at: number }>(
-      "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'",
-    );
-    // Whatever the failed tick left is overdue, so it would go at once; and nothing else coming along may lose the retry.
-    const next = retryAt ?? Math.min(due?.at ?? Infinity, ...[...waiting].map((waiter) => waiter.until));
-    if (!Number.isFinite(next)) return;
-    timer = setTimeout(fire, Math.max(0, Math.min(LONGEST_TIMER, next - Date.now())));
+    if (arming || closed) return;
+    arming = true;
+    queueMicrotask(() => {
+      arming = false;
+      if (closed) return;
+      clearTimeout(timer);
+      const due = hub.one<{ at: number }>(
+        "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'",
+      );
+      // Whatever the failed tick left is overdue, so it would go at once; and nothing else coming along may lose the retry.
+      let next = retryAt ?? due?.at ?? Infinity;
+      for (const waiter of waiting) if (waiter.until < next) next = waiter.until;
+      if (!Number.isFinite(next)) return;
+      timer = setTimeout(fire, Math.max(0, Math.min(LONGEST_TIMER, next - Date.now())));
+    });
   };
   const unlisten = hub.onChange((type, facts) => {
-    // Being seen wakes nobody, unless it changed a card.
-    const justSeen = type === "heartbeat" || type === "channelSeen";
-    if (!justSeen || facts.some((fact) => fact.changes.some((change) => change.table === "cards"))) wake();
+    const touches = (table: string) => facts.some((fact) => fact.changes.some((change) => change.table === table));
+    // A card poll is woken by a card appearing or changing: a delivery report moves nothing into or out of its reach,
+    // and what comes back into reach by time wakes at the tick, which wakes everyone.
+    if (touches("cards")) wake("card");
+    if (type !== "heartbeat" && type !== "channelSeen") wake("work");
     arm();
   });
   // libuv 1.52 (Node 24.16+) on Windows asserts and exits on the first change in a folder named through an 8.3 short name.
@@ -184,10 +198,11 @@ export function makeHandler(commit = "dev", { limits, log = () => {} }: HandlerO
     why: hub.why,
     metrics: () => metricsText(commit),
     card: hub.cardByToken,
-    wait(until, signal) {
+    wait(until, signal, kind) {
       return new Promise((resolve) => {
-        const waiter = {
+        const waiter: Waiter = {
           until,
+          kind,
           done() {
             waiting.delete(waiter);
             signal.removeEventListener("abort", waiter.done);
@@ -223,7 +238,8 @@ export function makeHandler(commit = "dev", { limits, log = () => {} }: HandlerO
       clearTimeout(timer);
       watcher.close();
       unlisten();
-      wake();
+      wake("work");
+      wake("card");
     },
   };
 }

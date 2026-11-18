@@ -2,7 +2,7 @@
 // job. An agent runs detached, in its own process group, writing to files, so the worker can stop and come back and
 // find it still going, or finished. A job is saved before anything slow happens; a result is saved before it's handed
 // in and stays until the hub has taken it.
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -27,7 +27,10 @@ import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { fit, promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
-import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
+import { loadUsage, saveUsage, tidyUsage, usageDelta } from "./usage.ts";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const RUNS = path.join(HOME, "worker", "runs");
 const NOTHING: Usage = { input: 0, output: 0, cached: 0, cost: 0 };
@@ -150,7 +153,9 @@ async function groupAlive(entry: Entry): Promise<boolean | null> {
   if (!entry.pid) return false;
   if (process.platform === "win32") return alive(entry);
   try {
-    return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
+    // Asynchronous on purpose: the hub shares this event loop, and ps scans the whole process table.
+    const { stdout } = await execFileAsync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" });
+    return stdout
       .trim()
       .split("\n")
       .some((line) => {
@@ -563,7 +568,15 @@ export function createWorker({
         );
         return;
       }
-      if (!(error instanceof HubError) || error.status >= 500) {
+      if (error instanceof HubError && error.status >= 500) {
+        // The hub is the one in trouble: keep the result and come back after a pause, as a busy one is treated.
+        entry.retryAt = now() + BUSY_PAUSE;
+        save(entry);
+        return log(
+          `run ${entry.run}: the hub couldn't take the result (${error.message}); keeping it, trying again in 30 seconds`,
+        );
+      }
+      if (!(error instanceof HubError)) {
         return log(`run ${entry.run}: couldn't hand in the result: ${error}`);
       }
       log(`run ${entry.run}: the hub refused its result (${error.status}: ${error.message}); dropped`);
@@ -593,17 +606,6 @@ export function createWorker({
     }
   }
 
-  /** Trouble with one run, a folder it can't write to say, is for the next round and holds up no other. */
-  async function eachEntry(step: (entry: Entry) => Promise<unknown>) {
-    for (const entry of entries()) {
-      try {
-        await step(entry);
-      } catch (error) {
-        sayOnce(`run ${entry.run}: ${error}`);
-      }
-    }
-  }
-
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
     // Here and not in run: whatever drives the worker comes through here.
@@ -611,9 +613,23 @@ export function createWorker({
       tidied = now();
       tidy(tidied);
     }
-    await eachEntry(check);
-    await eachEntry(settle);
+    // One reading serves the checks; the settle pass reads again, so a result whose save failed is not handed in
+    // from memory alone — what is on disk is what the hub has really been given.
     const held = entries();
+    for (const entry of held) {
+      try {
+        await check(entry);
+      } catch (error) {
+        sayOnce(`run ${entry.run}: ${error}`);
+      }
+    }
+    for (const entry of entries()) {
+      try {
+        await settle(entry);
+      } catch (error) {
+        sayOnce(`run ${entry.run}: ${error}`);
+      }
+    }
     let reachable = true;
     // A hub that answers "too busy" is there: only one that doesn't answer is a reason to tell the owner.
     let answered = true;
@@ -642,7 +658,7 @@ export function createWorker({
     return reachable;
   }
 
-  /** Output of finished runs is kept a while for looking into, then goes. */
+  /** Output of finished runs is kept a while for looking into, then goes; so are session baselines nobody resumed. */
   function tidy(moment = now()) {
     for (const id of readdirSync(RUNS)) {
       const dir = path.join(RUNS, id);
@@ -653,6 +669,7 @@ export function createWorker({
         sayOnce(`couldn't clear ${dir}: ${error}`);
       }
     }
+    tidyUsage(moment);
   }
 
   async function run(signalled: AbortSignal) {

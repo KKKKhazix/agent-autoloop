@@ -1,7 +1,9 @@
-// Failure modes: the running totals behind `status` and `/v1/metrics` drift from the runs they count when a run changes
-// state, is retried with its usage added up, is merged into another and removed, or is cancelled; a rebuilt projection
-// counts differently from one kept up commit by commit; adding and taking away costs leaves a float crumb, so a rule
-// that spent nothing shows a cost; "done today" is frozen at whatever day the total was kept on.
+// Failure modes: the running totals behind `status` and `/v1/metrics` drift from the runs or events they count when a
+// run changes state, is retried with its usage added up, is merged into another and removed, or is cancelled, or when an
+// event is deduplicated, paused and replayed, emitted by a receipt or a card answer, or cleared; a channel's last failure
+// reflects an older failed card after a newer card went through, or disappears behind later deliveries on another channel;
+// a rebuilt projection counts differently from one kept up commit by commit; adding and taking away leaves a crumb behind;
+// "done today" is frozen at whatever day the total was kept on.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -99,4 +101,71 @@ test("costs added and taken away come back to exactly nothing", () => {
   fixtureClear("runs");
   const totals = countsOf(hub.all, new Date(at(0)).toISOString());
   assert.deepEqual(totals, [], "清空以后一行也不剩，没有残留的零头");
+});
+
+test("source event totals and channel delivery states match history through pauses, replays, answers and rebuilds", () => {
+  const scannedSources = () =>
+    Object.fromEntries(
+      Object.keys(hub.rules.sources).map((id) => [
+        id,
+        Number(hub.one<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE source = ?", [id])!.n),
+      ]),
+    );
+  const stateSources = (now: number) =>
+    Object.fromEntries(hub.stateOf(now).sources.map((s: { id: string; events: number }) => [s.id, s.events]));
+  // Whatever the tests before this one left behind: the two views of it must already agree.
+  assert.deepEqual(stateSources(at(20)), scannedSources(), "两边一开始就一致");
+
+  // Regular ingest + duplicate ingest (must count once).
+  hub.ingest("app", { id: "s-1", type: "feedback.new", subject: "#s1" }, at(20));
+  hub.ingest("app", { id: "s-1", type: "feedback.new", subject: "#s1" }, at(20));
+  assert.deepEqual(stateSources(at(20)), scannedSources(), "重复事件不重算");
+
+  // Paused event + replay (replay links the existing event to a run without adding or double-counting it).
+  hub.execute("pauseRule", ["意见", "owner", { reason: "维护" }], at(21));
+  const skipped = hub.ingest("app", { id: "s-2", type: "feedback.new", subject: "#s2" }, at(21));
+  hub.execute("resumeRule", ["意见"], at(22));
+  hub.execute("replayRule", ["意见", [skipped.event]], at(22));
+  assert.deepEqual(stateSources(at(22)), scannedSources(), "暂停跳过再补跑还是算一条");
+
+  // Manual run + receipt asking a question + card answer + another source.
+  hub.execute("runRule", ["意见", "owner", { subject: "#s3" }], at(23));
+  hub.ingest("ops", { id: "o-1", type: "alert.raised", subject: "#o1" }, at(23));
+  const job = claim(23);
+  hub.finish(
+    job.run,
+    job.token,
+    { outcome: "done", ask: [{ title: "确认一", text: "一", options: ["好", "算了"] }] },
+    at(24),
+  );
+  const firstCard = hub.nextCard("chat", at(24))!;
+  hub.failed("chat", firstCard.id, firstCard.version, "网关超时", at(24));
+  const opsFirst = hub.nextCard("plain", at(24))!;
+  hub.failed("plain", opsFirst.id, opsFirst.version, "通道拒绝", at(24));
+
+  const chatChannel = (now: number) => hub.stateOf(now).channels.find((c: { id: string }) => c.id === "chat")!;
+  const plainChannel = (now: number) => hub.stateOf(now).channels.find((c: { id: string }) => c.id === "plain")!;
+  assert.equal(chatChannel(at(24)).lastFailure?.error, "网关超时");
+  assert.equal(plainChannel(at(24)).lastFailure?.error, "通道拒绝");
+
+  hub.answer(firstCard.id, { choice: 0, by: "owner" }, at(25));
+  assert.deepEqual(stateSources(at(25)), scannedSources(), "手动运行、回答派生的事件也严丝合缝");
+
+  // Newer card succeeds on chat while plain never takes it: chat's lastFailure clears, plain's stays.
+  hub.tell("notice:later", "新通知", "正文", at(26));
+  // Drain older cards on chat so the latest card is delivered cleanly.
+  for (let step = 0; step < 5; step++) {
+    const next = hub.nextCard("chat", at(26 + step));
+    if (!next) break;
+    hub.delivered("chat", next.id, next.version, `msg-${next.id}`, at(26 + step));
+  }
+  assert.equal(chatChannel(at(31)).lastFailure, undefined, "新卡片送达后旧失败不再挂着");
+  assert.equal(plainChannel(at(31)).lastFailure?.error, "通道拒绝", "别的通道送达不掩盖这边的失败");
+
+  const beforeSources = stateSources(at(31));
+  const beforeChannels = hub.stateOf(at(31)).channels;
+  rebuild(hub.db, "重建校验");
+  assert.deepEqual(stateSources(at(31)), beforeSources, "重建后来源计数不变");
+  assert.deepEqual(hub.stateOf(at(31)).channels, beforeChannels, "重建后各通道最后投递状态不变");
+  hub.getView();
 });

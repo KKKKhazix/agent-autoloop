@@ -332,6 +332,25 @@ test("a result refused for a revoked key is kept and handed in later, not droppe
   assert.equal(w.entries().length, 0, "handed in and let go");
 });
 
+test("a result the hub could not take (5xx) is kept and retried after a pause, not every round", async () => {
+  const hub = fakeHub();
+  hub.refuseStatus = 500;
+  hub.jobs.push(job());
+  const lines: string[] = [];
+  let clock = Date.now();
+  const w = worker(hub, { log: (line: string) => lines.push(line), now: () => clock });
+  await until(w, () => lines.some((line) => line.includes("trying again in 30 seconds")));
+  assert.equal(hub.results.length, 0);
+  assert.equal(w.entries().length, 1, "a hub in trouble doesn't lose the finished work");
+  clock += 5_000;
+  await w.tick();
+  assert.equal(hub.results.length, 0, "it waits out the pause instead of hammering a failing hub");
+  hub.refuseStatus = 0;
+  clock += 31_000;
+  await until(w, () => hub.results.length === 1);
+  assert.equal(w.entries().length, 0, "handed in and let go");
+});
+
 test("a run still going after the worker restarts stays, and its result still comes", async () => {
   const hub = fakeHub();
   const { hold, open } = gate("restart");

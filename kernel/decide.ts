@@ -2,7 +2,16 @@
 // to give. Time and secrets come in as arguments, so the same input on the same view always decides the same.
 import { credential, digest, type Environment } from "./credentials.ts";
 import { latestBefore, nextRun, parseCron } from "./cron.ts";
-import { deadlines, MINUTE, offlineCard, OFFLINE_AFTER, RUN_LEASE, SEEN_EVERY, WORKER_FRESH } from "./due.ts";
+import {
+  deadlines,
+  MINUTE,
+  newerWaiting,
+  offlineCard,
+  OFFLINE_AFTER,
+  RUN_LEASE,
+  SEEN_EVERY,
+  WORKER_FRESH,
+} from "./due.ts";
 import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
 import { iso, rows, type Change, type Fact, type Row, type Table, type View } from "./evolve.ts";
 import {
@@ -11,11 +20,11 @@ import {
   configuration,
   eventsOf,
   jobOf,
+  loadOf,
   openInScope,
   pauseOf,
   routingOf,
   sourceOf,
-  waitingOn,
   workerOf,
   workers,
 } from "./query.ts";
@@ -322,29 +331,33 @@ function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row) {
 /** Notices what has gone quiet: a worker that stopped coming, a run its worker stopped mentioning. */
 function sweep(draft: Draft) {
   const { now } = draft;
+  const claimed = rows(draft.view, "runs", { state: "claimed" });
   for (const worker of workers(draft.view)) {
     const seen = draft.view.get("seen", `worker:${worker}`);
     const lastSeen = seen ? Date.parse(seen.seen_at) : undefined;
     if (lastSeen !== undefined && now - lastSeen <= WORKER_FRESH) {
       closeOffline(draft, worker);
       const inDoubt = (run: Row) => workerOf(draft.view, run) === worker && Date.parse(run.seen_at) < now - RUN_LEASE;
-      for (const run of rows(draft.view, "runs", { state: "claimed" }).filter(inDoubt)) {
+      for (const run of claimed.filter(inDoubt)) {
         put(draft, "runs", run.id, { state: "unknown" });
         const agent = configuration(draft.view, run.rules_version).agents[run.agent].name;
         const words = `交给 ${agent} 后超过 5 分钟没有回音，不确定做没做完；后续新任务照常处理。`;
         notify(draft, `run:${run.id}:unknown`, run.rule, words, threadOf(run));
       }
     }
-    const waiting = waitingOn(draft.view, worker, now);
-    if (!waiting.length) continue;
-    const since = now - (lastSeen ?? Date.parse(waiting[0].created_at));
-    const { key, told } = offlineCard(draft.view, worker, waiting);
+    // What the worker has on, read as one lookup per agent rather than a walk of the queue behind them.
+    const { inHand, oldest, ready } = loadOf(draft.view, worker, now);
+    if (!inHand.length && !oldest) continue;
+    const since = now - (lastSeen ?? Date.parse((oldest ?? inHand[0]!).created_at));
+    const hasNewer = (closedAt: string) =>
+      inHand.some((run) => run.created_at > closedAt) || newerWaiting(draft.view, worker, now, closedAt);
+    const { key, told } = offlineCard(draft.view, worker, hasNewer);
     if (since <= OFFLINE_AFTER || told) continue;
     const minutes = Math.floor(since / MINUTE);
     const neverSeen = lastSeen === undefined;
     const situation = neverSeen
-      ? `${worker} 一直没连上中台，有 ${waiting.length} 件任务等了 ${minutes} 分钟没人接`
-      : `${worker} 已经 ${minutes} 分钟没连上中台，有 ${waiting.length} 件任务在排队或在跑`;
+      ? `${worker} 一直没连上中台，有 ${ready} 件任务等了 ${minutes} 分钟没人接`
+      : `${worker} 已经 ${minutes} 分钟没连上中台，有 ${ready} 件任务在排队或在跑`;
     const check = neverSeen ? "有没有开机联网" : "是不是关机、休眠或断网了";
     notify(draft, key, "接单程序没连上", `${situation}（请看一眼那台电脑${check}）。`);
   }
@@ -352,26 +365,54 @@ function sweep(draft: Draft) {
 
 function claimNext(draft: Draft, worker: string, claim: string) {
   const agents = agentsOf(draft.view, worker);
-  const runs = rows(draft.view, "runs", { state: ["queued", "claimed"] });
-  const claimed = runs.filter((run) => run.state === "claimed");
-  const groupLimit = (group: string) => draft.rules.rules.find((rule) => rule.group === group)?.parallel ?? 1;
-  const claimable = (run: Row) => {
-    if (run.state !== "queued") return false;
-    const rule = ruleNamed(draft, run.rule);
-    // What was queued before a pause, or an answer that came in during one, waits for the resume.
-    if (!rule || rule.disabled || !agents.includes(rule.to) || pauseOf(draft.view, rule, draft.now)) return false;
-    const agentLimit = draft.rules.agents[rule.to].maxActive;
-    return (
-      Date.parse(run.not_before) <= draft.now &&
-      !claimed.some((other) => other.grp === run.grp && other.lane === run.lane) &&
-      claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp) &&
-      (rule.maxActive === undefined || claimed.filter((other) => other.rule === run.rule).length < rule.maxActive) &&
-      (agentLimit === undefined || claimed.filter((other) => other.agent === rule.to).length < agentLimit)
-    );
-  };
+  const claimed = rows(draft.view, "runs", { state: "claimed" });
   // The same claim again means the answer got lost: it gets back the run it already has.
   const held = claimed.find((run) => run.claim === claim && workerOf(draft.view, run) === worker);
-  const run = held ?? runs.find(claimable);
+  let run: Row | undefined;
+  if (held) {
+    run = held;
+  } else {
+    // Who is holding what, across every worker: a group's room, a rule's and an agent's are shared by all of them.
+    const taken = new Map<string, number>();
+    const busyLanes = new Set<string>();
+    for (const other of claimed) {
+      taken.set(`grp:${other.grp}`, (taken.get(`grp:${other.grp}`) ?? 0) + 1);
+      taken.set(`rule:${other.rule}`, (taken.get(`rule:${other.rule}`) ?? 0) + 1);
+      taken.set(`agent:${other.agent}`, (taken.get(`agent:${other.agent}`) ?? 0) + 1);
+      busyLanes.add(`${other.grp}\0${other.lane}`);
+    }
+    // A rule this worker could take from, with room left in its group, in the rule and on its agent. A task elsewhere
+    // that asks goes on like a rule; rules whose room is gone drop out here, before the queue is read at all.
+    const groupLimit = (group: string) => draft.rules.rules.find((rule) => rule.group === group)?.parallel ?? 1;
+    const named = [
+      ...draft.rules.rules.map((rule) => rule.name),
+      ...draft.rules.elsewhere.flatMap((task) => (task.cwd ? [task.name] : [])),
+    ];
+    const candidates = named
+      .map((name) => ruleOf(draft.rules, name)!)
+      .filter(
+        (rule) =>
+          !rule.disabled &&
+          agents.includes(rule.to) &&
+          !pauseOf(draft.view, rule, draft.now) &&
+          (taken.get(`grp:${rule.group}`) ?? 0) < groupLimit(rule.group) &&
+          (rule.maxActive === undefined || (taken.get(`rule:${rule.name}`) ?? 0) < rule.maxActive) &&
+          (draft.rules.agents[rule.to].maxActive === undefined ||
+            (taken.get(`agent:${rule.to}`) ?? 0) < draft.rules.agents[rule.to].maxActive!),
+      );
+    for (const rule of candidates) {
+      // Enough to cover the group's room and the lanes already busy: a busy lane holds at most one queued round.
+      const room = groupLimit(rule.group) - (taken.get(`grp:${rule.group}`) ?? 0) + busyLanes.size;
+      const waiting = rows(
+        draft.view,
+        "runs",
+        { rule: rule.name, state: "queued", not_before: { lte: draft.at } },
+        Math.max(room, 1),
+      );
+      const found = waiting.find((queued) => !busyLanes.has(`${queued.grp}\0${queued.lane}`));
+      if (found && (!run || found.id < run.id)) run = found;
+    }
+  }
   if (!run) return null;
   if (!held) {
     assignQueued(draft, run);

@@ -1,6 +1,6 @@
 // One delivery run: `node run.ts group/name`, reading its event from AGENT_AUTOLOOP_CONTEXT and printing a receipt.
 // The platform comes from AGENT_AUTOLOOP_DELIVERY_HOST (github by default); both speak the same host's words.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -14,6 +14,22 @@ import { hasLabel, retryHandoff, retryState, runHook, tellQuestion, tellReturn, 
 
 const platform = (): "github" | "gitlab" =>
   process.env.AGENT_AUTOLOOP_DELIVERY_HOST === "gitlab" ? "gitlab" : "github";
+
+/** When a leftover counts as abandoned: a round ends long before this even with a timeout configured well past the
+ * worker's default, and a scratch folder's own mtime goes stale during a long review (its writes land in subfolders). */
+const ABANDONED_AFTER = 24 * 60 * 60_000;
+/** Scratch folders a killed run (the worker's hard stop, say) never got to remove: tidied by the next round. */
+export function clearAbandonedFolders(moment = Date.now(), prefix = "agent-autoloop-delivery-") {
+  try {
+    for (const name of readdirSync(tmpdir()))
+      if (name.startsWith(`${prefix}`)) {
+        const folder = join(tmpdir(), name);
+        try {
+          if (moment - statSync(folder).mtimeMs > ABANDONED_AFTER) rmSync(folder, { recursive: true, force: true });
+        } catch {}
+      }
+  } catch {}
+}
 
 /** The issue/MR an event names, in the shapes run() reads: labels as named things, and pull_request as "is a MR". */
 async function issueOf(io: DeliveryIO, repo: string, number: number) {
@@ -146,7 +162,15 @@ async function handoff(
 
 export async function run(repo: string, context: Context, testLocalHealth = false, options: Options = {}) {
   const number = subjectNumber(repo, context);
+  clearAbandonedFolders();
   const folder = mkdtempSync(join(tmpdir(), "agent-autoloop-delivery-"));
+  // A stop that flattens the process never reaches the finally below: take the folder with us on the way out.
+  const going = () => {
+    rmSync(folder, { recursive: true, force: true });
+    process.exit(0);
+  };
+  process.once("SIGTERM", going);
+  process.once("SIGINT", going);
   const { progressCommand } = options;
   const report: DeliveryOptions["report"] = progressCommand
     ? (phase, head, metadata) => {
@@ -205,6 +229,8 @@ export async function run(repo: string, context: Context, testLocalHealth = fals
     }
   } finally {
     rmSync(folder, { recursive: true, force: true });
+    process.off("SIGTERM", going);
+    process.off("SIGINT", going);
   }
 }
 

@@ -9,7 +9,7 @@
 // Nothing here reaches GitHub: `gh` is a stand-in first on PATH, and the Git remote is a local folder.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -17,7 +17,7 @@ import { waitLive } from "../plugins/delivery/delivery.ts";
 import { createIO, github, isGitHubHiccup, type DeliveryOptions } from "../plugins/delivery/github.ts";
 import { poll } from "../plugins/delivery/poll.ts";
 import { settings } from "../plugins/delivery/project.ts";
-import { run } from "../plugins/delivery/run.ts";
+import { clearAbandonedFolders, run } from "../plugins/delivery/run.ts";
 import { readMessage } from "../worker/contract.ts";
 
 const root = mkdtempSync(join(tmpdir(), "agent-autoloop-delivery-run-"));
@@ -497,4 +497,16 @@ test("a failed release is a plain failure", async () => {
   await assert.rejects(() => run("example/app", about(8), true), /发布没有通过/);
   assert.equal(lastStatus("delivery").state, "failure");
   assert.equal(timesReviewed(), 0);
+});
+
+test("scratch folders a killed round never removed go at the next round's start, and fresh ones stay", () => {
+  const stale = mkdtempSync(join(tmpdir(), "test-abandoned-"));
+  const fresh = mkdtempSync(join(tmpdir(), "test-abandoned-"));
+  // A day past: past the clearing age, but no further than a round with a long timeout could still take.
+  const longAgo = Date.now() - 25 * 60 * 60_000;
+  utimesSync(stale, new Date(longAgo), new Date(longAgo));
+  clearAbandonedFolders(Date.now(), "test-abandoned-");
+  assert.equal(existsSync(stale), false, "被强杀那一轮留下的临时目录清掉了");
+  assert.equal(existsSync(fresh), true, "还在跑的这一轮的目录不动");
+  rmSync(fresh, { recursive: true, force: true });
 });

@@ -1,6 +1,6 @@
 // Reading the view: what the decisions and the doors ask of it, and the shapes they hand out.
 import { credential, type Environment } from "./credentials.ts";
-import { rows, type Fact, type Row, type View } from "./evolve.ts";
+import { iso, rows, type Fact, type Row, type View } from "./evolve.ts";
 import { ruleOf, type Rule, type Rules } from "./rules.ts";
 import type { Job } from "../protocol/job.ts";
 
@@ -25,11 +25,22 @@ export const workers = (view: View) =>
     ...rows(view, "runs", { state: "claimed" }).map((run) => workerOf(view, run)!),
   ]);
 
-/** What a worker's agents have on: runs in hand and runs ready to be claimed. */
-export function waitingOn(view: View, worker: string, now: number) {
-  return rows(view, "runs", { state: ["queued", "claimed"] }).filter(
-    (run) => workerOf(view, run) === worker && (run.state === "claimed" || Date.parse(run.not_before) <= now),
-  );
+/** What a worker's agents have on, without walking the queue: the runs in hand, the oldest of what waits on it
+ * (in hand or ready), and how many are ready. A queued round always carries the latest rules' agent, so the agent
+ * index finds it. */
+export function loadOf(view: View, worker: string, now: number) {
+  const inHand = rows(view, "runs", { state: "claimed" }).filter((run) => workerOf(view, run) === worker);
+  let oldest: Row | undefined;
+  let ready = inHand.length;
+  for (const agent of agentsOf(view, worker)) {
+    const waiting = { agent, state: "queued", not_before: { lte: iso(now) } };
+    ready += view.count("runs", waiting);
+    const [first] = rows(view, "runs", waiting, 1);
+    if (first && (!oldest || first.id < oldest.id)) oldest = first;
+  }
+  // What waits on this worker is what it holds and what is ready; the oldest is whichever came first, as ids order it.
+  if (inHand.length && (!oldest || inHand[0]!.id < oldest.id)) oldest = inHand[0];
+  return { inHand, oldest, ready };
 }
 
 export function eventsOf(view: View, runId: number) {

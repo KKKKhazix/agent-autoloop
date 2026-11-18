@@ -22,7 +22,8 @@ export type Services = {
   why(id: number): unknown;
   metrics(): string;
   card(token: string): Row | undefined;
-  wait(until: number, signal: AbortSignal): Promise<void>;
+  /** What a long poll is waiting for, so a change that cannot matter to it lets it sleep: work, or a card. */
+  wait(until: number, signal: AbortSignal, kind: "work" | "card"): Promise<void>;
   stream(after: number, signal: AbortSignal, key: string): ReadableStream;
   adapt(source: string, headers: Headers, body: string): Promise<unknown[]>;
 };
@@ -182,7 +183,7 @@ async function work(call: Call) {
     const job = wantsWork ? act(call, "claimNext", worker, claim) : null;
     const cancel = cancels(services.view(), worker);
     if (job || cancel.length || services.now() >= until || request.signal.aborted) return json({ job, cancel });
-    await services.wait(until, request.signal);
+    await services.wait(until, request.signal, "work");
   }
 }
 
@@ -196,7 +197,7 @@ async function nextCard(call: Call) {
     if (!whose(services.view(), "channel", token)) throw new AuthError("密钥已失效");
     const card = request.signal.aborted ? null : act(call, "nextCard", channel);
     if (card || services.now() >= until || request.signal.aborted) return json({ card });
-    await services.wait(until, request.signal);
+    await services.wait(until, request.signal, "card");
   }
 }
 

@@ -7,9 +7,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const root = join(import.meta.dirname, "..");
-const kernel = readdirSync(join(root, "kernel"))
-  .filter((f) => f.endsWith(".ts"))
-  .map((f) => [f, readFileSync(join(root, "kernel", f), "utf8")] as const);
+/** Every TypeScript file under a folder, however deep: a subfolder of the kernel is still the kernel. */
+const sources = (folder: string) =>
+  readdirSync(join(root, folder), { recursive: true })
+    .map(String)
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => [name, readFileSync(join(root, folder, name), "utf8")] as const);
+const kernel = sources("kernel");
 
 const VENDORS =
   /claude|anthropic|codex|openai|gemini|cursor|hermes|openclaw|feishu|lark|dingtalk|telegram|slack|github|gitlab|\bacp\b|\bdsh\b|\bzcode\b/i;
@@ -28,18 +32,16 @@ test("the kernel names no product", () => {
 
 test("what loads and runs the plugins names none either: a new product is a new plugin", () => {
   for (const folder of ["host", "protocol", "worker"]) {
-    for (const file of readdirSync(join(root, folder)).filter((name) => name.endsWith(".ts"))) {
+    for (const [file, text] of sources(folder)) {
       // What the worker keeps out of an agent's environment, of a session the worker itself may be in: nothing knows it else.
-      const text = readFileSync(join(root, folder, file), "utf8").replace("CLAUDECODE$|CLAUDE_CODE_|CODEX_", "");
-      namesNoProduct(`${folder}/${file}`, text);
+      namesNoProduct(`${folder}/${file}`, text.replace("CLAUDECODE$|CLAUDE_CODE_|CODEX_", ""));
     }
   }
 });
 
 test("nothing but the loader reaches a plugin", () => {
   for (const folder of ["kernel", "host", "protocol", "worker", "cli"]) {
-    for (const file of readdirSync(join(root, folder)).filter((name) => name.endsWith(".ts"))) {
-      const text = readFileSync(join(root, folder, file), "utf8");
+    for (const [file, text] of sources(folder)) {
       assert.ok(!/from "[^"]*plugins\//.test(text), `${folder}/${file}`);
     }
   }

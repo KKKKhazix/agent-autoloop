@@ -64,8 +64,16 @@ if (["seed", "server", "rebuild"].includes(mode)) {
     const { rebuild } = await import("../kernel/store.ts");
     const hash = () => {
       const h = createHash("sha256");
-      for (const table of ["projections", "projection_meta", "projection_refs", "projection_pending"])
-        for (const row of db.prepare(`SELECT * FROM ${table} ORDER BY 1,2,3`).iterate()) h.update(JSON.stringify(row));
+      for (const [table, order] of [
+        ["projections", "1,2"],
+        ["projection_meta", "1"],
+        ["projection_refs", "1,2,3"],
+        ["projection_pending", "1"],
+        ["projection_tallies", "1,2,3"],
+        ["projection_sources", "1"],
+      ] as const)
+        for (const row of db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).iterate())
+          h.update(JSON.stringify(row));
       return h.digest("hex");
     };
     const before = hash();

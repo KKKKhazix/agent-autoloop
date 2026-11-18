@@ -6,6 +6,8 @@
 // An input that changed nothing still reads the queue to work out deadlines that can't have moved, or writes a fact for
 // them; leaving them alone strands what only the clock changes, because a tick no longer brings the table up to date, or
 // a change no longer does, or a clock set back never gets its deadlines back.
+// An input that changed something reads the whole queued table back to work out its deadlines, or a claim with every
+// lane of its groups taken scans the queue to find that out; either one grows with the queue and holds up every request.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
@@ -185,13 +187,58 @@ test("a receipt handed in again reads no runs", () => {
 test("a claim that finds nothing reads the runs only to look for one", () => {
   const hub = new Hub();
   hub.queue(5);
-  for (const n of [0, 1, 2]) hub.act("claimNext", "w1", `claim-${n}`);
+  for (let n = 0; n < 3; n++) hub.act("claimNext", "w1", `claim-${n}`);
   hub.act("heartbeat", "w1", []);
   hub.now += SECOND;
   const blocked = runReads(hub, "claimNext", "w1", "nothing");
   assert.equal(blocked.value, null);
   assert.deepEqual(blocked.facts, []);
-  assert.equal(blocked.reads, 1);
+  assert.ok(blocked.reads <= 2, `组满时的空领活读了 ${blocked.reads} 次，不该随队列变多`);
+});
+
+/** How many run rows came back from the database while an input was decided. */
+function runRows(hub: Hub, type: string, ...args: unknown[]) {
+  const all = StatementSync.prototype.all;
+  let rowsRead = 0;
+  StatementSync.prototype.all = function (...given: any[]) {
+    const found = all.apply(this, given as any);
+    if (this.sourceSQL.includes("collection='runs'")) rowsRead += found.length;
+    return found;
+  };
+  try {
+    const decided = decide(hub.view, { type, args }, hub.now, environment);
+    return { ...decided, rowsRead };
+  } finally {
+    StatementSync.prototype.all = all;
+  }
+}
+
+test("an input that changes something reads only the runs it needs, however deep the queue", () => {
+  const hub = new Hub();
+  hub.queue(50, 1);
+  const event = (n: number) => ({ id: `more-${n}`, type: "feedback.new", subject: `#more-${n}` });
+  const shallow = runRows(hub, "ingest", "app", event(1));
+  assert.ok(shallow.facts.length > 0, "这条输入确实产生了事实");
+  hub.queue(150, 51);
+  const deep = runRows(hub, "ingest", "app", event(2));
+  assert.ok(deep.facts.length > 0);
+  // A handful of index lookups: the run the event joins, the ones in hand, the earliest waiting per agent. Not the queue.
+  assert.ok(
+    deep.rowsRead <= shallow.rowsRead + 3,
+    `排队 200 时读了 ${deep.rowsRead} 行，浅队列读了 ${shallow.rowsRead} 行`,
+  );
+});
+
+test("a claim with every lane of its groups taken reads only what is in hand", () => {
+  const hub = new Hub();
+  hub.queue(200);
+  for (let n = 0; n < 3; n++) hub.act("claimNext", "w1", `claim-${n}`); // 意见 runs in parallel 3: the group is full
+  hub.act("heartbeat", "w1", []);
+  hub.now += SECOND;
+  const blocked = runRows(hub, "claimNext", "w1", "blocked");
+  assert.equal(blocked.value, null);
+  assert.deepEqual(blocked.facts, []);
+  assert.ok(blocked.rowsRead <= 4, `组满时空领活读了 ${blocked.rowsRead} 行排队或手上的轮次`);
 });
 
 /** A failed run waiting for its retry, with its deadline in the table. */

@@ -8,7 +8,7 @@ import type { DeliveryIO } from "./delivery.ts";
 import type { Change, DeliveryHost } from "./host.ts";
 import type { DeliveryOptions } from "./github.ts";
 import { changedFiles, git, isAncestor, liveRelease, releaseRequired } from "./project.ts";
-import { reviewDelivery } from "./review.ts";
+import { reviewDelivery, ROUND_BUDGET_MS } from "./review.ts";
 import { pendingEvents } from "./input.ts";
 
 const REPO = /^[\w.-]+\/[\w.-]+$/;
@@ -62,7 +62,7 @@ export function gitlabHost(repo: string, io: Pick<DeliveryIO, "api" | "now">): D
   // Only the merge request's own pipeline is the full check: with the same sha, an api- or trigger-run of it is
   // somebody's own doing, not the change's.
   const newestPipeline = async (head: string) => {
-    const pipelines = await io.api(`pipelines?sha=${encodeURIComponent(head)}&source=merge_request`);
+    const pipelines = await io.api(`pipelines?sha=${encodeURIComponent(head)}&source=merge_request&per_page=100`);
     return [...pipelines].sort((a: any, b: any) => b.id - a.id)[0];
   };
   return {
@@ -139,7 +139,7 @@ export function gitlabHost(repo: string, io: Pick<DeliveryIO, "api" | "now">): D
       return "waiting";
     },
     async shipRuns(_config) {
-      const pipelines = await io.api(`pipelines?ref=main&source=push`);
+      const pipelines = await io.api(`pipelines?ref=main&source=push&per_page=100`);
       const final = ["success", "failed", "canceled", "skipped"];
       return [...pipelines]
         .sort((a: any, b: any) => b.id - a.id)
@@ -163,6 +163,16 @@ export function createIO(
   const bare = join(folder, "objects.git");
   const started = Date.now();
   let initialized = false;
+  // A commit already fetched once is fetched no more: every call in one round asks about the same few of them.
+  const fetched = new Set<string>();
+  const localCommit = (sha: string) => {
+    if (!initialized || !/^[a-f0-9]{7,40}$/.test(sha)) return;
+    try {
+      return git(bare, "rev-parse", "--verify", `${sha}^{commit}`);
+    } catch (error) {
+      if ((error as { status?: number }).status !== 128) throw error;
+    }
+  };
   const fetchObjects = (...refs: string[]) => {
     if (!initialized) {
       mkdirSync(bare, { recursive: true });
@@ -170,7 +180,11 @@ export function createIO(
       git(bare, "remote", "add", "origin", `https://gitlab.com/${repo}.git`);
       initialized = true;
     }
-    git(bare, "fetch", "--no-tags", "origin", ...refs);
+    const missing = refs.filter((ref) => !/^[a-f0-9]{40}$/.test(ref) || (!fetched.has(ref) && !localCommit(ref)));
+    if (missing.length) {
+      git(bare, "fetch", "--no-tags", "origin", ...missing);
+      missing.filter((ref) => /^[a-f0-9]{40}$/.test(ref)).forEach((ref) => fetched.add(ref));
+    }
   };
   const ancestors = new Map<string, boolean>();
   // GitLab's commit statuses carry no author, so a proof cannot be told from a forgery the way GitHub's can: whoever
@@ -221,6 +235,7 @@ export function createIO(
         statuses: (sha) => gitlabStatuses(sha),
         reviewerId: () => (self ??= JSON.parse(glab(["api", "user"])).id),
         onReview: () => options.report?.("reviewing", pr.head.sha),
+        budget: () => ROUND_BUDGET_MS - (Date.now() - started),
       });
     },
     async merge(pr) {
@@ -234,6 +249,10 @@ export function createIO(
       } catch {
         /* Turning off nothing is done; the delivery reads the change back either way. */
       }
+    },
+    prepareShip() {
+      // Every older pipeline would otherwise cost a comparison, even when the exact merge is already live.
+      fetchObjects("refs/heads/main");
     },
     async contains(base, head) {
       if (base === head) return true;
@@ -274,9 +293,9 @@ export async function gitlabPoll(repo: string) {
   const api = gitlabApi(repo);
   const rows = [];
   for (const label of ["deliver", "ask-owner"]) {
-    const items = await api(`issues?state=opened&labels=${encodeURIComponent(label)}`);
+    const items = await api(`issues?state=opened&labels=${encodeURIComponent(label)}&per_page=100`);
     for (const issue of items) {
-      const events = await api(`issues/${issue.iid}/resource_label_events`);
+      const events = await api(`issues/${issue.iid}/resource_label_events?per_page=100`);
       const marked = events.filter((event: any) => event.label?.name === label).at(-1);
       if (!marked) throw new Error(`找不到事项 ${issue.iid} 的标签记录`);
       // Issues and merge requests share one iid sequence; an iid with an MR behind it is a delivery.

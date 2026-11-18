@@ -175,11 +175,16 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
   };
   const counts: Row[] = countsOf(all, iso(dayStart(now, rules.timezone)));
   const openCards = all<Row>("SELECT * FROM cards WHERE state = 'open' ORDER BY id DESC");
-  const lastDeliveries = new Map(
-    all<Row>(
-      "SELECT channel, card_id, tries, error, given_up FROM deliveries " +
-        "WHERE (channel, card_id) IN (SELECT channel, MAX(card_id) FROM deliveries GROUP BY channel)",
-    ).map((row) => [row.channel as string, row]),
+  const lastDeliveries = new Map<string, Row>();
+  for (const id of Object.keys(rules.channels)) {
+    const [last] = all<Row>(
+      "SELECT channel, card_id, tries, error, given_up FROM deliveries WHERE channel = ? ORDER BY card_id DESC LIMIT 1",
+      [id],
+    );
+    if (last) lastDeliveries.set(id, last);
+  }
+  const sourceCounts = new Map(
+    all<Row>("SELECT source, count FROM projection_sources").map((row) => [row.source as string, row.count as number]),
   );
   const recentCards = all<Row>("SELECT * FROM cards WHERE state <> 'open' ORDER BY id DESC LIMIT 20");
   const timers = before
@@ -221,10 +226,11 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     cards: openCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
     recentCards: recentCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
     timers: timers.map(({ rule, lane, key, about, at }) => ({ rule, lane, key, about, at })),
-    sources: Object.entries(rules.sources).map(([id, { name }]) => {
-      const events = all<Row>("SELECT COUNT(*) AS n FROM events WHERE source = ?", [id])[0].n as number;
-      return { id, name, events };
-    }),
+    sources: Object.entries(rules.sources).map(([id, { name }]) => ({
+      id,
+      name,
+      events: sourceCounts.get(id) ?? 0,
+    })),
     lines: rules.rules.map((rule) => ({
       id: rule.name,
       name: rule.name,

@@ -157,12 +157,15 @@ function reviewInput(bare: string, main: string, range: string[], config: Settin
 // A change of a few thousand lines read in depth takes longer than ten minutes; a limit under that ends every retry the
 // same way, from the start, while the project's one delivery slot waits. The round itself has two hours.
 export const REVIEW_MINUTES = 30;
+/** What the whole round may use before the worker's hard stop: whatever is left of it is a reviewer's last cap. */
+export const ROUND_BUDGET_MS = 170 * 60_000;
 
 async function runReviewer(
   snapshot: string,
   reviewer: Reviewer,
   effort: string,
   input: ReturnType<typeof reviewInput>,
+  remainingMs: number,
 ) {
   mkdirSync(snapshot, { recursive: true });
   const changesFile = join(snapshot, "changes.txt");
@@ -172,9 +175,10 @@ async function runReviewer(
   const codex = () => [findProgram("codex", () => IN_THE_APP), ...codexCommand(output, effort, model)];
   const argv = command ?? codex();
   const args = argv.slice(1).map((arg) => arg.replaceAll("{input}", changesFile));
+  const timeout = Math.min(REVIEW_MINUTES * 60_000, Math.max(remainingMs, 60_000));
   const child = execFile(...commandLine([argv[0], ...args]), {
     cwd: snapshot,
-    timeout: REVIEW_MINUTES * 60_000,
+    timeout,
     maxBuffer: 8 * 1024 * 1024,
   });
   child.stdin!.end(input.prompt);
@@ -190,7 +194,7 @@ async function runReviewer(
         : reject(
             new Error(
               signal && child.killed
-                ? `审查超过 ${REVIEW_MINUTES} 分钟没有完成，已停止`
+                ? `审查超过 ${Math.round(timeout / 60_000)} 分钟没有完成，已停止`
                 : `审查没有完成：${stderr.slice(-1000)}`,
             ),
           ),
@@ -206,6 +210,8 @@ type ReviewOptions = {
   policy?: SharedPolicy;
   verifyOnly?: boolean;
   onReview?: () => void | Promise<void>;
+  /** How much of the round's budget is left: a reviewer's own cap, so several of them can't run past the worker's stop. */
+  budget?: () => number;
 };
 
 type Round = ReturnType<typeof ledger>["rounds"][number];
@@ -248,7 +254,7 @@ export async function reviewDelivery(
   config: Settings,
   options: ReviewOptions,
 ): Promise<Reviewed> {
-  const { api, statuses, policy, verifyOnly, onReview } = options;
+  const { api, statuses, policy, verifyOnly, onReview, budget } = options;
   const head = pr.head.sha;
   if (git(bare, "rev-list", "--min-parents=3", head, "--not", main))
     return { blocked: `${OCTOPUS.title}。${OCTOPUS.text}` };
@@ -299,7 +305,13 @@ export async function reviewDelivery(
   const input = reviewInput(bare, main, outstanding.range, config, current.author, since ? current.record : undefined);
   const found: Finding[] = [];
   for (const [index, reviewer] of reviewers.entries()) {
-    const results = await runReviewer(join(snapshot, String(index + 1)), reviewer, efforts[index], input);
+    const results = await runReviewer(
+      join(snapshot, String(index + 1)),
+      reviewer,
+      efforts[index],
+      input,
+      budget?.() ?? Infinity,
+    );
     for (const { title, text } of results) {
       found.push({ title: reviewers.length > 1 ? `${title}（审查 ${index + 1}/${reviewer.name}）` : title, text });
     }

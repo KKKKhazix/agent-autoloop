@@ -529,3 +529,54 @@ test("a week-old card link is gone: 410 for looking and for pressing", async () 
   assert.equal(stored(row.id).state, "open", "nothing was answered");
   assert.equal(one<{ answer: string | null }>("SELECT answer FROM cards WHERE id = ?", [row.id])!.answer, null);
 });
+
+test("a change wakes only the polls it can matter to: work arrives for workers, cards for channels", async () => {
+  // Whatever earlier tests left unclaimed or undelivered would answer a poll at once: hand it out first.
+  for (let drained = 0; drained < 10; drained++) {
+    const spare = await call("/v1/work?claim=drain&wait=0&running=", { key: keys.w2 });
+    if (spare.json.job) {
+      await call(`/v1/runs/${spare.json.job.run}/result`, { key: spare.json.job.token, body: { outcome: "nothing" } });
+      continue;
+    }
+    const spareCard = await call("/v1/cards/next?wait=0", { key: keys.chat });
+    if (!spareCard.json.card) break;
+    await call(`/v1/cards/${spareCard.json.card.id}/delivered`, {
+      key: keys.chat,
+      body: { version: spareCard.json.card.version, ref: `om_drain_${drained}` },
+    });
+  }
+  const told = await call("/v1/tell", { key: keys.app, body: { key: "waking", text: "看一眼" } });
+  assert.equal(told.status, 200);
+  const held = await call("/v1/cards/next?wait=0", { key: keys.chat });
+  assert.ok(held.json.card);
+
+  const pending = <T>(promise: Promise<T>) =>
+    Promise.race([
+      promise.then(
+        () => true,
+        () => true,
+      ),
+      new Promise((resolve) => setTimeout(() => resolve(false), 60)),
+    ]);
+  const work = call("/v1/work?claim=waking-w&wait=3&running=", { key: keys.w2 });
+  const cards = call("/v1/cards/next?wait=3", { key: keys.chat });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  // The channel's report touches only the card and its delivery: no work to hand out.
+  await call(`/v1/cards/${held.json.card.id}/delivered`, {
+    key: keys.chat,
+    body: { version: held.json.card.version, ref: "om_wake" },
+  });
+  assert.equal(await pending(work), false, "通道的送达回报没叫醒等活的长轮询");
+  assert.equal(await pending(cards), false, "这条回报没顺手叫醒等卡片的长轮询");
+  // A card made while the polls sleep wakes the card poll, and it takes the card.
+  await call("/v1/tell", { key: keys.app, body: { key: "waking-2", text: "又一张" } });
+  const got = await cards;
+  assert.ok(got.json.card, "等着的通道拿到新卡片");
+
+  // Work arriving wakes the work poll at once, and it takes the job.
+  await call("/v1/events", { key: keys.ops, body: { id: "waking:1", type: "alert.raised", subject: "w" } });
+  const woke = await work;
+  assert.ok(woke.json.job, "等活的接单程序拿到了新活");
+  await call(`/v1/runs/${woke.json.job.run}/result`, { key: woke.json.job.token, body: { outcome: "done" } });
+});

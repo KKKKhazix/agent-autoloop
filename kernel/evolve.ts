@@ -18,11 +18,23 @@ export const TABLES = [
 export type Table = (typeof TABLES)[number];
 export type Change = { table: Table; key: string; row: Row | null };
 export type Fact = { version: 1; seq: number; at: number; type: string; changes: Change[]; meta?: Row };
-export type Match = Record<string, SQLInputValue | SQLInputValue[] | { not: null }>;
+/** A bound on a column: ISO strings and numbers compare the way SQLite does, in the order they are written. */
+export type Range = { gt?: SQLInputValue; lte?: SQLInputValue };
+export type Match = Record<string, SQLInputValue | SQLInputValue[] | { not: null } | Range>;
 const NUMBERED = new Set<Table>(["events", "runs", "cards", "timers"]);
 const indexes: Partial<Record<Table, string[][]>> = {
   events: [["source", "key"], ["routed", "id"], ["paused", "id"], ["id"]],
-  runs: [["state", "id"], ["rule", "lane", "state", "id"], ["id"], ["finished_at"]],
+  runs: [
+    ["state", "id"],
+    ["rule", "lane", "state", "id"],
+    ["id"],
+    ["finished_at"],
+    ["state", "not_before", "id"],
+    ["agent", "state", "id"],
+    ["agent", "state", "not_before"],
+    ["agent", "state", "created_at"],
+    ["rule", "state", "not_before", "id"],
+  ],
   run_events: [["run_id"], ["event_id"]],
   cards: [
     ["key", "id"],
@@ -39,7 +51,7 @@ const indexes: Partial<Record<Table, string[][]>> = {
     ["rule", "lane", "key", "id"],
     ["rule", "lane", "event_id", "id"],
   ],
-  deliveries: [["channel"], ["card_id"]],
+  deliveries: [["channel", "card_id"], ["card_id"]],
   due: [["at"]],
 };
 const field = (name: string) => `json_extract(data,'$.${name}')`;
@@ -59,14 +71,16 @@ export function initialize(db: DatabaseSync) {
     CREATE TABLE IF NOT EXISTS projection_refs(collection TEXT,key TEXT,seq INTEGER,PRIMARY KEY(collection,key,seq));
     CREATE TABLE IF NOT EXISTS projection_pending(key TEXT PRIMARY KEY,card_id INTEGER,channel TEXT);
     CREATE INDEX IF NOT EXISTS pending_channel ON projection_pending(channel,card_id);
-    CREATE TABLE IF NOT EXISTS projection_tallies(rule TEXT,agent TEXT,state TEXT,count INTEGER NOT NULL,retrying INTEGER NOT NULL,input INTEGER NOT NULL,output INTEGER NOT NULL,cost_nano INTEGER NOT NULL,PRIMARY KEY(rule,agent,state));`);
+    CREATE TABLE IF NOT EXISTS projection_tallies(rule TEXT,agent TEXT,state TEXT,count INTEGER NOT NULL,retrying INTEGER NOT NULL,input INTEGER NOT NULL,output INTEGER NOT NULL,cost_nano INTEGER NOT NULL,PRIMARY KEY(rule,agent,state));
+    CREATE TABLE IF NOT EXISTS projection_sources(source TEXT PRIMARY KEY,count INTEGER NOT NULL);`);
   indexProjection(db);
   ready.add(db);
 }
 function indexProjection(db: DatabaseSync) {
   // Including collection prevents the planner preferring a collection-wide primary-key scan for IN predicates.
   db.exec(
-    "CREATE INDEX IF NOT EXISTS projection_delivery_due ON projections(collection,json_extract(data,'$.given_up'),key) WHERE collection='deliveries' AND json_extract(data,'$.not_before') IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS projection_delivery_due ON projections(collection,json_extract(data,'$.given_up'),key) WHERE collection='deliveries' AND json_extract(data,'$.not_before') IS NOT NULL;" +
+      "CREATE INDEX IF NOT EXISTS projection_delivery_trouble ON projections(collection,json_extract(data,'$.given_up'),json_extract(data,'$.error')) WHERE collection='deliveries' AND (json_extract(data,'$.given_up')=1 OR json_extract(data,'$.error') IS NOT NULL)",
   );
   for (const [table, groups] of Object.entries(indexes))
     for (const [i, columns] of groups.entries()) {
@@ -83,6 +97,51 @@ const freeze = (row: Row): Row => {
     if (child && typeof child === "object" && !Object.isFrozen(child)) freeze(child);
   return Object.freeze(row);
 };
+/** The matches a row must satisfy, both where rows are read from the database and where they come from an overlay. */
+const accepts = (match: Match, row: Row) =>
+  Object.entries(match).every(([key, value]) => {
+    const cell = row[key] ?? null;
+    if (Array.isArray(value)) return value.includes(cell);
+    if (value && typeof value === "object") {
+      if ("not" in value) return row[key] != null;
+      if ("gt" in value || "lte" in value) {
+        if ("gt" in value && !(cell > value.gt!)) return false;
+        if ("lte" in value && !(cell <= value.lte!)) return false;
+        return true;
+      }
+    }
+    return cell === value;
+  });
+
+/** The SQL for the same matches, with its parameters pushed on. Sorting the id numerically keeps LIMIT honest when a
+ * range or an IN list would otherwise mix text order into it. */
+function conditionsOf(table: Table, match: Match, params: SQLInputValue[]) {
+  const conditions = Object.entries(match).map(([key, value]) => {
+    if (Array.isArray(value)) {
+      params.push(JSON.stringify(value));
+      return `${field(key)} IN (SELECT value FROM json_each(?))`;
+    }
+    if (value && typeof value === "object") {
+      if ("not" in value) return `${field(key)} IS NOT NULL`;
+      const bounds: string[] = [];
+      if ("gt" in value) {
+        params.push(value.gt!);
+        bounds.push(`${field(key)} > ?`);
+      }
+      if ("lte" in value) {
+        params.push(value.lte!);
+        bounds.push(`${field(key)} <= ?`);
+      }
+      if (bounds.length) return bounds.join(" AND ");
+    }
+    params.push(value as SQLInputValue);
+    return `${field(key)} IS ?`;
+  });
+  const compound = Object.values(match).some((value) => Array.isArray(value) || (value && typeof value === "object"));
+  const order = NUMBERED.has(table) ? `${compound ? "+" : ""}${field("id")}` : "key";
+  return { where: conditions.map((c) => ` AND ${c}`).join(""), order };
+}
+
 export class View {
   readonly seq: number;
   readonly next: Record<string, number>;
@@ -92,6 +151,8 @@ export class View {
   private changes = new Map<Table, Map<string, Row | null>>();
   // The biggest row there is, and every queued run asks for it. Facts bring a new view, so this can't go stale.
   private configs = new Map<string, Row | undefined>();
+  // Every door asks whose key this is; the answer is a handful of rows, read once per view.
+  private keyRows?: Row[];
   constructor(db: DatabaseSync, seq = 0, next: Record<string, number> = {}, format = "") {
     this.db = db;
     this.seq = seq;
@@ -113,18 +174,10 @@ export class View {
   select(table: Table, match: Match = {}, limit?: number, reverse = false): Row[] {
     const changed = this.changes.get(table);
     if (this.base && changed?.size) {
-      const accepts = (row: Row) =>
-        Object.entries(match).every(([key, value]) =>
-          Array.isArray(value)
-            ? value.includes(row[key] ?? null)
-            : value && typeof value === "object" && "not" in value
-              ? row[key] != null
-              : (row[key] ?? null) === value,
-        );
       const found = this.base
         .select(table, match, limit === undefined ? undefined : limit + changed.size, reverse)
         .filter((row) => !changed.has(keyOf(table, row)));
-      for (const row of changed.values()) if (row && accepts(row)) found.push(row);
+      for (const row of changed.values()) if (row && accepts(match, row)) found.push(row);
       if (NUMBERED.has(table)) found.sort((a, b) => (reverse ? b.id - a.id : a.id - b.id));
       else
         found.sort(
@@ -134,22 +187,32 @@ export class View {
     }
     if (this.base) return this.base.select(table, match, limit, reverse);
     const params: SQLInputValue[] = [];
-    const conditions = Object.entries(match).map(([key, value]) => {
-      if (Array.isArray(value)) {
-        params.push(JSON.stringify(value));
-        return `${field(key)} IN (SELECT value FROM json_each(?))`;
-      }
-      if (value && typeof value === "object" && "not" in value) return `${field(key)} IS NOT NULL`;
-      params.push(value);
-      return `${field(key)} IS ?`;
-    });
-    // With IN filters, sorting the matching rows avoids the planner scanning every historic ID in order.
-    const order = NUMBERED.has(table) ? `${Object.values(match).some(Array.isArray) ? "+" : ""}${field("id")}` : "key";
-    const sql = `SELECT key,data FROM projections WHERE collection='${table}'${conditions.map((c) => ` AND ${c}`).join("")} ORDER BY ${order} ${reverse ? "DESC" : "ASC"}${limit === undefined ? "" : " LIMIT ?"}`;
+    const { where, order } = conditionsOf(table, match, params);
+    const sql = `SELECT key,data FROM projections WHERE collection='${table}'${where} ORDER BY ${order} ${reverse ? "DESC" : "ASC"}${limit === undefined ? "" : " LIMIT ?"}`;
     if (limit !== undefined) params.push(limit);
     return statement(this.db, sql)
       .all(...params)
       .map((item) => freeze(JSON.parse(String(item.data))));
+  }
+
+  /** How many rows match, without reading them: the index counts, the rows are never parsed. */
+  count(table: Table, match: Match = {}): number {
+    if (!this.base) {
+      const params: SQLInputValue[] = [];
+      const { where } = conditionsOf(table, match, params);
+      return Number(
+        statement(this.db, `SELECT COUNT(*) AS n FROM projections WHERE collection='${table}'${where}`).get(...params)!
+          .n,
+      );
+    }
+    let found = this.base.count(table, match);
+    // A change takes the row it replaces out of the count and puts what it became in; changed rows are few.
+    for (const [key, row] of this.changes.get(table) ?? []) {
+      const before = this.base.get(table, key);
+      if (before && accepts(match, before)) found -= 1;
+      if (row && accepts(match, row)) found += 1;
+    }
+    return found;
   }
 
   *deliveryCandidates(channel: string, now: number): Generator<Row> {
@@ -160,6 +223,19 @@ export class View {
     ) candidates JOIN projections c ON c.collection='cards' AND c.key=CAST(candidates.id AS TEXT) ORDER BY candidates.id`;
     for (const row of statement(this.db, sql).iterate(iso(now - 86400_000), channel))
       yield freeze(JSON.parse(String(row.data)));
+  }
+  /** Every key row there is, with this view's changes over the base's: for asking whose key a request carries. */
+  keys(): Row[] {
+    if (!this.base) {
+      this.keyRows ??= this.select("keys");
+      return this.keyRows;
+    }
+    const changed = this.changes.get("keys");
+    const base = this.base.keys();
+    if (!changed?.size) return base;
+    const found = base.filter((row) => !changed.has(keyOf("keys", row)));
+    for (const row of changed.values()) if (row) found.push(row);
+    return found;
   }
   fork() {
     const result = new View(this.db, this.seq, this.next, this.format);
@@ -198,7 +274,9 @@ export function evolve(view: View, facts: Iterable<Fact>, db = view.db, reset = 
       .all())
       db.exec(`DROP INDEX "${String(name).replaceAll('"', '""')}"`);
     db.exec("DELETE FROM projections");
-    db.exec("DELETE FROM projection_refs; DELETE FROM projection_pending; DELETE FROM projection_tallies");
+    db.exec(
+      "DELETE FROM projection_refs; DELETE FROM projection_pending; DELETE FROM projection_tallies; DELETE FROM projection_sources",
+    );
     indexProjection(db);
   }
   let seq = view.seq;
@@ -229,6 +307,16 @@ export function evolve(view: View, facts: Iterable<Fact>, db = view.db, reset = 
     tally.run(run.rule, run.agent, run.state, sign, retrying, input, output, cost);
     untally.run(run.rule, run.agent, run.state);
   };
+  const tallySource = statement(
+    db,
+    "INSERT INTO projection_sources VALUES (?,?) ON CONFLICT(source) DO UPDATE SET count=count+excluded.count",
+  );
+  const untallySource = statement(db, "DELETE FROM projection_sources WHERE source=? AND count=0");
+  const countSource = (event: Row | null | undefined, sign: 1 | -1) => {
+    if (!event || typeof event.source !== "string") return;
+    tallySource.run(event.source, sign);
+    untallySource.run(event.source);
+  };
   for (const fact of facts) {
     seq = fact.seq;
     const pending = new Map<string, Change>();
@@ -239,6 +327,11 @@ export function evolve(view: View, facts: Iterable<Fact>, db = view.db, reset = 
     for (const { table, key, row } of pending.values()) {
       if (["events", "runs", "cards"].includes(table))
         statement(db, "INSERT OR IGNORE INTO projection_refs VALUES (?,?,?)").run(table, key, fact.seq);
+      if (table === "events") {
+        const before = stored.get(table, key);
+        countSource(before ? JSON.parse(String(before.data)) : null, -1);
+        countSource(row, 1);
+      }
       if (table === "runs") {
         const before = stored.get(table, key);
         count(before ? JSON.parse(String(before.data)) : null, -1);

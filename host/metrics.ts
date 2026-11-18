@@ -34,9 +34,10 @@ export function metricsText(commit: string, now = Date.now()) {
   const seen = all<{ kind: string; name: string; seen_at: string }>("SELECT kind, name, seen_at FROM seen");
   const online = (kind: string) =>
     seen.filter((row) => row.kind === kind && now - Date.parse(row.seen_at) <= ONLINE).length;
-  const deliveries = one<{ failed: number; given_up: number }>(
-    `SELECT SUM(CASE WHEN given_up = 0 AND error IS NOT NULL THEN 1 ELSE 0 END) AS failed,
-      SUM(given_up) AS given_up FROM deliveries`,
+  const deliveries = one<{ failed: number | null; given_up: number | null }>(
+    `SELECT SUM(CASE WHEN json_extract(data,'$.given_up')=0 AND json_extract(data,'$.error') IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+      SUM(json_extract(data,'$.given_up')) AS given_up FROM projections
+      WHERE collection='deliveries' AND (json_extract(data,'$.given_up')=1 OR json_extract(data,'$.error') IS NOT NULL)`,
   )!;
 
   const lines = [
