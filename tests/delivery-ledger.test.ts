@@ -14,6 +14,7 @@ import { test } from "node:test";
 import { settings } from "../plugins/delivery/project.ts";
 import { readSharedPolicy, reviewDelivery, selectReview } from "../plugins/delivery/review.ts";
 import { reviewCovers } from "../plugins/delivery/review-policy.ts";
+import { ledger, renderRound } from "../plugins/delivery/review-ledger.ts";
 
 test("a shared policy is read from main and can ask the same reviewer twice", async () => {
   const policy = await readSharedPolicy("example/config:policy.json", (repo) => async (path) => {
@@ -138,12 +139,16 @@ console.log(JSON.stringify({findings}));
     // Round 2 only checks the blocking finding against the final change since round 1.
     commit("feature.txt", "bad change\n");
     pr.head.sha = commit("fix.txt", "still bad change\n");
+    // One round isn't the owner's to settle: a decision written now doesn't skip the check.
+    states.set(pr.head.sha, [
+      { context: "delivery-owner/7", state: "success", description: "放行", creator: { id: 1 } },
+    ]);
     assert.deepEqual(await run(true), { changed: true });
     assert.match(((await run()) as { blocked: string }).blocked, /两轮.*负责人/);
     const second = rounds()[1];
     assert.doesNotMatch(second.diff, /^\+bad change/m);
     assert.match(second.diff, /still bad change/);
-    assert.match(second.prompt, /只核对/);
+    assert.match(second.prompt, /这一轮核对/);
     assert.match(second.prompt, /有问题/);
     assert.match(pr.body, /第 2 轮[^\n]+挡上线 1 条，建议 0 条。\n\n已经审了两轮/);
 
@@ -229,7 +234,7 @@ console.log('{"findings":[]}');
     assert.deepEqual(await run(), []);
     assert.match(rounds()[1].diff, /second/);
     assert.doesNotMatch(rounds()[1].diff, /first/);
-    assert.doesNotMatch(rounds()[1].prompt, /只核对/);
+    assert.doesNotMatch(rounds()[1].prompt, /这一轮核对/);
     const expandedDepth = { ...config, review: { ...config.review, xhigh: ["feature.txt"] } };
     assert.deepEqual(await run(true, expandedDepth), { changed: true });
     assert.deepEqual(await run(false, expandedDepth), []);
@@ -256,4 +261,16 @@ test("a round keeps its credit when the same model reviewed at the same depth, w
   const command = { name: "custom", command: ["node", "review.mjs"] };
   const recorded = { signature: `command/${"0".repeat(64)}`, effort: "high" };
   assert.ok(!reviewCovers(recorded, [command], ["high"]));
+});
+
+test("a finding written over several lines stays one finding inside the review record", () => {
+  const how = "1. 打开页面\n2. 连点两次\n## 结果";
+  const text = "1. 发了两封\n## 后果";
+  const round = renderRound(ledger(""), "codex/m", ["high"], "a".repeat(40), [
+    { level: "block", title: "重复发信", how, text },
+  ]);
+  const record = ledger(ledger("").append(round));
+  assert.equal(record.rounds.length, 1);
+  assert.equal(record.rounds[0].blocking, 1);
+  assert.deepEqual(record.unhandled, [1]);
 });
