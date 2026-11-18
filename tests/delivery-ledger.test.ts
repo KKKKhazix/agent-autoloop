@@ -133,10 +133,7 @@ console.log(JSON.stringify({findings}));
     pr.body = reviewedBody;
     assert.match(((await run()) as { blocked: string }).blocked, /第 1 条/);
 
-    // Writing 处理 without a new commit doesn't let the blocking finding through.
     pr.body = pr.body.replace("处理：", "处理：不改");
-    assert.match(((await run()) as { blocked: string }).blocked, /修复/);
-    assert.equal(rounds().length, 1);
 
     // Round 2 only checks the blocking finding against the final change since round 1.
     commit("feature.txt", "bad change\n");
@@ -285,4 +282,71 @@ test("a finding written over several lines stays one finding inside the review r
   assert.equal(record.rounds.length, 1);
   assert.equal(record.rounds[0].blocking, 1);
   assert.deepEqual(record.unhandled, [1]);
+});
+
+test("answering a blocking finding with 不改 and only a docs commit has the next round check it against the whole change", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-autoloop-ledger-"));
+  try {
+    const repo = join(root, "repo");
+    mkdirSync(join(repo, "docs"), { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.invalid", ...args], {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    const commit = (path: string, text: string) => {
+      writeFileSync(join(repo, path), text);
+      git("add", path);
+      git("commit", "-qm", path);
+      return git("rev-parse", "HEAD");
+    };
+    git("init", "-q", "-b", "main");
+    const main = commit("AGENTS.md", "## 审查要点\n保住行为。\n");
+    const reviewer = join(root, "review.mjs");
+    const reviewed = join(root, "reviews.jsonl");
+    writeFileSync(
+      reviewer,
+      `import fs from 'node:fs';
+let prompt='';for await(const b of process.stdin)prompt+=b;
+const diff=fs.readFileSync(process.argv[2],'utf8');
+fs.appendFileSync(process.argv[3],JSON.stringify({diff,prompt})+'\\n');
+const findings=/^\\+.*bad change/m.test(diff)?[{level:'挡上线',title:'有问题',how:'每次保存都会',text:'数据会丢'}]:[];
+console.log(JSON.stringify({findings}));
+`,
+    );
+    const config = settings({
+      repo: "example/app",
+      internal: ["docs/*.md"],
+      review: { points: "AGENTS.md", command: [process.execPath, reviewer, "{input}", reviewed] },
+    });
+    const pr = { number: 7, head: { sha: commit("feature.txt", "bad change\n") }, labels: [], body: "" };
+    const states = new Map<string, any[]>();
+    const run = () =>
+      reviewDelivery(repo, join(root, "snapshot"), main, pr, config, {
+        api: async (path, body, method) => {
+          if (path.startsWith("statuses/")) {
+            const sha = path.slice("statuses/".length);
+            states.set(sha, [{ ...body, creator: { id: 1 } }, ...(states.get(sha) ?? [])]);
+            return {};
+          }
+          if (method === "PATCH") pr.body = body.body;
+          return structuredClone(pr);
+        },
+        statuses: (sha) => states.get(sha) ?? [],
+        reviewerId: () => 1,
+      });
+    assert.equal(((await run()) as unknown[]).length, 1);
+    pr.body = pr.body.replace("处理：", "处理：不改，理由见文档");
+    pr.head.sha = commit("docs/why.md", "为什么不改\n");
+    assert.match(((await run()) as { blocked: string }).blocked, /两轮.*负责人/);
+    const second = readFileSync(reviewed, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))[1];
+    assert.match(second.diff, /bad change/);
+    assert.match(second.prompt, /有问题/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

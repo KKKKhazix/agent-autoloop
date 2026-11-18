@@ -366,12 +366,16 @@ export async function reviewDelivery(
       if ((error as { status?: number }).status !== 128) throw error;
     }
   }
-  const outstanding = since ? scope(bare, main, head, config, since) : changed;
+  let outstanding = since ? scope(bare, main, head, config, since) : changed;
   if (!outstanding.needsReview) {
-    // Writing 处理, or syncing main, is no fix: a blocking finding needs a commit the next round can check.
-    if (latestRound?.blocking && !current.unhandled.length)
-      return { blocked: `第 ${latestRound.number} 轮有挡上线的问题，之后还没有可审的修复提交。修好后推新提交再交付。` };
-    return unhandled(current);
+    if (!latestRound?.blocking || current.unhandled.length) return unhandled(current);
+    // The very commit the findings were on is never reviewed again: a second look could simply miss them.
+    if (latestRound.head === head)
+      return { blocked: "这个提交审查发现过挡上线的问题，修复或写明理由后推新提交再交付。" };
+    // Nothing new to read, but blocking findings answered (fixed in docs, or kept with a reason): the next round checks
+    // them against the whole change, so writing 处理 alone never lets one through.
+    outstanding = changed;
+    since = undefined;
   }
   if (verifyOnly) return { changed: true };
 
