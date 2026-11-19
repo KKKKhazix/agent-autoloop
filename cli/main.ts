@@ -490,8 +490,8 @@ async function runs(args: string[]) {
   if (rest.length > 1 || named.before === true) return fail(RUNS_USAGE);
   const before = named.before === undefined ? undefined : runOf(named.before, RUNS_USAGE);
   const owner = ownerClient();
-  const { findRuns, runsText } = await import("./runs.ts");
-  const found = await findRuns((at) => owner.state(at), { rule: rest[0], before });
+  const { readRuns, runsText } = await import("./runs.ts");
+  const found = await readRuns(owner, rest[0], before);
   if (named.json !== undefined) return console.log(JSON.stringify({ runs: found.runs, before: found.more }, null, 2));
   const color = colorFor(process.stdout, process.env);
   console.log(runsText(found, { rule: rest[0], color, columns: process.stdout.columns }));

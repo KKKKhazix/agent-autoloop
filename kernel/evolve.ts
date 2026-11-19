@@ -22,7 +22,7 @@ export type Match = Record<string, SQLInputValue | SQLInputValue[] | { not: null
 const NUMBERED = new Set<Table>(["events", "runs", "cards", "timers"]);
 const indexes: Partial<Record<Table, string[][]>> = {
   events: [["source", "key"], ["routed", "id"], ["paused", "id"], ["id"]],
-  runs: [["state", "id"], ["rule", "lane", "state", "id"], ["id"], ["finished_at"]],
+  runs: [["state", "id"], ["rule", "lane", "state", "id"], ["id"], ["finished_at"], ["rule", "id"]],
   run_events: [["run_id"], ["event_id"]],
   cards: [
     ["key", "id"],
