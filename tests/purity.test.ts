@@ -12,7 +12,7 @@ const kernel = readdirSync(join(root, "kernel"))
   .map((f) => [f, readFileSync(join(root, "kernel", f), "utf8")] as const);
 
 const VENDORS =
-  /claude|anthropic|codex|openai|gemini|cursor|hermes|openclaw|feishu|lark|dingtalk|telegram|slack|github|gitlab|\bacp\b|\bdsh\b|\bzcode\b/i;
+  /claude|anthropic|codex|openai|gemini|cursor|hermes|openclaw|antigravity|\bagy\b|feishu|lark|dingtalk|telegram|slack|github|gitlab|\bacp\b|\bdsh\b|\bzcode\b/i;
 
 /** A comment may say where a limit came from. */
 function namesNoProduct(file: string, text: string) {
@@ -30,7 +30,10 @@ test("what loads and runs the plugins names none either: a new product is a new 
   for (const folder of ["host", "protocol", "worker"]) {
     for (const file of readdirSync(join(root, folder)).filter((name) => name.endsWith(".ts"))) {
       // What the worker keeps out of an agent's environment, of a session the worker itself may be in: nothing knows it else.
-      const text = readFileSync(join(root, folder, file), "utf8").replace("CLAUDECODE$|CLAUDE_CODE_|CODEX_", "");
+      const text = readFileSync(join(root, folder, file), "utf8").replace(
+        "CLAUDECODE$|CLAUDE_CODE_|CODEX_(?!HOME$)|ANTIGRAVITY_|AGY_",
+        "",
+      );
       namesNoProduct(`${folder}/${file}`, text);
     }
   }

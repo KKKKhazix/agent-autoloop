@@ -28,16 +28,18 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 
 从 [hello-agent/agent.ts](../examples/plugins/hello-agent/agent.ts) 开始。它用 `printf` 代替模型，克隆到别处也能运行。收下提示词和结束时各打一行，`read` 从第一行就知道这一轮接上了原会话，第二行是它的最后一条消息。
 
-| 导出对象的方法               | 作用                                                                                                                          |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `command(turn)`              | 返回命令参数数组；参数不作为 shell 代码执行                                                                                   |
-| `read(stdout, code, stderr)` | 返回 `text`、`session`、`usage`、`sessionUsage`、`error`、`finished`、`started`；运行中 `code` 为 `null`                      |
-| `link(session)`              | 可选，打开这个会话的链接。回执写错时，`read` 返回了 `session` 的插件都只重写回执，和有没有链接无关                            |
-| `check(program)`             | 可选，`doctor` 问它这个 Agent 现在能不能用：能用返回 `null`，否则返回下一步怎么做。参数是规则里给它写的 `program`，没写就不传 |
+| 导出对象的方法                         | 作用                                                                                                                          |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `command(turn)`                        | 返回命令参数数组；参数不作为 shell 代码执行                                                                                   |
+| `read(stdout, code, stderr, context?)` | 返回 `text`、`session`、`usage`、`sessionUsage`、`error`、`finished`、`started`；运行中 `code` 为 `null`                      |
+| `link(session)`                        | 可选，打开这个会话的链接。回执写错时，`read` 返回了 `session` 的插件都只重写回执，和有没有链接无关                            |
+| `check(program)`                       | 可选，`doctor` 问它这个 Agent 现在能不能用：能用返回 `null`，否则返回下一步怎么做。参数是规则里给它写的 `program`，没写就不传 |
 
 `turn` 一定有的是 `prompt`、`session`、`resume`、`cwd`、`access`、`contextFile`、`folder`，另外五个只有规则里给这个 Agent 写了才有：`model`、`effort`、`tier`、`command`、`program`。`resume` 是这一轮要接回的原会话，新开一轮时是 `null`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`program` 是内置插件换成的启动程序，第三方插件用不上，收下也可以不理。`tier` 是服务档位，用的是那个 CLI 自己的叫法，现在只有内置的 Codex 插件用它（传成 `-c service_tier="…"`，`priority` 就是 Codex 应用里的 Fast），别的插件收下不理。那五个都按「可能没有」来读，内置插件就是这么写的：`...(turn.model ? ["--model", turn.model] : [])`、`turn.command ?? []`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。`read` 抛错或什么也不返回时，还在跑的接着跑，结束后这一轮算没跑成，留在原会话重派。
 
 支持 `resume` 的插件，从 Agent 收下提示词起都要返回 `started: true`，包括运行中和出错之后。否则干到一半断了，也会被当成会话接不上，开新会话把业务重做一遍。返回了 `session` 就要按 `turn.resume` 接回原会话：没跑成的重派和写错回执的重写都靠它；接不回去的 CLI 不要返回 `session`。
+
+`context` 是可选的接单上下文：`resume` 是本轮请求续接的会话，`repair` 表示当前只在重写回执；旧插件可以忽略第四个参数。原生 `agy` 若找不到旧会话，可能已在替身会话执行。此时插件保留真实执行与用量，记录实际会话但不冒充原会话恢复成功；不采用替身业务回执，而用固定 `ask` 结束本轮等待核对，防止自动重做。只在修复回执时仍交回错误，由接单程序保留原业务结果，不用替身回执替换它。
 
 `usage` 是这次启动用掉的量。`input` 算全部输入，`cached` 是其中从缓存读的部分；CLI 报的输入不含缓存时（Claude Code、DSH 就是这样），插件把缓存读写加回 `input`，各家才能放在一起比。有的 CLI 只给整个会话累计到现在的数（Codex 的 Token、Claude Code 的费用），这几项放进 `sessionUsage`，同时要返回 `session`。接单程序启动前记下这个会话上次的累计值，结束后相减，和 `usage` 合起来上报；这些记录放在 `~/.agent-autoloop/worker/usage/`，接单程序中途重启也不会多算。
 
@@ -58,6 +60,8 @@ Windows 原生运行支持 `.exe`/`.com`、PowerShell `.ps1` 和 npm 生成的 `
 DeepSeek Harness 有内置 `dsh` 插件，规则里写 `use: "dsh"`，要 0.2.2 或更新，`agent-autoloop doctor` 会查。现在 npm 的 `latest` 还是旧版，要这样装：`npm install -g @deepseek-ai/dsh@next --allow-scripts=koffi,node-pty,@deepseek-ai/dsh-subprocess-local`。新版 npm 默认不跑依赖的安装脚本，不放行这三个包，装完看着正常，一跑才出错。从旧版升上来的，0.2.2 可能读不到 `~/.dsh/.credentials.yaml` 里的 `refs`，报 `MISSING_CREDENTIAL`：把密钥放进环境变量，Linux 的系统服务放 `~/.config/environment.d/*.conf`。只上报 Token，不上报费用。有用户在 WSL2 上用 0.2.2-rc.1 和第三方 OpenAI 兼容服务实测跑通了问答、用量和 `resume`。它以 `dsh headless --json` 跑一轮，从 `session` 事件拿会话编号，用 `--session-id` 续接，把 `step_end` 的用量汇总为 Token，`final` 事件才算跑完；`access` 每次都映射成 `--permission-mode`，要人批准的调用用 `--approval-policy never` 直接拒绝。规则里的 `model`、`effort` 不起作用，用 DSH 自己的配置。没有可打开的桌面会话链接。DSH 默认把会话日志上传给 DeepSeek，见[它的说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)。
 
 ZCode 有内置 `zcode` 插件，规则里写 `use: "zcode"`。它启动随桌面版安装的 CLI，跑 `zcode -p … --json`，一轮结束后打印一个 JSON 对象：从 `sessionId` 取会话编号，`response` 是最后一条消息，`usage` 里的 `inputTokens`、`outputTokens`、`cacheReadTokens` 是这一轮的 Token；下一轮用 `--resume sess_…` 续接。`access` 映射成它自己的模式：`read`→`plan`、`edit`→`edit`、`full`→`yolo`。Windows 上的 CLI 是 `.cjs` 包，Agent 写 `"program": "路径\\zcode.cjs"`，插件会用 node 启动它；写一个别的可执行文件也可以。规则里的 `model`、`effort` 不起作用，模型和提供方由 ZCode 自己的配置决定；CLI 用 `-p` 返回空时，先在 ZCode 里换一个能用的提供方。只上报 Token，不上报费用；没有可打开的桌面会话链接。
+
+Antigravity 有内置 `antigravity` 插件，规则里写 `use: "antigravity"`（直接写进 `rules.json`，`agent-autoloop init` 当前仅自动生成 Claude Code / Codex 配置）。不写 `program` 时先按登录 shell 的 `PATH` 查找 `agy`，找不到再回落到 `~/.local/bin/agy`；写 `program` 时直接用该路径启动 `<program> -p ... --output-format stream-json`。插件支持 `model`（`--model`）、`effort`（`--effort`）、`access` 权限映射、`--add-dir`、通过 `--conversation` 续接同一会话，以及 `result.usage` 累计 Token 用量上报（中台自动按轮次扣减出本轮增量）。如原会话缺失、`agy` 告警并试图改用新会话，适配器会拒绝该替身会话并留给中台按协议处理。`agent-autoloop doctor` 通过 `--help` 核对无界面输出与续接能力，并通过 `models` 校验登录状态。自动化跑的是 `agy` 命令行管理的独立无界面会话，不接管或等同于桌面端现有聊天，也不提供桌面会话链接。
 
 ### 浏览器接入
 
@@ -114,15 +118,16 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 
 `access` 由插件翻译，不是中台提供的系统沙箱。以下是未额外放宽本机权限时的行为。
 
-| 插件             | `read`                                                           | `edit`                                                                       | `full`                                                 |
-| ---------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Codex            | `read-only`：能跑 shell，不能写文件，命令默认不能联网            | `workspace-write`：能跑 shell、写工作目录和临时目录，命令默认不能联网        | `danger-full-access`：能写文件、跑 shell、联网，无审批 |
-| Claude Code      | `plan`：能读文件和运行只读命令；其他命令取决于自动审批及本机规则 | `acceptEdits`：再允许目录内文件编辑和常见文件操作；任意 shell 或联网仍需放行 | `bypassPermissions`：跳过工具审批，没有额外系统隔离    |
-| DeepSeek Harness | `read-only`：不能写文件，读文件和联网不受限                      | `workspace-write`：命令和文件改动限于工作目录和临时目录，读文件和联网不受限  | `danger-full-access`：不受限制                         |
-| ZCode            | `plan`：只读规划，不写文件                                       | `edit`：自动应用编辑，shell 命令直接执行                                     | `yolo`：不审批，不受限制                               |
-| ACP              | Agent 来问时，同意读和搜索                                       | 再同意工作目录内的编辑                                                       | 同意它来问的所有操作                                   |
+| 插件             | `read`                                                                                                       | `edit`                                                                                                                                                                                                                                                                                                                         | `full`                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| Codex            | `read-only`：能跑 shell，不能写文件，命令默认不能联网                                                        | `workspace-write`：能跑 shell、写工作目录和临时目录，命令默认不能联网                                                                                                                                                                                                                                                          | `danger-full-access`：能写文件、跑 shell、联网，无审批 |
+| Claude Code      | `plan`：能读文件和运行只读命令；其他命令取决于自动审批及本机规则                                             | `acceptEdits`：再允许目录内文件编辑和常见文件操作；任意 shell 或联网仍需放行                                                                                                                                                                                                                                                   | `bypassPermissions`：跳过工具审批，没有额外系统隔离    |
+| DeepSeek Harness | `read-only`：不能写文件，读文件和联网不受限                                                                  | `workspace-write`：命令和文件改动限于工作目录和临时目录，读文件和联网不受限                                                                                                                                                                                                                                                    | `danger-full-access`：不受限制                         |
+| Antigravity      | `--mode plan --sandbox`：进入 `/plan` 规划沙盒；可跑允许的只读命令，若任务要求写文件可能在其脑目录写计划文件 | `--mode accept-edits`：自动允许编辑文件；默认自动拒绝未放行 `run_command`（因 `denied_actions` 失败），需要跑编译/测试命令时在 `~/.gemini/antigravity-cli/settings.json` 配 `"permissions": { "allow": ["command(npm test)", "command(node --test)"] }`，或用 `"program"` 包装脚本传 `--settings` / `--sandbox`，或改设 `full` | `--dangerously-skip-permissions`：跳过权限确认         |
+| ZCode            | `plan`：只读规划，不写文件                                                                                   | `edit`：自动应用编辑，shell 命令直接执行                                                                                                                                                                                                                                                                                       | `yolo`：不审批，不受限制                               |
+| ACP              | Agent 来问时，同意读和搜索                                                                                   | 再同意工作目录内的编辑                                                                                                                                                                                                                                                                                                         | 同意它来问的所有操作                                   |
 
-Codex 的三个档位已用插件命令实跑；ZCode 已用真实 CLI 跑通 `edit` 模式、提问和回答后的会话续接，`plan`、`yolo` 按它的 `--mode` 说明整理；DeepSeek Harness 和 Claude Code 分别依据 [DSH 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)和[官方权限说明](https://code.claude.com/docs/en/permission-modes)整理，没有调用模型实跑。Codex 的命令网络限制与托管搜索、MCP 不是同一个边界，详见[官方沙箱说明](https://learn.chatgpt.com/docs/agent-approvals-security)。用户的 CLI 配置可能改变上述能力；`read` 也不代表读不到本机密钥。
+Codex 的三个档位已用插件命令实跑；Antigravity（`1.5.9`）的档位行为也已实测；ZCode 已用真实 CLI 跑通 `edit` 模式、提问和回答后的会话续接，`plan`、`yolo` 按它的 `--mode` 说明整理；DeepSeek Harness 和 Claude Code 分别依据 [DSH 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)和[官方权限说明](https://code.claude.com/docs/en/permission-modes)整理，没有调用模型实跑。Codex 的命令网络限制与托管搜索、MCP 不是同一个边界，详见[官方沙箱说明](https://learn.chatgpt.com/docs/agent-approvals-security)。用户的 CLI 配置可能改变上述能力；`read` 也不代表读不到本机密钥。
 
 ACP 的 `access` 只管 Agent 主动来问的操作。规范允许 Agent 不询问就执行，这种操作 `access` 拦不住，要用 Agent 自己的模式限制，比如 `command` 里写 `env INITIAL_AGENT_MODE=read-only …`。ACP 的 `model`、`effort`、`tier` 不生效，也要在 Agent 自己那边设置。
 

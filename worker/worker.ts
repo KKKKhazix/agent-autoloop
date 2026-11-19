@@ -99,7 +99,7 @@ function sessionRise(entry: Entry, { session, sessionUsage }: Reading) {
 function agentEnvironment(entry: Entry) {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (/^(AGENT_AUTOLOOP_|CLAUDECODE$|CLAUDE_CODE_|CODEX_(?!HOME$))/.test(name)) continue;
+    if (/^(AGENT_AUTOLOOP_|CLAUDECODE$|CLAUDE_CODE_|CODEX_(?!HOME$)|ANTIGRAVITY_|AGY_)/.test(name)) continue;
     env[name] = value;
   }
   return {
@@ -343,7 +343,10 @@ export function createWorker({
   function read(entry: Entry, adapter: Adapter, code: number | null): Reading {
     const { out, err } = files(entry);
     try {
-      const reading = adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
+      const reading = adapter.read(snapshot(out), code, code === null ? "" : snapshot(err), {
+        resume: entry.resume,
+        repair: entry.repairs > 0,
+      });
       if (!reading) throw new Error("它什么也没给");
       return reading;
     } catch (error) {
