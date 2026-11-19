@@ -95,7 +95,7 @@ const PLAIN = /^[\p{L}\p{N}_./][\p{L}\p{N}_.#@:/-]*$/u;
 
 /** A word the user's shell reads back unchanged: single quotes, which neither expands inside, as each shell escapes them.
  * PowerShell also takes the curly single quotes (common in Chinese text) as quotes, so each of those is doubled too. */
-const shellWord = (word: string, windows: boolean) =>
+export const shellWord = (word: string, windows = process.platform === "win32") =>
   PLAIN.test(word)
     ? word
     : windows
