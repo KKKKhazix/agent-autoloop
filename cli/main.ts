@@ -72,6 +72,7 @@ const HELP = `Agent 自动化中台
   agent-autoloop join <中台地址> --worker <名字> --key <密钥> [--no-service]
                                     另一台电脑只接活时用
   agent-autoloop backup [目录]           备份数据库、主密钥、配置、规则和 secrets.env；不填目录就放在 ~/.agent-autoloop/backups
+  agent-autoloop backup --verify <目录>   检查备份里的数据库和主密钥
   agent-autoloop restore <目录> [--yes]  停掉中台后，用一次备份恢复本机数据
   agent-autoloop update                  更新到最新发布的版本
   agent-autoloop uninstall [--yes]       卸载程序并保留数据；--yes 跳过确认
@@ -129,7 +130,7 @@ const TAKES: Record<string, { flags: string[]; usage: string }> = {
   { "title": "…", "text": "…", "options": ["…", "…"], "recommend": 0, "about": "留给接着做的", "key": "这件事的固定名字" }
 rules.json 里这个定时任务要写 cwd；你答了，中台叫醒它的 Agent 在 cwd 照 skill、prompt 接着做。`,
   },
-  backup: { flags: [], usage: "用法：agent-autoloop backup [目录]" },
+  backup: { flags: ["verify"], usage: "用法：agent-autoloop backup [目录] 或 agent-autoloop backup --verify <目录>" },
   check: { flags: [], usage: "用法：agent-autoloop check [文件]" },
   conformance: { flags: ["config"], usage: "用法：agent-autoloop conformance <测试中台地址> --config <测试凭据文件>" },
   doctor: { flags: [], usage: "用法：agent-autoloop doctor" },
@@ -728,7 +729,13 @@ async function emit(args: string[]) {
 }
 
 async function backupCommand(args: string[]) {
-  const { rest } = flags(args);
+  const { rest, named } = flags(args);
+  if (named.verify !== undefined) {
+    if (typeof named.verify !== "string" || rest.length) return fail(TAKES.backup.usage);
+    const { verifyBackup } = await import("./backup.ts");
+    verifyBackup(path.resolve(named.verify));
+    return console.log("备份检查通过：hub.db 有数据表且通过 SQLite quick_check，master.key 格式正确。");
+  }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const target = path.resolve(rest[0] ?? path.join(HOME, "backups", stamp));
   const { backup } = await import("./backup.ts");

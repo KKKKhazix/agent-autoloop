@@ -4,7 +4,7 @@
 // WAL included; a restore killed while copying leaves a home without its database, key or config; a database too broken to read
 // stops the restore that would replace it; an empty database is taken for a backup and put in place of a working home; a
 // restore runs while anything has the database open, a hub started some other way or between requests included; a restore runs
-// without being confirmed.
+// without being confirmed; checking a backup changes it or the live home.
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import {
@@ -31,7 +31,7 @@ import { at, setup } from "./helpers.ts";
 
 const home = setup("backup");
 const hub = await import("./hub.ts");
-const { backup, restore } = await import("../cli/backup.ts");
+const { backup, restore, verifyBackup } = await import("../cli/backup.ts");
 
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-backup-"));
 after(() => {
@@ -79,6 +79,9 @@ test("a real hub's data, backed up while it runs, comes back whole under its own
   const target = join(folder(), "snapshot");
   const { files } = await backup(home, target);
   assert.ok(files.includes("hub.db") && files.includes("master.key"), files.join());
+  const originalFiles = readdirSync(target);
+  verifyBackup(target);
+  assert.deepEqual(readdirSync(target), originalFiles);
   privateMode(join(target, "hub.db"), 0o600);
   privateMode(join(target, "master.key"), 0o600);
   const { n } = hub.one<{ n: number }>("SELECT COUNT(*) AS n FROM facts")!;
@@ -256,6 +259,19 @@ test("the commands write where they're told and ask before replacing anything", 
   assert.ok(existsSync(join(target, "hub.db")));
   await assert.rejects(cli("backup", target), /不是空的/);
   await assert.rejects(cli("backup", "--wat"), /不认识的参数/);
+
+  const walBackup = folder();
+  withWal(walBackup);
+  const snapshot = () =>
+    readdirSync(walBackup)
+      .sort()
+      .map((name) => [name, readFileSync(join(walBackup, name))]);
+  const before = snapshot();
+  assert.match((await cli("backup", "--verify", walBackup)).stdout, /quick_check/);
+  assert.deepEqual(snapshot(), before);
+  await assert.rejects(cli("backup", "--verify"), /用法/);
+  writeFileSync(join(walBackup, "master.key"), "broken");
+  await assert.rejects(cli("backup", "--verify", walBackup), /master.key/);
 
   await assert.rejects(cli("restore", target), /--yes/);
   await assert.rejects(cli("restore"), /用法/);

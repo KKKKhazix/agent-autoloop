@@ -1,6 +1,18 @@
 // `backup` and `restore`: the database, the key that signs card links, and the files that say what this machine is.
 // A backup is taken while the hub runs; a restore needs it stopped, because it replaces the file that is open.
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { backup as copyPages, DatabaseSync } from "node:sqlite";
 import { privateDirectory } from "../host/files.ts";
@@ -42,11 +54,15 @@ export async function backup(home: string, target: string) {
   return { target, files };
 }
 
-function readableBackup(source: string) {
+function backupDatabase(source: string) {
   const database = path.join(source, DB);
   const key = path.join(source, KEY);
   if (!existsSync(database) || !existsSync(key)) throw new Error(`这个目录不像备份：缺 ${DB} 或 ${KEY}`);
   if (!KEY_SHAPE.test(readFileSync(key, "utf8").trim())) throw new Error("备份里的 master.key 坏了");
+  return database;
+}
+
+function checkDatabase(database: string) {
   let result: unknown;
   let tables = 0;
   try {
@@ -63,6 +79,23 @@ function readableBackup(source: string) {
   } catch {}
   if (result !== "ok") throw new Error("备份里的 hub.db 读不出来");
   if (!tables) throw new Error("备份里的 hub.db 是空库");
+}
+
+/** Verify a finished snapshot without letting SQLite create a shared-memory file or checkpoint its journal there. */
+export function verifyBackup(source: string) {
+  const database = backupDatabase(source);
+  const sidecars = ["-wal", "-journal"].filter((suffix) => existsSync(database + suffix));
+  if (!sidecars.length) return checkDatabase(pathToFileURL(database).href + "?immutable=1");
+
+  const scratch = mkdtempSync(path.join(tmpdir(), "agent-autoloop-verify-"));
+  try {
+    privateDirectory(scratch);
+    const copy = path.join(scratch, DB);
+    for (const suffix of ["", ...sidecars]) copyFileSync(database + suffix, copy + suffix);
+    checkDatabase(copy);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 /** Whether anything has the database open, a hub between requests included: only then is this lock out of reach. */
@@ -85,7 +118,7 @@ export async function restore(home: string, source: string) {
   if (inUse(path.join(home, DB))) {
     throw new Error("中台还在跑：先停掉它（例如 agent-autoloop service remove，或手动停服务），再恢复");
   }
-  readableBackup(source);
+  checkDatabase(backupDatabase(source));
   privateDirectory(home);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const staged = path.join(home, `restore-new-${stamp}`);
