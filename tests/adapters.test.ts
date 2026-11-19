@@ -16,7 +16,8 @@
 // something other than what the event said. A built-in agent starts the program it finds, not the one its rules name,
 // so a wrapper that sends Claude Code to another service is never run. A service tier the rules name for Codex never
 // reaches its command line, so the run takes whatever tier the machine's own Codex config has that day. A program
-// missing for a moment, as while an update reinstalls it, stays missing until the worker restarts.
+// missing for a moment, as while an update reinstalls it, stays missing until the worker restarts. A program a terminal
+// finds only because ~/.zshrc or ~/.bashrc puts its folder on PATH is missing for a worker launchd or systemd started.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -390,6 +391,29 @@ test("a plain command's prompt reaches the program as it was written, whatever i
 
 test("a program that isn't there says so", () => {
   assert.throws(() => findProgram("surely-not-installed-anywhere"), /找不到 surely-not-installed-anywhere/);
+});
+
+test("a program on the PATH a terminal's shell sets up is found", { skip: process.platform === "win32" }, () => {
+  const folder = setup("adapters-terminal");
+  const program = join(folder, "terminal-agent");
+  writeFileSync(program, "", { mode: 0o755 });
+  // Like zsh: a login shell that isn't interactive skips ~/.zshrc, and an interactive one may print before the PATH.
+  const terminal = join(folder, "shell.sh");
+  writeFileSync(
+    terminal,
+    `#!/bin/sh\n[ "$1" = -ic ] || exit 1\nprintf '%s\\n' 'Welcome back' "/nonexistent:${folder}"\n`,
+    {
+      mode: 0o755,
+    },
+  );
+  const shell = process.env.SHELL;
+  process.env.SHELL = terminal;
+  try {
+    assert.equal(findProgram("terminal-agent"), program);
+  } finally {
+    if (shell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = shell;
+  }
 });
 
 test("a program missing at one lookup is found at the next once it's back", () => {

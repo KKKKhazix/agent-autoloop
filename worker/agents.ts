@@ -3,7 +3,8 @@
 // then the ones that ship. Anything with a print mode needs no file at all: `use: "command"` with a command line in
 // rules.json.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
+import path from "node:path";
 import { findOnPath } from "../host/command.ts";
 import { loadPlugin } from "../host/plugins.ts";
 import type { Usage } from "../protocol/validate.ts";
@@ -65,22 +66,46 @@ export async function adapterFor(use: string): Promise<Adapter> {
 // first), and a kept miss would fail every later run until the worker restarts.
 const found = new Map<string, string>();
 
-/** Where a program is: on the login shell's PATH (launchd and systemd start with a bare one), or in one of these. */
+/** The last line a shell prints for a script, or null if it fails or prints nothing. */
+function shellSays(flags: string, script: string) {
+  try {
+    const printed = execFileSync(process.env.SHELL ?? "/bin/sh", [flags, script], {
+      encoding: "utf8",
+      timeout: 15_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return printed.trim().split("\n").at(-1) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** A program on the PATH an interactive shell sets up: ~/.zshrc and ~/.bashrc are where installers tell people to add it. */
+function inTerminal(name: string) {
+  // The PATH, not `command -v`: in a terminal that can print an alias.
+  const folders = shellSays("-ic", "printenv PATH")?.split(":") ?? [];
+  return folders.map((folder) => path.join(folder, name)).find(isProgram) ?? null;
+}
+
+function isProgram(file: string) {
+  try {
+    accessSync(file, constants.X_OK);
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where a program is: on the login shell's PATH (launchd and systemd start with a bare one), on the PATH a terminal sets
+ * up, or in one of these.
+ */
 export function findProgram(name: string, elsewhere: () => string[] = () => []) {
   let program = found.get(name);
   if (!program) {
     let onPath: string | null = null;
     if (process.platform === "win32") onPath = findOnPath(name, [".exe", ".com", ".cmd", ".ps1"]);
-    else {
-      try {
-        const printed = execFileSync(process.env.SHELL ?? "/bin/sh", ["-lc", `command -v ${name}`], {
-          encoding: "utf8",
-          timeout: 15_000,
-          stdio: ["ignore", "pipe", "ignore"],
-        });
-        onPath = printed.trim().split("\n").at(-1) || null;
-      } catch {}
-    }
+    else onPath = shellSays("-lc", `command -v ${name}`) ?? inTerminal(name);
     program = onPath ?? elsewhere().find(existsSync);
     if (!program) throw new Error(`找不到 ${name}：先装好并登录`);
     found.set(name, program);
