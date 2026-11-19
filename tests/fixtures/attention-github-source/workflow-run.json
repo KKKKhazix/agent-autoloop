@@ -1,0 +1,15 @@
+{
+  "action": "completed",
+  "workflow": { "name": "CI" },
+  "workflow_run": {
+    "id": 9900,
+    "head_branch": "feature/next",
+    "head_sha": "c0ffee4444444444444444444444444444444444",
+    "conclusion": "success",
+    "pull_requests": [
+      { "number": 11, "url": "https://github.test/acme/widgets/pull/11" },
+      { "number": 12, "url": "https://github.test/acme/widgets/pull/12" }
+    ]
+  },
+  "repository": { "full_name": "acme/widgets", "html_url": "https://github.test/acme/widgets" }
+}

@@ -1,0 +1,11 @@
+{
+  "action": "completed",
+  "check_suite": {
+    "id": 8100,
+    "head_branch": "main",
+    "head_sha": "c0ffee2222222222222222222222222222222222",
+    "conclusion": "success",
+    "pull_requests": []
+  },
+  "repository": { "full_name": "acme/widgets", "html_url": "https://github.test/acme/widgets" }
+}

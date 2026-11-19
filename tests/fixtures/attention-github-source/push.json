@@ -1,0 +1,7 @@
+{
+  "ref": "refs/heads/feature/next",
+  "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "after": "c0ffee5555555555555555555555555555555555",
+  "head_commit": { "id": "c0ffee5555555555555555555555555555555555", "message": "fix: routing fallback" },
+  "repository": { "full_name": "acme/widgets", "html_url": "https://github.test/acme/widgets" }
+}
