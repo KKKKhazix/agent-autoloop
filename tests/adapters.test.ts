@@ -1,6 +1,7 @@
 // What's different about each agent. Failure cases: a level of access maps to the wrong flag, full access is given unasked,
-// a retry starts a new conversation instead of going on, an error or a turn that never finished counts as an answer, a
-// reconnect Codex announced and got over before its turn finished fails the finished run, a program's warning is taken
+// a retry starts a new conversation instead of going on, an error or a turn that never finished counts as an answer, the
+// reason a run failed starts half way through a character when the CLI printed more than 300 units, a reconnect Codex
+// announced and got over before its turn finished fails the finished run, a program's warning is taken
 // for its answer, a finished Claude run printed as one JSON array is read as a failure, the
 // session isn't picked out, a command line's placeholder isn't filled in, or a background Codex run assumes it inherited
 // an application's browser connection. A turn that got going and then broke, or was killed before it finished, doesn't
@@ -368,6 +369,11 @@ test("a plain command: placeholders filled in, stdout is its last message, a bad
   assert.deepEqual(command.read("好了\n", 0, ""), { text: "好了\n" });
   assert.deepEqual(command.read("中途", null, ""), {});
   assert.match(command.read("", 3, "boom").error!, /退出码 3：boom/);
+  // Its output is kept from the end, so the window can begin half way through a character; a lone half can't be stored or
+  // printed, and the hub holds this string in `runs.error` for `status` to read.
+  const half = command.read("", 3, `😀${"x".repeat(299)}`).error!;
+  assert.ok(half.isWellFormed(), half);
+  assert.equal(half, `退出码 3：${"x".repeat(299)}`);
   assert.equal(command.link, undefined, "it has no session to go on in");
 });
 
