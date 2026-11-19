@@ -41,7 +41,11 @@ node plugins/github/collector.ts '{"mode":"verify","repo":"HKUDS/DeepTutor","kin
 
 `source.ts` 仍只同步验签、翻译。Hub 的既有 `command` worker 可执行 `node <绝对路径>/plugins/github/hub-collect.ts '{"repo":"HKUDS/DeepTutor","author":"LaiYongqiang"}'`。同一条 cron 规则收到 `schedule.tick` 就做作者发现；本人使用 `agent-autoloop run <规则> --subject github:hkuds/deeptutor:pr:2475` 则只核实该对象。不读手动理由、webhook 内容或外部链接来决定采集范围；空主体、错误对象键及跨仓主体会拒绝，不退回到整仓采集。可为规则设置 `parallel: 1`，一次只运行一个任务，并把定时、各单对象分到不同事项，防止互相合并。
 
-命令第一行给 Hub 可读摘要，第二行给 worker 日志留一条含 `status` 和 `batches` 的 JSON。Hub 的 `done` 只表示命令返回了报告，不代表 GitHub 核实成功；领域状态必须读报告。当前没有将报告接入 Workbench、持久化基线或替换现网 Tracker。不要在旧定时仍运行时开启生产定时；先补上受理与成功时间区分、失败保留旧结果、订阅生命周期、单派发及回退验证。
+接入 Hub 可参考 [`rules.example.json`](rules.example.json)。配置参数后加 `--receipt`，在对应规则中允许 `emits.source: "github-observation"` 和 `emits.types: ["github.collection.observed", "github.collection.evidence"]`。手动自助入口可以使用仅能提交 `github-request` 的来源密钥，规则只接 `github.verify.requested`，主体仍必须是授权范围内的对象键；不需要把本人密钥交给界面。
+
+回执由一条 `github.collection.observed` 和若干 `github.collection.evidence` 组成，同一轮的 `subject` 为 `github:run:<轮次>`。`readGitHubReceipt` 核对分块完整性和哈希后恢复版本化报告。超出单轮回执容量只回报 `partial / receipt_capacity`，不发布截断的成功结果。应先核准私有仓库内容的留存范围：证据是 Base64 编码，不是加密。省略 `--receipt` 仍可在本机用第二行 JSON 调试。
+
+Hub 的 `done` 不代表 GitHub 核实成功；领域状态必须读回执。当前没有将报告接入 Workbench、持久化基线或替换现网 Tracker。不要在旧定时仍运行时开启生产定时；先验收受理与成功时间区分、失败保留旧结果、订阅生命周期、单派发及回退。
 
 ## 隔离 Hub 联调（2026-11-19）
 

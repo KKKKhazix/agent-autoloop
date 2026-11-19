@@ -7,6 +7,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
+import type { Fact } from "../kernel/evolve.ts";
+import { GITHUB_EVIDENCE, GITHUB_OBSERVATION, readGitHubReceipt } from "../plugins/github/receipt.ts";
 
 if (!process.argv[2]) throw new Error("Pass a read-only Tracker snapshot path to compare");
 const old = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -15,6 +17,7 @@ assert.deepEqual(scope, { repo: "HKUDS/DeepTutor", author: "LaiYongqiang" }, "on
 const home = mkdtempSync(join(tmpdir(), "github-hub-live-"));
 const root = resolve(import.meta.dirname, "..");
 const rule = "github-collector-acceptance";
+const requestRule = "github-request-acceptance";
 const workerName = "github-test-worker";
 const repo = scope.repo.toLowerCase();
 
@@ -148,12 +151,23 @@ try {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const webhookSecret = randomBytes(32).toString("hex");
-  const command = [process.execPath, join(root, "plugins/github/hub-collect.ts"), JSON.stringify(scope)];
+  const command = [process.execPath, join(root, "plugins/github/hub-collect.ts"), JSON.stringify(scope), "--receipt"];
+  const inputs = {
+    to: "github-reader",
+    cwd: home,
+    tell: "never",
+    parallel: 1,
+    emits: { source: "github-observation", types: [GITHUB_OBSERVATION, GITHUB_EVIDENCE] },
+  };
   writeFileSync(
     join(home, "rules.json"),
     JSON.stringify({
       timezone: "Asia/Shanghai",
-      sources: { github: { name: "GitHub", adapter: "github" } },
+      sources: {
+        github: { name: "GitHub", adapter: "github" },
+        "github-request": { name: "GitHub request" },
+        "github-observation": { name: "GitHub observation" },
+      },
       agents: {
         "github-reader": {
           name: "GitHub reader",
@@ -164,13 +178,17 @@ try {
           timeout: 3,
         },
       },
-      rules: [{ name: rule, when: { cron: "* * * * *" }, to: "github-reader", cwd: home, tell: "never", parallel: 1 }],
+      rules: [
+        { ...inputs, name: rule, when: { cron: "* * * * *" } },
+        { ...inputs, name: requestRule, when: { source: "github-request", types: ["github.verify.requested"] } },
+      ],
     }),
     { mode: 0o600 },
   );
   writeFileSync(join(home, "secrets.env"), `AGENT_AUTOLOOP_SECRET_GITHUB=${webhookSecret}\n`, { mode: 0o600 });
   const { addKey, db } = await import("../host/runtime.ts");
   const owner = addKey("owner", "github-test-owner");
+  const requester = addKey("source", "github-request");
   const worker = { name: workerName, key: addKey("worker", workerName) };
   db.close();
   writeFileSync(
@@ -188,11 +206,11 @@ try {
   child.stderr.on("data", (data) => {
     log += String(data);
   });
-  const send = (path: string, body?: object, authenticated = true) =>
+  const send = (path: string, body?: object, authenticated = true, key = owner) =>
     fetch(`${url}${path}`, {
       method: body ? "POST" : "GET",
       body: body ? JSON.stringify(body) : undefined,
-      headers: { ...(authenticated ? { authorization: `Bearer ${owner}` } : {}), "content-type": "application/json" },
+      headers: { ...(authenticated ? { authorization: `Bearer ${key}` } : {}), "content-type": "application/json" },
       signal: AbortSignal.timeout(2500),
     });
   const until = async <Value>(action: () => Promise<Value | undefined>, timeout = 30_000) => {
@@ -215,7 +233,17 @@ try {
     assert.equal(matches.length, 1, "each tested run used a single worker attempt");
     const dir = join(runs, matches[0]);
     const context = JSON.parse(readFileSync(join(dir, "context.json"), "utf8"));
-    const report = JSON.parse(readFileSync(join(dir, "stdout-1.log"), "utf8").trim().split("\n")[1]);
+    const facts: Fact[] = await (await send(`/v1/runs/${run.id}/why`)).json();
+    const receipt = readGitHubReceipt(
+      facts.flatMap((fact) =>
+        fact.changes.flatMap(({ table, row }) =>
+          table === "events" && row?.source === "github-observation" && row.subject === `github:run:${run.id}`
+            ? [{ id: row.key, type: row.type, subject: row.subject, detail: row.detail }]
+            : [],
+        ),
+      ),
+    );
+    assert.ok(receipt?.report, JSON.stringify(receipt));
     return {
       id: run.id,
       state: run.state,
@@ -223,7 +251,7 @@ try {
       attempts: matches.length,
       summary: run.summary,
       event: context.events[0].type,
-      report,
+      report: receipt.report,
     };
   };
   const manualPath = `/v1/rules/${rule}/run`;
@@ -267,6 +295,26 @@ try {
     assert.equal(refreshed.event, "run.manual");
     assert.equal(refreshed.report.status, "complete");
     assert.equal(refreshed.report.batches[0].observations.length, 1);
+    const requestResponse = await send(
+      "/v1/events",
+      { id: "interactive-refresh", type: "github.verify.requested", subject: `github:${repo}:pr:2475` },
+      true,
+      requester,
+    );
+    assert.equal(requestResponse.status, 200);
+    const acceptedRequest = await requestResponse.json();
+    assert.deepEqual(acceptedRequest.routed, [requestRule]);
+    const sourceResult = await until(async () => {
+      const response = await send(`/v1/events/${acceptedRequest.event}`, undefined, true, requester);
+      const outcome = await response.json();
+      const completed = outcome.runs?.find((run: any) => run.state === "done");
+      return completed ? readGitHubReceipt(completed.events ?? []) : undefined;
+    });
+    assert.equal(sourceResult?.status, "complete");
+    assert.equal(
+      sourceResult?.report?.batches[0].observations[0].fingerprint,
+      refreshed.report.batches[0].observations[0].fingerprint,
+    );
     const failed = await manual(`github:${repo}:issue:2147483647`);
     assert.equal(failed.report.status, "failed");
     assert.match(failed.summary, /失败/);
@@ -298,6 +346,9 @@ try {
     const previous = refreshed.report.batches[0].observations[0];
     const repeated = discovered.report.batches[0].observations.find((item: any) => item.key === previous.key);
     assert.ok(repeated?.fingerprint);
+    if (process.argv[3]) {
+      writeFileSync(process.argv[3], JSON.stringify(discovered.report), { flag: "wx", mode: 0o600 });
+    }
     const summarize = ({ report, ...run }: Awaited<ReturnType<typeof collectRun>>) => ({
       ...run,
       status: report.status,

@@ -1,0 +1,42 @@
+{
+  "timezone": "Asia/Shanghai",
+  "sources": {
+    "github-request": { "name": "GitHub 采集请求" },
+    "github-observation": { "name": "GitHub 观察" }
+  },
+  "agents": {
+    "github-collect": {
+      "name": "GitHub 只读采集",
+      "worker": "github-worker",
+      "use": "command",
+      "access": "read",
+      "command": [
+        "node",
+        "/path/to/plugins/github/hub-collect.ts",
+        "{\"repo\":\"Owner/Repository\",\"author\":\"login\"}",
+        "--receipt"
+      ],
+      "timeout": 3
+    }
+  },
+  "rules": [
+    {
+      "name": "定时采集 GitHub",
+      "when": { "cron": "0 * * * *" },
+      "to": "github-collect",
+      "cwd": "/path/to/worker-directory",
+      "parallel": 1,
+      "tell": "never",
+      "emits": { "source": "github-observation", "types": ["github.collection.observed", "github.collection.evidence"] }
+    },
+    {
+      "name": "核实 GitHub",
+      "when": { "source": "github-request", "types": ["github.verify.requested"] },
+      "to": "github-collect",
+      "cwd": "/path/to/worker-directory",
+      "parallel": 1,
+      "tell": "never",
+      "emits": { "source": "github-observation", "types": ["github.collection.observed", "github.collection.evidence"] }
+    }
+  ]
+}

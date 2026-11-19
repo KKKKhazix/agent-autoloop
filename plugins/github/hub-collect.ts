@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { collectGitHub, parseGitHubRequest, type GitHubRead } from "./collector.ts";
+import { githubReceipt } from "./receipt.ts";
 
 type Request = { repo: string } & (
   { mode: "discover"; author: string } | { mode: "verify"; kind: "issue" | "pr"; number: number }
@@ -35,6 +36,7 @@ export function githubHubRequests(config: unknown, context: unknown) {
     if (source === "schedule" && type === "schedule.tick" && subject === "")
       request = { mode: "discover", repo, author };
     if (source === "schedule" && type === "run.manual") request = manualTarget(subject, repo);
+    if (source === "github-request" && type === "github.verify.requested") request = manualTarget(subject, repo);
     if (request) unique.set(JSON.stringify(request), request);
     else rejected++;
   }
@@ -66,7 +68,13 @@ if (import.meta.main) {
       failed: "GitHub 采集失败",
       rejected: "GitHub 采集请求被拒绝",
     };
-    process.stdout.write(`${summary[result.status]}\n${JSON.stringify(result)}\n`);
+    if (process.argv[3] === "--receipt") {
+      const events = githubReceipt(result, process.env.AGENT_AUTOLOOP_RUN ?? "");
+      const status = events.length === 1 ? "partial" : result.status;
+      process.stdout.write(`${summary[status]}\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events })}\n\`\`\`\n`);
+    } else {
+      process.stdout.write(`${summary[result.status]}\n${JSON.stringify(result)}\n`);
+    }
   } catch {
     process.stderr.write("GitHub Hub command could not read its configuration or context\n");
     process.exitCode = 2;
