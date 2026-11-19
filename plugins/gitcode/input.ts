@@ -99,9 +99,14 @@ export function readTarget(events: unknown[], config: Config) {
     const target = parseTarget(subject, config.repositories, type);
     if (!target || (selected && target.subject !== selected.subject)) return null;
     selected = target;
-    if (type === SWEEP || type === FOLLOW) {
+    const meta = requestMeta(detail);
+    const planned =
+      type === VERIFY &&
+      meta.scheduled === true &&
+      decimal(meta.scanRun) &&
+      config.targets.some(({ subject }) => subject === target.subject);
+    if (type === SWEEP || type === FOLLOW || planned) {
       auto = true;
-      const meta = requestMeta(detail);
       scheduled ||= meta.scheduled === true;
       scanRun ??= decimal(meta.scanRun);
     }

@@ -51,7 +51,7 @@ function schedule(config: Config, run: string): Event[] {
     type,
     subject,
     summary: type === SWEEP ? "发现本人事项" : "核实 GitCode 事项",
-    detail: type === SWEEP ? JSON.stringify({ scheduled: true, scanRun: run }) : "",
+    detail: JSON.stringify({ scheduled: true, scanRun: run }),
     link: "",
   });
   const found = [...config.repositories.keys()].flatMap((repo) =>

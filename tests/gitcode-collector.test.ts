@@ -187,6 +187,23 @@ test("a manual long discussion can be read on the next page without claiming an 
   );
 });
 
+test("a configured PR scheduled for verification queues discussion continuation", async () => {
+  const { fetcher } = fake((path, query) => {
+    if (path.endsWith("/pulls/7")) return data(7);
+    if (path.endsWith("/pulls/7/comments")) return [{ id: Number(query.get("page")), body: "page" }];
+    return [];
+  });
+  const triggers = await run(fetcher, [], "", "schedule");
+  const planned = triggers.find(({ type }) => type === "gitcode.verify.requested");
+  assert.ok(planned);
+  const rows = await run(fetcher, [{ ...planned, source: "gitcode-request" }]);
+  const object = rows.find(({ type }) => type === "gitcode.object.observed");
+  const continuation = rows.find(({ type }) => type === "gitcode.verify.discovered");
+  assert.equal(JSON.parse(object!.detail).comments.continuationQueued, true);
+  assert.equal(continuation?.subject, "gc5:team/repo:pr:7");
+  assert.equal(JSON.parse(continuation.detail).scanRun, JSON.parse(object!.detail).scanRun);
+});
+
 test("same-run verification coalesces the same object; PR facts and comments are not a current CI result", async () => {
   const { fetcher, calls } = fake((path, query) => {
     if (path.endsWith("/pulls/7")) {
