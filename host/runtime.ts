@@ -57,6 +57,10 @@ const format = digest(
 );
 let current = openView(db, format);
 db.exec(CARD_HASH_INDEX);
+// Only the history reader needs this index. Adding it to an existing projection doesn't require replaying the log.
+db.exec(`CREATE INDEX IF NOT EXISTS projection_run_history
+  ON projections(collection, json_extract(data,'$.rule'), json_extract(data,'$.id'))
+  WHERE collection='runs'`);
 
 export const all = <T>(sql: string, params: SQLInputValue[] = []) =>
   db
