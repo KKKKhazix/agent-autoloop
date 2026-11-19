@@ -80,11 +80,19 @@ function shellSays(flags: string, script: string) {
   }
 }
 
+/** A program on the PATH a rule's command line runs with: the login shell's on Unix. */
+export function onPath(name: string) {
+  if (process.platform === "win32") return findOnPath(name, [".exe", ".com", ".cmd", ".ps1"]);
+  return shellSays("-lc", `command -v ${name}`);
+}
+
 /** A program on the PATH an interactive shell sets up: ~/.zshrc and ~/.bashrc are where installers tell people to add it. */
 function inTerminal(name: string) {
   // The PATH, not `command -v`: in a terminal that can print an alias.
   const folders = shellSays("-ic", "printenv PATH")?.split(":") ?? [];
-  return folders.map((folder) => path.join(folder, name)).find(isProgram) ?? null;
+  // An empty entry or `.` means the folder the shell was in, not one the worker can name.
+  const absolute = folders.filter((folder) => path.isAbsolute(folder));
+  return absolute.map((folder) => path.join(folder, name)).find(isProgram) ?? null;
 }
 
 function isProgram(file: string) {
@@ -103,10 +111,7 @@ function isProgram(file: string) {
 export function findProgram(name: string, elsewhere: () => string[] = () => []) {
   let program = found.get(name);
   if (!program) {
-    let onPath: string | null = null;
-    if (process.platform === "win32") onPath = findOnPath(name, [".exe", ".com", ".cmd", ".ps1"]);
-    else onPath = shellSays("-lc", `command -v ${name}`) ?? inTerminal(name);
-    program = onPath ?? elsewhere().find(existsSync);
+    program = onPath(name) ?? (process.platform === "win32" ? null : inTerminal(name)) ?? elsewhere().find(existsSync);
     if (!program) throw new Error(`找不到 ${name}：先装好并登录`);
     found.set(name, program);
   }

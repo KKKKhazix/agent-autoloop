@@ -291,7 +291,7 @@ function commandWords(line: string) {
 /** What was asked for on the command line, or whichever of the usual Agents is installed. */
 async function agentsToUse(named: Flags, worker: string) {
   const agents: Record<string, { name: string; worker: string; use: string; command?: string[] }> = {};
-  const { adapterFor, findProgram } = await import("../worker/agents.ts");
+  const { adapterFor, onPath } = await import("../worker/agents.ts");
   const command = text(named.command);
   if (command) {
     const words = commandWords(command);
@@ -300,14 +300,8 @@ async function agentsToUse(named: Flags, worker: string) {
     const [first] = words;
     const there = /[\\/]/.test(first)
       ? existsSync(path.resolve(first))
-      : /^[\w.+@-]+$/.test(first) &&
-        (() => {
-          try {
-            return Boolean(findProgram(first));
-          } catch {
-            return false;
-          }
-        })();
+      : // Where the rule will look, not where a built-in Agent may also look: a rule's command runs in a login shell.
+        /^[\w.+@-]+$/.test(first) && Boolean(onPath(first));
     if (!there) return fail(`找不到 ${first}：先装好它，或者在 --command 里写它的完整路径。`);
     agents.agent = { name: "Agent", worker, use: "command", command: words };
     return agents;
