@@ -1,0 +1,6 @@
+{
+  "account": "your-gitcode-login",
+  "repositories": ["openJiuwen/agent-memory", "openJiuwen/jiuwenswarm"],
+  "targets": [],
+  "botIds": []
+}

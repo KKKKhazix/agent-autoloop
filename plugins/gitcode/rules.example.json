@@ -1,0 +1,85 @@
+{
+  "timezone": "Asia/Shanghai",
+  "sources": {
+    "gitcode-request": { "name": "GitCode 采集请求" },
+    "gitcode-observation": { "name": "GitCode 观察" }
+  },
+  "agents": {
+    "gitcode-schedule": {
+      "name": "GitCode 定时触发",
+      "worker": "gitcode-worker",
+      "use": "command",
+      "command": ["node", "/path/to/plugins/gitcode/run.ts", "schedule", "/path/to/gitcode.json"],
+      "timeout": 1
+    },
+    "gitcode-collect": {
+      "name": "GitCode 只读采集",
+      "worker": "gitcode-worker",
+      "use": "command",
+      "command": [
+        "node",
+        "/path/to/plugins/gitcode/run.ts",
+        "collect",
+        "/path/to/gitcode.json",
+        "/path/to/gitcode.token"
+      ],
+      "timeout": 2
+    }
+  },
+  "channels": {},
+  "rules": [
+    {
+      "name": "定时触发 GitCode 采集",
+      "when": { "cron": "*/30 * * * *" },
+      "to": "gitcode-schedule",
+      "cwd": "/path/to/worker-directory",
+      "tell": "never",
+      "emits": { "source": "gitcode-request", "types": ["gitcode.sweep.requested", "gitcode.verify.requested"] }
+    },
+    {
+      "name": "核实 GitCode",
+      "when": {
+        "source": "gitcode-request",
+        "types": ["gitcode.discover.requested", "gitcode.verify.requested", "gitcode.sweep.requested"]
+      },
+      "to": "gitcode-collect",
+      "cwd": "/path/to/worker-directory",
+      "group": "gitcode-readonly",
+      "parallel": 1,
+      "tell": "never",
+      "emits": {
+        "source": "gitcode-observation",
+        "types": [
+          "gitcode.discovery.observed",
+          "gitcode.object.observed",
+          "gitcode.comment.observed",
+          "gitcode.evidence.observed",
+          "gitcode.request.observed",
+          "gitcode.sweep.requested",
+          "gitcode.verify.discovered"
+        ]
+      }
+    },
+    {
+      "name": "继续核实 GitCode",
+      "when": { "source": "gitcode-observation", "types": ["gitcode.sweep.requested", "gitcode.verify.discovered"] },
+      "to": "gitcode-collect",
+      "cwd": "/path/to/worker-directory",
+      "group": "gitcode-readonly",
+      "parallel": 1,
+      "tell": "never",
+      "emits": {
+        "source": "gitcode-observation",
+        "types": [
+          "gitcode.discovery.observed",
+          "gitcode.object.observed",
+          "gitcode.comment.observed",
+          "gitcode.evidence.observed",
+          "gitcode.request.observed",
+          "gitcode.sweep.requested",
+          "gitcode.verify.discovered"
+        ]
+      }
+    }
+  ]
+}

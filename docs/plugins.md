@@ -24,6 +24,8 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 
 ## Agent 插件
 
+出站轮询可用现成的 `command` 适配器，不需要再做一个入站 `source.ts`。参考 [GitCode 只读采集](../plugins/gitcode/README.md)：由 Hub 调度，接单程序读外部 API，再通过回执交回观察。
+
 从 [hello-agent/agent.ts](../examples/plugins/hello-agent/agent.ts) 开始。它用 `printf` 代替模型，克隆到别处也能运行。收下提示词和结束时各打一行，`read` 从第一行就知道这一轮接上了原会话，第二行是它的最后一条消息。
 
 | 导出对象的方法               | 作用                                                                                                                          |
