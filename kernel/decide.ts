@@ -12,6 +12,7 @@ import {
   configuration,
   eventsOf,
   jobOf,
+  limitOf,
   openInScope,
   pauseOf,
   routingOf,
@@ -155,6 +156,12 @@ const closeStopped = (draft: Draft, run: number, result: string) =>
 
 const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
+
+/** An agent's usage limit is over, and the card saying when it would be has nothing more to say. */
+function lift(draft: Draft, agent: string, result: string) {
+  set(draft, "limits", agent, null);
+  closeOpen(draft, (key) => key.startsWith(`limit:${agent}:`), result);
+}
 
 /** Whether a new stamp would tell nothing this one doesn't. One in the future means a clock was set back: it gets redone. */
 function justSeen({ now }: Draft, row?: Row) {
@@ -313,6 +320,8 @@ function claimNext(draft: Draft, worker: string, claim: string) {
     const rule = ruleNamed(draft, run.rule);
     // What was queued before a pause, or an answer that came in during one, waits for the resume.
     if (!rule || !agents.includes(rule.to) || pauseOf(draft.view, rule, draft.now)) return false;
+    // An agent out of quota fails each round within seconds: only one the owner asked for goes, to try it.
+    if (!run.manual && limitOf(draft.view, rule.to, draft.now)) return false;
     const agentLimit = draft.rules.agents[rule.to].maxActive;
     return (
       Date.parse(run.not_before) <= draft.now &&
@@ -384,8 +393,10 @@ function briefError(error: string, run: number) {
 function retryLater(draft: Draft, run: Row, result: Result) {
   const { id } = run;
   const attempts = run.attempts + 1;
-  const notBefore = draft.now + Math.min(5 * MINUTE * 2 ** (attempts - 1), 60 * MINUTE);
   const error = (result.error ?? "").trim().replace(/[。.]+$/, "") || "没说原因";
+  const limitedUntil = result.limitedUntil === undefined ? 0 : Date.parse(result.limitedUntil);
+  if (limitedUntil > draft.now) limit(draft, run, limitedUntil, error);
+  const notBefore = Math.max(draft.now + Math.min(5 * MINUTE * 2 ** (attempts - 1), 60 * MINUTE), limitedUntil);
   const unclaimed = nulls("claim", "claimed_at", "seen_at", "cancel_at");
   const rejected: Rejected[] = [];
   for (const what of ["ask", "resolve", "later", "events"] as const) {
@@ -424,6 +435,32 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   }
   assignQueued(draft, draft.view.get("runs", id)!);
   return rejected;
+}
+
+/** An agent out of quota gets no work until it resets, and the owner hears once when that is. */
+function limit(draft: Draft, run: Row, until: number, error: string) {
+  const held = limitOf(draft.view, run.agent, draft.now);
+  if (held && Date.parse(held.until) >= until) return;
+  closeOpen(draft, (key) => key.startsWith(`limit:${run.agent}:`), "恢复时间推后了");
+  put(draft, "limits", run.agent, {
+    agent: run.agent,
+    until: iso(until),
+    reason: error,
+    since: held?.since ?? draft.at,
+  });
+  const agent = configuration(draft.view, run.rules_version).agents[run.agent]?.name ?? run.agent;
+  const time = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: draft.rules.timezone,
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(until);
+  const words =
+    `${agent} 用量到上限了（${briefError(error, run.id)}），${time} 前不再派活给它。排着的和这期间新来的活都留着，` +
+    `到时自动接着做。想提前试，手动运行一轮「${run.rule}」（agent-autoloop run），跑通就全部恢复。`;
+  notify(draft, `limit:${run.agent}:${iso(until)}`, `${agent} 用量到上限`, words);
 }
 
 function scheduleReview(draft: Draft, run: Row, later: Later) {
@@ -515,7 +552,12 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
     clearFiredTimers(draft, run);
     closeStopped(draft, id, "已停止");
   } else if (result.outcome === "failed") rejected = retryLater(draft, run, result);
-  else rejected = applyReceipt(draft, run, result);
+  else {
+    rejected = applyReceipt(draft, run, result);
+    // Only the owner's round is handed out while an agent is held: getting through says it works again.
+    const held = limitOf(draft.view, run.agent, draft.now);
+    if (held && run.claimed_at >= held.since) lift(draft, run.agent, "提前恢复了");
+  }
   put(draft, "runs", id, { last_answer: JSON.stringify(rejected) });
   return { rejected };
 }
@@ -588,6 +630,9 @@ function tick(draft: Draft) {
     if (pause.until === null || Date.parse(pause.until) > now) continue;
     set(draft, "pauses", pause.name, null);
     reopen(draft, pause.name, Date.parse(pause.until));
+  }
+  for (const limit of rows(draft.view, "limits")) {
+    if (Date.parse(limit.until) <= now) lift(draft, limit.agent, "恢复了");
   }
   for (const rule of rules) {
     if (eventRule(rule)) continue;

@@ -16,7 +16,8 @@
 // something other than what the event said. A built-in agent starts the program it finds, not the one its rules name,
 // so a wrapper that sends Claude Code to another service is never run. A service tier the rules name for Codex never
 // reaches its command line, so the run takes whatever tier the machine's own Codex config has that day. A program
-// missing for a moment, as while an update reinstalls it, stays missing until the worker restarts.
+// missing for a moment, as while an update reinstalls it, stays missing until the worker restarts. Claude at its usage
+// limit doesn't say when it resets, so the hub keeps handing it rounds that fail within seconds.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -175,6 +176,23 @@ test("Claude Code: a resume that never got going doesn't say it started, and say
   assert.equal(claude.read("", 1, "No conversation found").started, undefined, "printed as json: nothing on stdout");
   assert.equal(claude.read(stream(hook), 1, "boom").started, undefined, "a hook runs before it has the prompt");
   assert.deepEqual(claude.read(stream(hook), null, ""), { session: "s" });
+});
+
+test("Claude Code: at its usage limit it says when that resets", () => {
+  // Cut down from a real 2.1.318 run on 2026-11-06.
+  const limit = {
+    type: "rate_limit_event",
+    rate_limit_info: { status: "rejected", resetsAt: 1793944200, rateLimitType: "five_hour" },
+    session_id: "s",
+  };
+  const words = "You've hit your 5-hour limit · resets 1:50pm (Asia/Shanghai)";
+  const refused = { ...said(words), is_error: true, api_error: "usage_limit_reached", api_error_status: 429 };
+  const reading = claude.read(stream(init, limit, refused), 1, "");
+  assert.deepEqual([reading.error, reading.limitedUntil], [words, "2026-11-06T05:50:00.000Z"]);
+  const unsaid = Date.parse(claude.read(stream(init, refused), 1, "").limitedUntil!) - Date.now();
+  assert.ok(unsaid > 59 * 60_000 && unsaid <= 60 * 60_000, "no time given: an hour");
+  const other = claude.read(stream(init, { ...said("API Error: 500"), is_error: true }), 1, "");
+  assert.equal(other.limitedUntil, undefined, "any other error is retried as before");
 });
 
 test("Claude Code: the raw messages of a broken run aren't the reason it failed", () => {
