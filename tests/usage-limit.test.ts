@@ -3,7 +3,7 @@
 // again, until the owner stopped 93 of them. Failure cases: once one round says the agent is limited until a time, other
 // rounds for it are still handed out before then, or rounds for other agents are held too; events that come meanwhile are
 // dropped or skipped instead of waiting; nothing starts again by itself at that time, or the round that hit the limit is
-// tried before it; the owner isn't told when it comes back, is told once per round that hit it, or the card stays open after
+// tried before it; the owner isn't told when it comes back, is told once per round or per agent that hit it, or the card stays open after
 // it's back; the owner can't try the
 // agent before then, or a round that got through then leaves the hold in place; a time that isn't one, or one on a round
 // that didn't fail, is taken; the hold is lost when the projection is rebuilt from the log.
@@ -69,6 +69,26 @@ test("an agent out of quota is handed nothing until it resets, and what comes me
   );
   assert.equal(stateOf(at(61)).agents.find((agent) => agent.id === "a1")!.limited, null);
   assert.equal(notices()[0].state, "closed", "back, so the card has nothing more to say");
+});
+
+test("agents on one account, told the same reset, make one card, closed when they are back", () => {
+  clean();
+  heartbeat("w1", [], at(0));
+  heartbeat("w2", [], at(0));
+  ingest("ops", { id: "a1", type: "alert.raised", subject: "db" }, at(0));
+  const first = claimNext("w2", "c-w2", at(1))!;
+  const second = claim(at(1))!;
+  finish(first.run, first.token, limited(at(60)), at(2));
+  finish(second.run, second.token, limited(at(60)), at(2));
+  assert.deepEqual(
+    notices().map((card) => card.state),
+    ["open"],
+  );
+  tick(at(60));
+  assert.deepEqual(
+    notices().map((card) => card.state),
+    ["closed"],
+  );
 });
 
 test("the owner can try the agent before then, and a round that gets through lifts the hold", () => {

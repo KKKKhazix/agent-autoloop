@@ -159,8 +159,9 @@ const closeOffline = (draft: Draft, worker: string) =>
 
 /** An agent's usage limit is over, and the card saying when it would be has nothing more to say. */
 function lift(draft: Draft, agent: string, result: string) {
+  const { until } = draft.view.get("limits", agent)!;
   set(draft, "limits", agent, null);
-  closeOpen(draft, (key) => key.startsWith(`limit:${agent}:`), result);
+  closeOpen(draft, (key) => key === `limit:${until}`, result);
 }
 
 /** Whether a new stamp would tell nothing this one doesn't. One in the future means a clock was set back: it gets redone. */
@@ -441,7 +442,7 @@ function retryLater(draft: Draft, run: Row, result: Result) {
 function limit(draft: Draft, run: Row, until: number, error: string) {
   const held = limitOf(draft.view, run.agent, draft.now);
   if (held && Date.parse(held.until) >= until) return;
-  closeOpen(draft, (key) => key.startsWith(`limit:${run.agent}:`), "恢复时间推后了");
+  if (draft.view.get("limits", run.agent)) lift(draft, run.agent, held ? "恢复时间推后了" : "恢复了");
   put(draft, "limits", run.agent, {
     agent: run.agent,
     until: iso(until),
@@ -459,8 +460,9 @@ function limit(draft: Draft, run: Row, until: number, error: string) {
   }).format(until);
   const words =
     `${agent} 用量到上限了（${briefError(error, run.id)}），${time} 前不再派活给它。排着的和这期间新来的活都留着，` +
-    `到时自动接着做。想提前试，手动运行一轮「${run.rule}」（agent-autoloop run），跑通就全部恢复。`;
-  notify(draft, `limit:${run.agent}:${iso(until)}`, `${agent} 用量到上限`, words);
+    `到时自动接着做。想提前试，手动运行一轮「${run.rule}」（agent-autoloop run），跑通就接着给它派活。`;
+  // Agents on one account are told the same moment: keyed by it, the owner hears of it once.
+  notify(draft, `limit:${iso(until)}`, `${agent} 用量到上限`, words);
 }
 
 function scheduleReview(draft: Draft, run: Row, later: Later) {
