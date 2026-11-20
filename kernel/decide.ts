@@ -738,6 +738,11 @@ const CONTROL = {
 const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   rules(draft, rules) {
     put(draft, "config", "rules", { value: rules, version: draft.seq });
+    // A schedule's next moment was worked out on the old zone's clock. Forgetting the cron it was counted for has the next
+    // tick count again from then, as for a changed cron; this input's own clock isn't the tick's.
+    if (draft.rules && rules.timezone !== draft.rules.timezone) {
+      for (const schedule of rows(draft.view, "schedules")) put(draft, "schedules", schedule.rule, { cron: null });
+    }
     for (const run of rows(draft.view, "runs", { state: "queued" })) {
       if (ruleOf(rules, run.rule)) assignQueued(draft, run);
       else stopRun(draft, run, "rule-gone", ...ruleGone(run.rule));
