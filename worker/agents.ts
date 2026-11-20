@@ -89,4 +89,9 @@ export function findProgram(name: string, elsewhere: () => string[] = () => []) 
 }
 
 /** The end of some output, for saying why something failed. */
-export const tail = (text: string, length = 300) => text.trim().slice(-length);
+export const tail = (text: string, length = 300) => {
+  const cut = text.trim().slice(-length);
+  // Where the window starts is an arbitrary unit of what it printed, so it can open on the second half of a character,
+  // which no store or terminal can hold. Its end is never a first half: text that is text doesn't start with one.
+  return /^[\udc00-\udfff]/.test(cut) ? cut.slice(1) : cut;
+};
