@@ -1,7 +1,8 @@
 // Listing earlier runs with `agent-autoloop runs`. Failure modes: only the newest page is ever read, so a rule's runs
 // from yesterday never show and `why` can't be given their number; a run still going, or an old one still unsettled that the
 // hub adds to its first page, is listed twice or out of order; the next page skips or repeats a run; a page number that
-// isn't one reaches the hub; a new CLI can't page on an older hub or silently ignores a failed history request.
+// isn't one reaches the hub; a new CLI can't page on an older hub or silently ignores a failed history request; the shell
+// drops the rule filter when a printed next-page command is copied.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -128,6 +129,13 @@ test("each run is one entry with its number, how it ended and its rule; more say
   assert.match(text, /agent-autoloop runs A --before 29/);
   const none = runsText(await findRuns(page, { rule: "C" }), { rule: "C", color: false, columns: 100 });
   assert.match(none, /「C」没有做完的轮次/);
+});
+
+test("a next-page command keeps a rule starting with # as a shell argument", () => {
+  const rule = "#周报";
+  const found = { state: { now, timezone: "Asia/Shanghai" }, runs: [run(29, rule)], more: 29 };
+  const text = runsText(found, { rule, color: false });
+  assert.equal(text.split("\n").at(-1), "更早的：agent-autoloop runs '#周报' --before 29");
 });
 
 const program = join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
