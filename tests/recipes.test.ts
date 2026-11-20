@@ -2,7 +2,8 @@
 // recipe doesn't ship, or the README doesn't say where to put it; a README promises one access level while the rules give
 // another; the curl in ops-alerts no longer reaches its rule, or the outside system's key can set off the restart; the
 // issue watcher prints something the worker can't read (a body's line break or backslash breaking its JSON), or an event
-// the rules wouldn't let through, or asks GitHub for something else when called with one argument.
+// the rules wouldn't let through, or asks GitHub for something else when called with one argument; a rule still naming
+// the shell watcher stops working.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -92,62 +93,52 @@ async function freePort() {
   return port;
 }
 
-// The README's curl runs through sh, so this only runs where a POSIX shell is.
-test(
-  "ops-alerts: the curl in the README reaches the rule, and that key can't set off the restart",
-  { skip: process.platform === "win32" && "needs sh for the README's curl" },
-  async () => {
-    const home = mkdtempSync(join(scratch, "ops-"));
-    const port = await freePort();
-    const env = { AGENT_AUTOLOOP_HOME: home };
-    writeFileSync(join(home, "rules.json"), readFileSync(join(RECIPES, "ops-alerts", "rules.json")));
-    const key = agentAutoloop(["key", "new", "source", "shop"], env).stdout.trim().split("\n").at(-1)!;
-    const url = `http://127.0.0.1:${port}`;
-    writeFileSync(join(home, "config.json"), JSON.stringify({ url, hub: { listen: `127.0.0.1:${port}` } }));
-    const hub = spawn(
-      process.execPath,
-      ["--disable-warning=ExperimentalWarning", join(ROOT, "bin", "agent-autoloop.ts"), "up"],
-      { env: { ...cleanEnv(), ...env }, stdio: "ignore" },
-    );
-    try {
-      for (let tries = 0; tries < 100; tries++) {
-        const up = await fetch(`${url}/healthz`).catch(() => null);
-        if (up?.ok) break;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      const curl = /```bash\n(curl [\s\S]*?)```/.exec(readDoc("ops-alerts"))?.[1];
-      assert.ok(curl, "README 里要有一条 curl");
-      const sent = spawnSync("sh", ["-c", curl.replaceAll("http://127.0.0.1:3350", url)], {
-        env: { ...cleanEnv(), SHOP_KEY: key },
-        encoding: "utf8",
-      });
-      assert.equal(sent.status, 0, sent.stderr);
-      assert.deepEqual(JSON.parse(sent.stdout).routed, ["查线上报错"]);
-      const restart = await fetch(`${url}/v1/events`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ id: "from-outside", type: "restart", subject: "checkout" }),
-      });
-      assert.deepEqual((await restart.json()).routed, []);
-    } finally {
-      hub.kill("SIGTERM");
-      await new Promise((resolve) => hub.once("exit", resolve));
+test("ops-alerts: the curl in the README reaches the rule, and that key can't set off the restart", async () => {
+  const home = mkdtempSync(join(scratch, "ops-"));
+  const port = await freePort();
+  const env = { AGENT_AUTOLOOP_HOME: home };
+  writeFileSync(join(home, "rules.json"), readFileSync(join(RECIPES, "ops-alerts", "rules.json")));
+  const key = agentAutoloop(["key", "new", "source", "shop"], env).stdout.trim().split("\n").at(-1)!;
+  const url = `http://127.0.0.1:${port}`;
+  writeFileSync(join(home, "config.json"), JSON.stringify({ url, hub: { listen: `127.0.0.1:${port}` } }));
+  const hub = spawn(
+    process.execPath,
+    ["--disable-warning=ExperimentalWarning", join(ROOT, "bin", "agent-autoloop.ts"), "up"],
+    { env: { ...cleanEnv(), ...env }, stdio: "ignore" },
+  );
+  try {
+    for (let tries = 0; tries < 100; tries++) {
+      const up = await fetch(`${url}/healthz`).catch(() => null);
+      if (up?.ok) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-  },
-);
+    const curl = /```bash\n(curl [\s\S]*?)```/.exec(readDoc("ops-alerts"))?.[1];
+    assert.ok(curl, "README 里要有一条 curl");
+    const sent = spawnSync("sh", ["-c", curl.replaceAll("http://127.0.0.1:3350", url)], {
+      env: { ...cleanEnv(), SHOP_KEY: key },
+      encoding: "utf8",
+    });
+    assert.equal(sent.status, 0, sent.stderr);
+    assert.deepEqual(JSON.parse(sent.stdout).routed, ["查线上报错"]);
+    const restart = await fetch(`${url}/v1/events`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: "from-outside", type: "restart", subject: "checkout" }),
+    });
+    assert.deepEqual((await restart.json()).routed, []);
+  } finally {
+    hub.kill("SIGTERM");
+    await new Promise((resolve) => hub.once("exit", resolve));
+  }
+});
 
-// Stands in for gh and does what gh does with --jq, so the watcher's own filter really runs.
+// Stands in for gh: notes what it was asked and prints the issues as gh's --json does.
 const FAKE_GH = `#!/bin/sh
 printf '%s\\n' "$*" > "$GH_LOG"
-while [ $# -gt 0 ]; do
-  [ "$1" = "--jq" ] && filter=$2
-  shift
-done
-[ -n "$filter" ] || { cat "$GH_ISSUES"; exit 0; }
-exec jq -c "$filter" "$GH_ISSUES"
+cat "$GH_ISSUES"
 `;
 
-function watch(args: string[]) {
+function watch(args: string[], program = [process.execPath, join(RECIPES, "github-issues", "watch.ts")]) {
   const dir = mkdtempSync(join(scratch, "gh-"));
   writeFileSync(join(dir, "gh"), FAKE_GH);
   chmodSync(join(dir, "gh"), 0o755);
@@ -162,7 +153,8 @@ function watch(args: string[]) {
     { number: 14, title: "Long", url: "https://example.com/issues/14", body: "字".repeat(5000) },
   ];
   writeFileSync(join(dir, "issues.json"), JSON.stringify(issues));
-  const done = spawnSync(process.execPath, [join(ROOT, "examples", "watch-github-issues.mjs"), ...args], {
+  const [command, ...script] = program;
+  const done = spawnSync(command, [...script, ...args], {
     env: {
       ...cleanEnv(),
       PATH: `${dir}:${process.env.PATH}`,
@@ -209,6 +201,9 @@ test(
   () => {
     assert.doesNotMatch(watch(["owner/repo"]).asked, /--search/);
     assert.match(watch(["owner/repo", "created:>=2026-11-04"]).asked, /--search created:>=2026-11-04/);
+    // A rule written for the shell version still names it, and gets the same events.
+    const shell = watch(["owner/repo"], ["sh", join(ROOT, "examples", "watch-github-issues.sh")]);
+    assert.equal(shell.said, watch(["owner/repo"]).said);
     const { agents } = readRules("github-issues");
     assert.ok(agents.watcher.command.some((part: string) => part.startsWith("created:>=")));
   },
