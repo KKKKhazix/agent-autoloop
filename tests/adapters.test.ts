@@ -407,7 +407,7 @@ test("a program on the PATH a terminal's shell sets up is found", { skip: proces
   const terminal = join(folder, "shell.sh");
   writeFileSync(
     terminal,
-    `#!/bin/sh\n[ "$1" = -ic ] || exit 1\nprintf '%s\\n' 'Welcome back' "/nonexistent:${folder}"\n`,
+    `#!/bin/sh\n[ "$1 $2" = "+m -ic" ] || exit 1\nprintf '%s\\n' 'Welcome back' "/nonexistent:${folder}"\n`,
     {
       mode: 0o755,
     },

@@ -58,7 +58,7 @@ test("a program only a terminal's shell finds stops it", { skip: process.platfor
   writeFileSync(join(folder, "terminal-agent"), "", { mode: 0o755 });
   // A login shell that isn't interactive skips ~/.zshrc, which is where this one's folder is put on PATH.
   const shell = join(folder, "shell.sh");
-  writeFileSync(shell, `#!/bin/sh\n[ "$1" = -ic ] || exit 1\nprintf '%s\\n' "${folder}"\n`, { mode: 0o755 });
+  writeFileSync(shell, `#!/bin/sh\n[ "$1 $2" = "+m -ic" ] || exit 1\nprintf '%s\\n' "${folder}"\n`, { mode: 0o755 });
   const ran = init("terminal-agent {prompt}", { SHELL: shell });
   assert.equal(ran.code, 1);
   assert.match(ran.stderr, /找不到 terminal-agent/);

@@ -67,9 +67,9 @@ export async function adapterFor(use: string): Promise<Adapter> {
 const found = new Map<string, string>();
 
 /** The last line a shell prints for a script, or null if it fails or prints nothing. */
-function shellSays(flags: string, script: string) {
+function shellSays(flags: string[], script: string) {
   try {
-    const printed = execFileSync(process.env.SHELL ?? "/bin/sh", [flags, script], {
+    const printed = execFileSync(process.env.SHELL ?? "/bin/sh", [...flags, script], {
       encoding: "utf8",
       timeout: 15_000,
       stdio: ["ignore", "pipe", "ignore"],
@@ -83,13 +83,14 @@ function shellSays(flags: string, script: string) {
 /** A program on the PATH a rule's command line runs with: the login shell's on Unix. */
 export function onPath(name: string) {
   if (process.platform === "win32") return findOnPath(name, [".exe", ".com", ".cmd", ".ps1"]);
-  return shellSays("-lc", `command -v ${name}`);
+  return shellSays(["-lc"], `command -v ${name}`);
 }
 
 /** A program on the PATH an interactive shell sets up: ~/.zshrc and ~/.bashrc are where installers tell people to add it. */
 function inTerminal(name: string) {
-  // The PATH, not `command -v`: in a terminal that can print an alias.
-  const folders = shellSays("-ic", "printenv PATH")?.split(":") ?? [];
+  // The PATH, not `command -v`: in a terminal that can print an alias. +m: an interactive zsh with job control takes the
+  // terminal's foreground and doesn't hand it back, so Ctrl-C would no longer reach the command that asked.
+  const folders = shellSays(["+m", "-ic"], "printenv PATH")?.split(":") ?? [];
   // An empty entry or `.` means the folder the shell was in, not one the worker can name.
   const absolute = folders.filter((folder) => path.isAbsolute(folder));
   return absolute.map((folder) => path.join(folder, name)).find(isProgram) ?? null;
