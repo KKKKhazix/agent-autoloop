@@ -241,7 +241,7 @@ MCP 服务不区分调用方，都按本人记录（`answer` 记成本人，`emi
 
 电脑不用开放任何端口，它们自己连过去。
 
-服务器上自己写的系统级 systemd unit，名字要和 `agent-autoloop service install` 用的一样（默认 `agent-autoloop`），`doctor` 才认得出。`agent-autoloop update` 不碰它，更新后自己运行 `systemctl restart` 才会用上新版。
+服务器上自己写的系统级 systemd unit，名字要和 `agent-autoloop service install` 用的一样（默认 `agent-autoloop`），`doctor` 才认得出。`agent-autoloop update`、再跑一遍安装命令和 `service install` 都不碰它，只提示你自己运行 `systemctl restart`，运行后才会用上新版。
 
 ## 日志与恢复
 

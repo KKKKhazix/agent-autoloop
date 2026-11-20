@@ -14,6 +14,7 @@ import { privateDirectory } from "../host/files.ts";
 import {
   aboveDesktop,
   installService,
+  leftToSystem,
   removeService,
   restartService,
   runningUp,
@@ -861,6 +862,8 @@ async function service(args: string[]) {
   if (args[0] === "install") {
     // Installing over kept data comes here and not to init, and uninstalling took the links away.
     linkSkill();
+    const told = leftToSystem();
+    if (told) return console.log(told);
     installService();
     return waitForHub();
   }
