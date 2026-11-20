@@ -124,8 +124,9 @@ test("a rule moved to another group still runs one at a time, counting the run i
   ingest("ops", alert("first"), at(0));
   const first = claim("w2", at(1))!;
   try {
-    hub.execute("rules", [next], at(2));
-    ingest("ops", alert("second"), at(3));
+    // Queued before the change, so the queued run has to move as well as the one going.
+    ingest("ops", alert("second"), at(2));
+    hub.execute("rules", [next], at(3));
     assert.equal(claim("w2", at(4)), null, "the rule already has a run going");
     finish(first.run, first.token, { outcome: "done" }, at(5));
     assert.deepEqual(
