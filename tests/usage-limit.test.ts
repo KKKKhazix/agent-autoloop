@@ -3,10 +3,11 @@
 // again, until the owner stopped 93 of them. Failure cases: once one round says the agent is limited until a time, other
 // rounds for it are still handed out before then, or rounds for other agents are held too; events that come meanwhile are
 // dropped or skipped instead of waiting; nothing starts again by itself at that time, or the round that hit the limit is
-// tried before it; the owner isn't told when it comes back, is told once per round or per agent that hit it, or the card stays open after
-// it's back; the owner can't try the
-// agent before then, or a round that got through then leaves the hold in place; a time that isn't one, or one on a round
-// that didn't fail, is taken; the hold is lost when the projection is rebuilt from the log.
+// tried before it; the owner isn't told when it comes back, is told once per round or per agent that hit it, or the card
+// stays open after it's back; the owner can't try the agent before then, or a round that got through then leaves the hold
+// in place, or the rounds that hit the limit still wait for the reset; a time that isn't one, or one on a round that didn't
+// fail, is taken; a time days off, which no usage limit gives, holds the agent that long; the hold is lost when the
+// projection is rebuilt from the log.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -103,7 +104,24 @@ test("the owner can try the agent before then, and a round that gets through lif
   assert.equal(probe.context.events[0].type, "run.manual", "only the owner's round goes");
   assert.equal(claim(at(3)), null);
   finish(probe.run, probe.token, { outcome: "nothing", summary: "没事" }, at(4));
-  assert.equal(claim(at(4))!.context.events[0].subject, "#2", "it works again, so the rest go");
+  assert.deepEqual(
+    [claim(at(4)), claim(at(4))].map((job) => job?.context.events[0].subject).sort(),
+    ["#1", "#2"],
+    "it works again, so the rest go, and the round that hit the limit with them, not at the reset it was told",
+  );
+});
+
+test("a reset more than eight days off is no usage limit: the round fails as any other", () => {
+  clean();
+  heartbeat("w1", [], at(0));
+  feedback("#1", at(0));
+  feedback("#2", at(0));
+  const job = claim(at(1))!;
+  finish(job.run, job.token, limited(at(9 * 24 * 60)), at(2));
+  assert.equal(claim(at(3))!.context.events[0].subject, "#2", "nothing is held");
+  assert.deepEqual(notices(), []);
+  assert.equal(stateOf(at(3)).agents.find((agent) => agent.id === "a1")!.limited, null);
+  assert.equal(claim(at(7))!.context.events[0].subject, "#1", "tried again after the usual wait");
 });
 
 // Last: a rebuild replays the whole log, including what the fixture resets above only cleared from the projection.

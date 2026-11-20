@@ -41,6 +41,7 @@ export type Input = { type: string; args: any[] };
 const RESEND_AT = [0, 1, 3, 7, 15, 25, 35, 45, 55];
 /** The last resend and the minute it holds the card: after this a channel has given up. */
 const RESEND_WINDOW = 57 * MINUTE;
+const LIMIT_LONGEST = 8 * 24 * 60 * MINUTE;
 /** How long a chain of events causing events can get before it stops being dispatched. */
 const MAX_HOPS = 8;
 /** Failures in a row after which a run stops being retried: each try spends the owner's real tokens. */
@@ -395,8 +396,10 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   const { id } = run;
   const attempts = run.attempts + 1;
   const error = (result.error ?? "").trim().replace(/[。.]+$/, "") || "没说原因";
-  const limitedUntil = result.limitedUntil === undefined ? 0 : Date.parse(result.limitedUntil);
-  if (limitedUntil > draft.now) limit(draft, run, limitedUntil, error);
+  const told = result.limitedUntil === undefined ? 0 : Date.parse(result.limitedUntil);
+  // A usage limit resets within a week. A time further off is misread, and would hold the agent that long.
+  const limitedUntil = told > draft.now && told <= draft.now + LIMIT_LONGEST ? told : 0;
+  if (limitedUntil) limit(draft, run, limitedUntil, error);
   const notBefore = Math.max(draft.now + Math.min(5 * MINUTE * 2 ** (attempts - 1), 60 * MINUTE), limitedUntil);
   const unclaimed = nulls("claim", "claimed_at", "seen_at", "cancel_at");
   const rejected: Rejected[] = [];
@@ -558,7 +561,13 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
     rejected = applyReceipt(draft, run, result);
     // Only the owner's round is handed out while an agent is held: getting through says it works again.
     const held = limitOf(draft.view, run.agent, draft.now);
-    if (held && run.claimed_at >= held.since) lift(draft, run.agent, "提前恢复了");
+    if (held && run.claimed_at >= held.since) {
+      // The rounds that hit the limit were put off to the reset: they go now with the rest.
+      for (const waiting of rows(draft.view, "runs", { state: "queued", agent: run.agent })) {
+        if (waiting.not_before === held.until) put(draft, "runs", waiting.id, { not_before: draft.at });
+      }
+      lift(draft, run.agent, "提前恢复了");
+    }
   }
   put(draft, "runs", id, { last_answer: JSON.stringify(rejected) });
   return { rejected };
