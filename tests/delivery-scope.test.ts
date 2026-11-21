@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { settings, matches, releaseRequired, readMainSettings, liveRelease } from "../plugins/delivery/project.ts";
+import { canSymlink } from "./helpers.ts";
 const root = mkdtempSync(join(tmpdir(), "agent-autoloop-delivery-scope-"));
 after(() => rmSync(root, { recursive: true, force: true }));
 const git = (...args: string[]) =>
@@ -72,7 +73,7 @@ test("release scope compares the entire healthy-live range and both sides of ren
   assert.equal(releaseRequired(root, base, commit(), config.internal), true);
 });
 test("executable or symlink documents and unknown history always need release", () => {
-  for (const mode of ["executable", "symlink"]) {
+  for (const mode of canSymlink() ? ["executable", "symlink"] : ["executable"]) {
     git("reset", "--hard", base);
     if (mode === "executable") {
       chmodSync(join(root, "docs/a.md"), 0o755);
