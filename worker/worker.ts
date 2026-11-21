@@ -9,11 +9,10 @@ import {
   existsSync,
   mkdirSync,
   openSync,
-  readdirSync,
+  promises as fs,
   readFileSync,
   readSync,
   renameSync,
-  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -38,6 +37,7 @@ const GRACE = 30_000;
 const STOP_GRACE = 10_000;
 const REPAIRS = 2;
 const KEEP_DAYS = 14;
+const RECOVERY_BATCH = 16;
 /** A worker can run for months, so clearing can't wait for it to start again. */
 const TIDY_EVERY = 60 * 60_000;
 const WAIT = 50;
@@ -82,11 +82,8 @@ export type WorkerOptions = {
   now?: () => number;
 };
 
-function save(entry: Entry) {
-  const file = path.join(entry.dir, "entry.json");
-  writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
-  renameSync(`${file}.tmp`, file);
-}
+const entryFile = (dir: string) => path.join(dir, "entry.json");
+const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
 
 /** How far a launch took its session's total. One that didn't go on in that session started it from nothing. */
 function sessionRise(entry: Entry, { session, sessionUsage }: Reading) {
@@ -196,6 +193,10 @@ export function createWorker({
   let tries = 0;
   let blind = false;
   let tidied = -Infinity;
+  let recovery: Promise<void> | undefined;
+  let cleaning: Promise<void> | undefined;
+  let removing: { dir: string; done: Promise<void> } | undefined;
+  const active = new Map<string, Entry>();
   const said = new Set<string>();
   /** Trouble that lasts comes round every second, and once in the log will do. */
   const sayOnce = (line: string) => {
@@ -204,14 +205,39 @@ export function createWorker({
   };
   mkdirSync(RUNS, { recursive: true, mode: 0o700 });
 
-  const entries = () =>
-    readdirSync(RUNS).flatMap((id) => {
-      try {
-        return [JSON.parse(readFileSync(path.join(RUNS, id, "entry.json"), "utf8")) as Entry];
-      } catch {
-        return [];
-      }
-    });
+  const entries = () => Array.from(active.values(), (entry) => ({ ...entry }));
+  const folders = async () =>
+    (await fs.readdir(RUNS, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(RUNS, entry.name));
+
+  function save(entry: Entry) {
+    const file = entryFile(entry.dir);
+    writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+    // Keep the last persisted state even if a later update cannot be written.
+    active.set(entry.dir, { ...entry });
+  }
+
+  async function restore() {
+    const dirs = await folders();
+    active.clear();
+    for (let index = 0; index < dirs.length; index += RECOVERY_BATCH) {
+      const batch = await Promise.all(
+        dirs.slice(index, index + RECOVERY_BATCH).map(async (dir) => {
+          try {
+            const entry = JSON.parse(await fs.readFile(entryFile(dir), "utf8")) as Entry;
+            return { ...entry, dir };
+          } catch (error) {
+            if (!missing(error)) sayOnce(`couldn't recover ${dir}: ${error}`);
+          }
+        }),
+      );
+      for (const entry of batch) if (entry) active.set(entry.dir, entry);
+    }
+    // Reuse the startup listing for the first retention pass.
+    void tidy(now(), dirs);
+  }
 
   /** Starts a turn of the agent: a process that outlives this one, leaving its output and exit code in files. */
   function launch(entry: Entry, adapter: Adapter, prompt: string) {
@@ -313,6 +339,13 @@ export function createWorker({
 
   async function start(job: Job) {
     const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
+    if (removing?.dir === dir) {
+      try {
+        await removing.done;
+      } catch {
+        // A failed cleanup is reported by tidy; the run can still reuse its folder.
+      }
+    }
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const entry: Entry = {
       run: job.run,
@@ -537,7 +570,12 @@ export function createWorker({
       }
       log(`run ${entry.run}: the hub refused its result (${error.status}: ${error.message}); dropped`);
     }
-    unlinkSync(path.join(entry.dir, "entry.json"));
+    try {
+      unlinkSync(entryFile(entry.dir));
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+    active.delete(entry.dir);
   }
 
   /** Nothing else can tell the owner when the hub is what's gone. */
@@ -575,11 +613,20 @@ export function createWorker({
 
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
-    // Here and not in run: whatever drives the worker comes through here.
-    if (now() - tidied >= TIDY_EVERY) {
-      tidied = now();
-      tidy(tidied);
+    if (recovery) {
+      try {
+        if (!(await fs.stat(RUNS)).isDirectory()) throw new Error(`Not a directory: ${RUNS}`);
+      } catch (error) {
+        recovery = undefined;
+        throw error;
+      }
     }
+    await (recovery ??= restore().catch((error) => {
+      recovery = undefined;
+      throw error;
+    }));
+    const moment = now();
+    if (moment - tidied >= TIDY_EVERY) void tidy(moment);
     await eachEntry(check);
     await eachEntry(settle);
     const held = entries();
@@ -608,16 +655,37 @@ export function createWorker({
   }
 
   /** Output of finished runs is kept a while for looking into, then goes. */
-  function tidy(moment = now()) {
-    for (const id of readdirSync(RUNS)) {
-      const dir = path.join(RUNS, id);
-      try {
-        const expired = moment - statSync(dir).mtimeMs > KEEP_DAYS * 24 * 3600_000;
-        if (!existsSync(path.join(dir, "entry.json")) && expired) rmSync(dir, { recursive: true, force: true });
-      } catch (error) {
-        sayOnce(`couldn't clear ${dir}: ${error}`);
+  function tidy(moment = now(), dirs?: string[]) {
+    if (cleaning) return cleaning;
+    tidied = moment;
+    cleaning = (async () => {
+      for (const dir of dirs ?? (await folders())) {
+        try {
+          if (active.has(dir) || moment - (await fs.stat(dir)).mtimeMs <= KEEP_DAYS * 24 * 3600_000) continue;
+          try {
+            await fs.access(entryFile(dir));
+            continue;
+          } catch (error) {
+            if (!missing(error)) throw error;
+          }
+          if (active.has(dir)) continue;
+          const done = fs.rm(dir, { recursive: true, force: true });
+          removing = { dir, done };
+          try {
+            await done;
+          } finally {
+            removing = undefined;
+          }
+        } catch (error) {
+          if (!missing(error)) sayOnce(`couldn't clear ${dir}: ${error}`);
+        }
       }
-    }
+    })()
+      .catch((error) => sayOnce(`couldn't list old runs: ${error}`))
+      .finally(() => {
+        cleaning = undefined;
+      });
+    return cleaning;
   }
 
   async function run(signalled: AbortSignal) {
