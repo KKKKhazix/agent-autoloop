@@ -37,13 +37,22 @@ const oneLine = (text: unknown) =>
     300,
   );
 
-/** A failure as the reason and the next thing to do: the CLI's error body is JSON meant for a program, not the reader. */
-function explain(where: string, body: any, failure: Error | undefined, printed: string) {
+/**
+ * A failure as the reason and the next thing to do: the CLI's error body is JSON meant for a program, not the reader.
+ * The bot's permissions come from the app's settings in Feishu's developer console, and signing in again doesn't change
+ * them; only the user identity is fixed by lark-cli auth login.
+ */
+function explain(where: string, body: any, failure: Error | undefined, printed: string, identity?: string) {
   const type = typeof body?.type === "string" ? body.type : "";
   const said = typeof body?.message === "string" ? oneLine(body.message) : "";
   const because = [type, said].filter(Boolean).join("：");
-  if (type === "authorization" || type === "authentication")
-    return `${where} 没通过飞书授权（${because}）：在这台电脑运行 lark-cli auth login 重新登录，并确认应用已开通所需权限`;
+  if (type === "authorization" || type === "authentication") {
+    const page = typeof body?.console_url === "string" ? `：${oneLine(body.console_url)}` : "";
+    const hint = typeof body?.hint === "string" ? oneLine(body.hint) : "";
+    return identity === "bot"
+      ? `${where} 没通过飞书授权（${because}）：在飞书开发者后台给这个应用开通所需权限${page}`
+      : `${where} 没通过飞书授权（${because}）：${hint || "在这台电脑运行 lark-cli auth login 重新登录"}`;
+  }
   if (because) return `${where} 失败：飞书说 ${because}`;
   return `${where} 失败：${(oneLine(printed) || oneLine(failure?.message)).replace(/^Error:\s*/, "") || "没有说明原因"}`;
 }
@@ -146,7 +155,10 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
     } catch {
       out = null;
     }
-    if (out?.ok === false || out?.error) throw new Error(explain(where, out.error ?? out, ran.failure, printed));
+    const identity =
+      typeof out?.identity === "string" ? out.identity : args.includes("--as") ? args[args.indexOf("--as") + 1] : "";
+    if (out?.ok === false || out?.error)
+      throw new Error(explain(where, out.error ?? out, ran.failure, printed, identity));
     if (ran.failure) throw new Error(explain(where, null, ran.failure, printed));
     if (!out) throw new Error(`${where} 失败：返回的不是 JSON（${oneLine(printed) || "没有输出"}）`);
     return out;
