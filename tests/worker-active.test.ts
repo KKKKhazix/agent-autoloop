@@ -106,3 +106,38 @@ test("an outstanding historical deletion leaves the worker free to poll the hub"
   }
   assert.ok(!fs.existsSync(old));
 });
+
+test("recovery retries a known run whose receipt file was temporarily unreadable", async (t) => {
+  const dir = join(runs, "4491-1");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = join(dir, "entry.json");
+  fs.writeFileSync(file, JSON.stringify({ run: 4491, token: "receipt", dir, result: { outcome: "done" } }));
+  const read = fs.promises.readFile;
+  let blocked = true;
+  t.mock.method(fs.promises, "readFile", async (...args: Parameters<typeof read>) => {
+    if (args[0] === file && blocked) throw Object.assign(new Error("file busy"), { code: "EBUSY" });
+    return read(...args);
+  });
+  const receipts: number[] = [];
+  const worker = createWorker({
+    name: "test",
+    hub: {
+      async work() {
+        return { job: null, cancel: [] };
+      },
+      async started() {
+        return { ok: true };
+      },
+      async result(run) {
+        receipts.push(run);
+        return { rejected: [] };
+      },
+    },
+  });
+  await worker.tick();
+  assert.deepEqual(receipts, []);
+  blocked = false;
+  await worker.tick();
+  assert.deepEqual(receipts, [4491]);
+  await worker.tidy();
+});

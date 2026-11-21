@@ -197,6 +197,7 @@ export function createWorker({
   let cleaning: Promise<void> | undefined;
   let removing: { dir: string; done: Promise<void> } | undefined;
   const active = new Map<string, Entry>();
+  const unreadable = new Set<string>();
   const said = new Set<string>();
   /** Trouble that lasts comes round every second, and once in the log will do. */
   const sayOnce = (line: string) => {
@@ -219,21 +220,27 @@ export function createWorker({
     active.set(entry.dir, { ...entry });
   }
 
+  async function recoverEntry(dir: string) {
+    try {
+      const entry = JSON.parse(await fs.readFile(entryFile(dir), "utf8")) as Entry;
+      if (!entry || !Number.isSafeInteger(entry.run)) throw new Error("invalid run entry");
+      active.set(dir, { ...entry, dir });
+      unreadable.delete(dir);
+    } catch (error) {
+      if (missing(error)) unreadable.delete(dir);
+      else {
+        unreadable.add(dir);
+        sayOnce(`couldn't recover ${dir}: ${error}`);
+      }
+    }
+  }
+
   async function restore() {
     const dirs = await folders();
     active.clear();
+    unreadable.clear();
     for (let index = 0; index < dirs.length; index += RECOVERY_BATCH) {
-      const batch = await Promise.all(
-        dirs.slice(index, index + RECOVERY_BATCH).map(async (dir) => {
-          try {
-            const entry = JSON.parse(await fs.readFile(entryFile(dir), "utf8")) as Entry;
-            return { ...entry, dir };
-          } catch (error) {
-            if (!missing(error)) sayOnce(`couldn't recover ${dir}: ${error}`);
-          }
-        }),
-      );
-      for (const entry of batch) if (entry) active.set(entry.dir, entry);
+      await Promise.all(dirs.slice(index, index + RECOVERY_BATCH).map(recoverEntry));
     }
     // Reuse the startup listing for the first retention pass.
     void tidy(now(), dirs);
@@ -620,6 +627,7 @@ export function createWorker({
         recovery = undefined;
         throw error;
       }
+      for (const dir of unreadable) await recoverEntry(dir);
     }
     await (recovery ??= restore().catch((error) => {
       recovery = undefined;
