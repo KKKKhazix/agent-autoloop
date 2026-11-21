@@ -2,6 +2,7 @@
 // commit or an earlier unreleased code change suppresses Ship; PR settings replace main's settings; HTTP health escapes
 // the explicit localhost-only test switch. Git objects are read without a checkout, hooks, filters or project imports.
 // Reviewers by agent are listed with no account trusted to declare one, or a model or depth becomes a command option.
+// A path pattern ending in ** stops at one level, so nested files fall outside the review or release rule they name.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -107,6 +108,11 @@ test("only main provides configuration, with exact path patterns and explicit lo
   assert.throws(() => settings({ ...config, health: { ...health, url: "http://localhost:1234" } }, true));
   assert.throws(() => settings({ ...config, health: { ...health, url: "http://192.168.1.2" } }, true));
   assert.throws(() => settings({ ...config, review: { ...config.review, command: "sh bad" } }));
+});
+test("a path pattern ending in ** covers every level below it", () => {
+  assert.ok(matches("docs/a/b.md", ["docs/**"]));
+  assert.ok(!matches("docsonly/a/b.md", ["docs/**"]));
+  assert.ok(matches("docs/a/b.md", ["**"]));
 });
 test("unhealthy, redirected or malformed health cannot authorize skipping a release", async () => {
   const s = settings({
