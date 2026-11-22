@@ -113,6 +113,8 @@ test("a path pattern ending in ** covers every level below it", () => {
   assert.ok(matches("docs/a/b.md", ["docs/**"]));
   assert.ok(!matches("docsonly/a/b.md", ["docs/**"]));
   assert.ok(matches("docs/a/b.md", ["**"]));
+  assert.ok(!matches("docsonly/a/b.md", ["docs**"]));
+  assert.ok(!matches("docs/a/b.md", ["docs/**.md"]), "a ** inside a name stays within one level");
 });
 test("unhealthy, redirected or malformed health cannot authorize skipping a release", async () => {
   const s = settings({
