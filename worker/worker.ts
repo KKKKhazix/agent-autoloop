@@ -346,6 +346,7 @@ export function createWorker({
     save(entry);
   }
 
+  /** Starts a job from the hub; false when nothing of it could be kept here or handed back, so its claim is worth keeping. */
   async function start(job: Job) {
     const entry: Entry = {
       run: job.run,
@@ -378,6 +379,7 @@ export function createWorker({
     } catch (error) {
       endWith(entry, { outcome: "failed", error: fit(String((error as Error).message ?? error), 500) });
     }
+    return true;
   }
 
   /** A job that never got going here is handed in as failed, rather than kept waiting for an answer that can't come. */
@@ -385,9 +387,11 @@ export function createWorker({
     try {
       const answer = await hub.result(job.run, job.token, { outcome: "failed", error: fit(error, 500) });
       for (const item of answer?.rejected ?? []) log(`run ${job.run}: not applied: ${JSON.stringify(item)}`);
-      log(`run ${job.run}: couldn't keep it here; handed back as failed`);
+      if (!answer?.rejected?.length) log(`run ${job.run}: couldn't keep it here; handed back as failed`);
+      return true;
     } catch (unreachable) {
       log(`run ${job.run}: couldn't keep it here (${error}) and couldn't hand it back: ${unreachable}`);
+      return false;
     }
   }
 
@@ -658,8 +662,10 @@ export function createWorker({
         if (entry) stop(entry, "cancel");
       }
       if (answer?.job) {
+        const claiming = claim;
         claim = randomUUID();
-        await start(answer.job);
+        // One nothing could be done with keeps its claim, so the same run is handed out again instead of going missing.
+        if (!(await start(answer.job))) claim = claiming;
       }
     } catch (error) {
       log(`couldn't reach the hub: ${error}`);

@@ -1,6 +1,7 @@
 // Historical output must not make the worker scan the disk every poll or wait for cleanup before talking to the hub, and
 // whoever holds the worker must not see an empty hand before its first round. A job it cannot keep on disk is handed back
-// as failed, rather than left unanswered and mistaken for a hub that can't be reached.
+// as failed, rather than left unanswered and mistaken for a hub that can't be reached; one that can't even be handed back
+// keeps its claim, so the next round is given that run again instead of it going missing.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -212,4 +213,55 @@ test("a job the worker cannot keep on disk is handed back instead of looking una
   assert.deepEqual(worker.entries(), [], "nothing half-kept is held in hand");
   await worker.tick();
   assert.equal(results.length, 1, "the same job is not handed in twice");
+});
+
+test("a job that cannot even be handed back keeps its claim, so the next round is given it again", async (t) => {
+  const job = {
+    run: 4493,
+    token: "unkeepable",
+    attempt: 1,
+    session: null,
+    askFirst: [],
+    rule: { name: "意见", cwd: home, prompt: "按手册做。" },
+    agent: { id: "a", name: "甲", use: "command", access: "edit" },
+    context: { events: [], answers: [], timers: [], waiting: [], open: [], decided: [] },
+  };
+  const kept = join(runs, `${job.run}-${job.attempt}`, "entry.json.tmp");
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (...args: Parameters<typeof write>) => {
+    if (args[0] === kept) throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    return write(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const claims: string[] = [];
+  const results: number[] = [];
+  let attempts = 0;
+  const worker = createWorker({
+    name: "test",
+    log: () => {},
+    hub: {
+      // The hub gives a held claim back the run it already has, and a new claim nothing.
+      async work({ claim }) {
+        claims.push(claim);
+        return { job: claim === claims[0] ? job : null, cancel: [] };
+      },
+      async started() {
+        return { ok: true };
+      },
+      async result(run) {
+        if (++attempts === 1) throw new HubError(503, "try again");
+        results.push(run);
+        return { rejected: [] };
+      },
+    },
+  });
+  await worker.tick();
+  assert.deepEqual(results, [], "nothing is lost when the hand-back itself can't be delivered");
+  await worker.tick();
+  assert.equal(claims[1], claims[0], "the claim is kept, so the same run comes round again");
+  assert.deepEqual(results, [job.run]);
 });
