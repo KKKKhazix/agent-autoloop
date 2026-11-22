@@ -24,10 +24,12 @@ export const at = (minutes: number) => Date.parse("2026-10-18T02:00:00.000Z") + 
 
 /**
  * Whether this account may make a symlink at all: a Windows account without Developer Mode gets EPERM. A test that needs
- * one can only say so and stand down, rather than fail the suite on that account.
+ * one can only say so and stand down, rather than fail the suite on that account. Elsewhere a link that can't be made is
+ * a failure of its own, so the test that needs one doesn't quietly drop what it checks.
  */
 let links: boolean | undefined;
 export function canSymlink() {
+  if (process.platform !== "win32") return true;
   if (links !== undefined) return links;
   const place = mkdtempSync(join(tmpdir(), "agent-autoloop-links-"));
   try {
