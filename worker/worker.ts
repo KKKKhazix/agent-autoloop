@@ -10,6 +10,7 @@ import {
   mkdirSync,
   openSync,
   promises as fs,
+  readdirSync,
   readFileSync,
   readSync,
   renameSync,
@@ -37,7 +38,6 @@ const GRACE = 30_000;
 const STOP_GRACE = 10_000;
 const REPAIRS = 2;
 const KEEP_DAYS = 14;
-const RECOVERY_BATCH = 16;
 /** A worker can run for months, so clearing can't wait for it to start again. */
 const TIDY_EVERY = 60 * 60_000;
 const WAIT = 50;
@@ -193,9 +193,8 @@ export function createWorker({
   let tries = 0;
   let blind = false;
   let tidied = -Infinity;
-  let recovery: Promise<void> | undefined;
+  let restored = false;
   let cleaning: Promise<void> | undefined;
-  let removing: { dir: string; done: Promise<void> } | undefined;
   const active = new Map<string, Entry>();
   const unreadable = new Set<string>();
   const said = new Set<string>();
@@ -206,7 +205,11 @@ export function createWorker({
   };
   mkdirSync(RUNS, { recursive: true, mode: 0o700 });
 
-  const entries = () => Array.from(active.values(), (entry) => ({ ...entry }));
+  // Whoever holds the worker may ask before its first round, and sees the runs in hand then too.
+  const entries = () => {
+    if (!restored) restore();
+    return Array.from(active.values(), (entry) => ({ ...entry }));
+  };
   const folders = async () =>
     (await fs.readdir(RUNS, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
@@ -220,9 +223,9 @@ export function createWorker({
     active.set(entry.dir, { ...entry });
   }
 
-  async function recoverEntry(dir: string) {
+  function recoverEntry(dir: string) {
     try {
-      const entry = JSON.parse(await fs.readFile(entryFile(dir), "utf8")) as Entry;
+      const entry = JSON.parse(readFileSync(entryFile(dir), "utf8")) as Entry;
       if (!entry || !Number.isSafeInteger(entry.run)) throw new Error("invalid run entry");
       active.set(dir, { ...entry, dir });
       unreadable.delete(dir);
@@ -235,15 +238,14 @@ export function createWorker({
     }
   }
 
-  async function restore() {
-    const dirs = await folders();
+  /** Reads the folders once, when the worker starts or after the folder went wrong, not every round. */
+  function restore() {
     active.clear();
     unreadable.clear();
-    for (let index = 0; index < dirs.length; index += RECOVERY_BATCH) {
-      await Promise.all(dirs.slice(index, index + RECOVERY_BATCH).map(recoverEntry));
+    for (const entry of readdirSync(RUNS, { withFileTypes: true })) {
+      if (entry.isDirectory()) recoverEntry(path.join(RUNS, entry.name));
     }
-    // Reuse the startup listing for the first retention pass.
-    void tidy(now(), dirs);
+    restored = true;
   }
 
   /** Starts a turn of the agent: a process that outlives this one, leaving its output and exit code in files. */
@@ -346,13 +348,6 @@ export function createWorker({
 
   async function start(job: Job) {
     const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
-    if (removing?.dir === dir) {
-      try {
-        await removing.done;
-      } catch {
-        // A failed cleanup is reported by tidy; the run can still reuse its folder.
-      }
-    }
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const entry: Entry = {
       run: job.run,
@@ -620,19 +615,15 @@ export function createWorker({
 
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
-    if (recovery) {
+    if (restored) {
       try {
-        if (!(await fs.stat(RUNS)).isDirectory()) throw new Error(`Not a directory: ${RUNS}`);
+        if (!statSync(RUNS).isDirectory()) throw new Error(`Not a directory: ${RUNS}`);
       } catch (error) {
-        recovery = undefined;
+        restored = false;
         throw error;
       }
-      for (const dir of unreadable) await recoverEntry(dir);
-    }
-    await (recovery ??= restore().catch((error) => {
-      recovery = undefined;
-      throw error;
-    }));
+      for (const dir of unreadable) recoverEntry(dir);
+    } else restore();
     const moment = now();
     if (moment - tidied >= TIDY_EVERY) void tidy(moment);
     await eachEntry(check);
@@ -663,11 +654,11 @@ export function createWorker({
   }
 
   /** Output of finished runs is kept a while for looking into, then goes. */
-  function tidy(moment = now(), dirs?: string[]) {
+  function tidy(moment = now()) {
     if (cleaning) return cleaning;
     tidied = moment;
     cleaning = (async () => {
-      for (const dir of dirs ?? (await folders())) {
+      for (const dir of await folders()) {
         try {
           if (active.has(dir) || moment - (await fs.stat(dir)).mtimeMs <= KEEP_DAYS * 24 * 3600_000) continue;
           try {
@@ -677,13 +668,7 @@ export function createWorker({
             if (!missing(error)) throw error;
           }
           if (active.has(dir)) continue;
-          const done = fs.rm(dir, { recursive: true, force: true });
-          removing = { dir, done };
-          try {
-            await done;
-          } finally {
-            removing = undefined;
-          }
+          await fs.rm(dir, { recursive: true, force: true });
         } catch (error) {
           if (!missing(error)) sayOnce(`couldn't clear ${dir}: ${error}`);
         }

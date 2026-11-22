@@ -1,4 +1,5 @@
-// Historical output must not make the worker scan the disk every poll or wait for cleanup before talking to the hub.
+// Historical output must not make the worker scan the disk every poll or wait for cleanup before talking to the hub, and
+// whoever holds the worker must not see an empty hand before its first round.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -41,6 +42,11 @@ test("polls with one recovered result and 4,488 historical directories", async (
     },
   });
   try {
+    assert.deepEqual(
+      worker.entries().map((entry) => entry.run),
+      [4489],
+      "whoever holds the worker sees the run in hand before its first round",
+    );
     await worker.tick();
     await worker.tidy();
     assert.deepEqual(calls[0], [4489]);
@@ -112,11 +118,16 @@ test("recovery retries a known run whose receipt file was temporarily unreadable
   fs.mkdirSync(dir, { recursive: true });
   const file = join(dir, "entry.json");
   fs.writeFileSync(file, JSON.stringify({ run: 4491, token: "receipt", dir, result: { outcome: "done" } }));
-  const read = fs.promises.readFile;
+  const read = fs.readFileSync;
   let blocked = true;
-  t.mock.method(fs.promises, "readFile", async (...args: Parameters<typeof read>) => {
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof read>) => {
     if (args[0] === file && blocked) throw Object.assign(new Error("file busy"), { code: "EBUSY" });
     return read(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
   });
   const receipts: number[] = [];
   const worker = createWorker({
