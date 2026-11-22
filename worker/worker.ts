@@ -347,14 +347,12 @@ export function createWorker({
   }
 
   async function start(job: Job) {
-    const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
     const entry: Entry = {
       run: job.run,
       token: job.token,
       attempt: job.attempt,
       job,
-      dir,
+      dir: path.join(RUNS, `${job.run}-${job.attempt}`),
       prompt: "",
       turn: 0,
       session: job.session ?? randomUUID(),
@@ -362,16 +360,34 @@ export function createWorker({
       repairs: 0,
       triedFresh: false,
     };
-    // Kept before anything slow: a worker stopped from here on still has the job.
-    save(entry);
     try {
-      writeFileSync(path.join(dir, "context.json"), JSON.stringify(job.context, null, 2), { mode: 0o600 });
+      mkdirSync(entry.dir, { recursive: true, mode: 0o700 });
+      // Kept before anything slow: a worker stopped from here on still has the job.
+      save(entry);
+    } catch (error) {
+      // Nothing of it is on disk, so no later round could hand it back. Left alone, the run would look unanswered and only
+      // turn up as "don't know if it's done" five minutes on: the hub is told now, and tries it again.
+      return handBack(job, `在 worker 上开不了这一轮：${(error as Error).message ?? error}`);
+    }
+    try {
+      writeFileSync(path.join(entry.dir, "context.json"), JSON.stringify(job.context, null, 2), { mode: 0o600 });
       const adapter = await adapterFor(job.agent.use);
-      entry.prompt = promptFor(job, path.join(dir, "context.json"));
+      entry.prompt = promptFor(job, path.join(entry.dir, "context.json"));
       save(entry);
       launch(entry, adapter, entry.prompt);
     } catch (error) {
       endWith(entry, { outcome: "failed", error: fit(String((error as Error).message ?? error), 500) });
+    }
+  }
+
+  /** A job that never got going here is handed in as failed, rather than kept waiting for an answer that can't come. */
+  async function handBack(job: Job, error: string) {
+    try {
+      const answer = await hub.result(job.run, job.token, { outcome: "failed", error: fit(error, 500) });
+      for (const item of answer?.rejected ?? []) log(`run ${job.run}: not applied: ${JSON.stringify(item)}`);
+      log(`run ${job.run}: couldn't keep it here; handed back as failed`);
+    } catch (unreachable) {
+      log(`run ${job.run}: couldn't keep it here (${error}) and couldn't hand it back: ${unreachable}`);
     }
   }
 

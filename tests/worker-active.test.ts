@@ -1,5 +1,6 @@
 // Historical output must not make the worker scan the disk every poll or wait for cleanup before talking to the hub, and
-// whoever holds the worker must not see an empty hand before its first round.
+// whoever holds the worker must not see an empty hand before its first round. A job it cannot keep on disk is handed back
+// as failed, rather than left unanswered and mistaken for a hub that can't be reached.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -151,4 +152,64 @@ test("recovery retries a known run whose receipt file was temporarily unreadable
   await worker.tick();
   assert.deepEqual(receipts, [4491]);
   await worker.tidy();
+});
+
+test("a job the worker cannot keep on disk is handed back instead of looking unanswered", async (t) => {
+  const job = {
+    run: 4492,
+    token: "unkeepable",
+    attempt: 1,
+    session: null,
+    askFirst: [],
+    rule: { name: "意见", cwd: home, prompt: "按手册做。" },
+    agent: { id: "a", name: "甲", use: "command", access: "edit" },
+    context: { events: [], answers: [], timers: [], waiting: [], open: [], decided: [] },
+  };
+  const kept = join(runs, `${job.run}-${job.attempt}`, "entry.json.tmp");
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (...args: Parameters<typeof write>) => {
+    if (args[0] === kept) throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    return write(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  let offered = false;
+  const results: any[] = [];
+  const lines: string[] = [];
+  const worker = createWorker({
+    name: "test",
+    log: (line) => lines.push(line),
+    hub: {
+      async work() {
+        // One job, offered once: the claim is gone whichever way it is answered.
+        if (offered) return { job: null, cancel: [] };
+        offered = true;
+        return { job, cancel: [] };
+      },
+      async started() {
+        return { ok: true };
+      },
+      async result(run, token, data) {
+        results.push({ run, token, data });
+        return { rejected: [] };
+      },
+    },
+  });
+  assert.equal(await worker.tick(), true, "a disk that cannot keep the job is not a hub that cannot be reached");
+  assert.deepEqual(
+    results.map(({ run, token, data }) => [run, token, data.outcome]),
+    [[job.run, job.token, "failed"]],
+    "the hub hears the run failed instead of waiting for an answer that can't come",
+  );
+  assert.match(results[0].data.error, /no space left/);
+  assert.ok(
+    !lines.some((line) => line.includes("couldn't reach the hub")),
+    "the local failure isn't logged as the hub being gone",
+  );
+  assert.deepEqual(worker.entries(), [], "nothing half-kept is held in hand");
+  await worker.tick();
+  assert.equal(results.length, 1, "the same job is not handed in twice");
 });
