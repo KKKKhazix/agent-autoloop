@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT, git, matches, PLAIN_FILE_MODES, type Reviewer, type Settings } from "./project.ts";
-import { IN_THE_APP } from "../codex/agent.ts";
+import { inTheApp } from "../codex/agent.ts";
 import { findProgram, tail } from "../../worker/agents.ts";
 import { reviewCovers, reviewSignature, selectReview, type SharedPolicy } from "./review-policy.ts";
 import { ledger, OWNER, renderRound, stalled } from "./review-ledger.ts";
@@ -241,7 +241,7 @@ async function runReviewer(
   writeFileSync(changesFile, input.diff);
   const output = join(snapshot, "review.json");
   const { command, model } = reviewer;
-  const codex = () => [findProgram("codex", () => IN_THE_APP), ...codexCommand(output, effort, model)];
+  const codex = () => [findProgram("codex", inTheApp), ...codexCommand(output, effort, model)];
   const argv = command ?? codex();
   const args = argv.slice(1).map((arg) => arg.replaceAll("{input}", changesFile));
   const child = execFile(...commandLine([argv[0], ...args]), {
