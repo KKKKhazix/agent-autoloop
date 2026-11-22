@@ -1,7 +1,7 @@
 // Codex: the user's own, installed and signed in by them. A run is a `codex exec` in the background; its thread is kept
 // on disk, so a retry or an answer can go on in it, and the link opens it in the app.
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { commandLine, powershell, psQuote } from "../../host/command.ts";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
@@ -20,13 +20,28 @@ export function inTheApp() {
   // 找不到 codex while the program sat in the folder beside the one PATH named.
   const local = process.env.LOCALAPPDATA;
   const root = local ? path.join(local, "OpenAI", "Codex", "bin") : null;
-  if (!root || !existsSync(root)) return mac;
-  const newestFirst = readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(root, entry.name, "codex.exe"))
-    .filter(existsSync)
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  return [...newestFirst, ...mac];
+  if (!root) return mac;
+  // An update is emptying these folders while this runs, so each is read on its own and one that has gone is left out:
+  // a throw here reaches the round as whichever path vanished rather than as 找不到 codex.
+  const folders = (() => {
+    try {
+      return readdirSync(root, { withFileTypes: true });
+    } catch {
+      // No Codex desktop install, or a bin this account can't read as a folder.
+      return [];
+    }
+  })();
+  const found: { file: string; at: number }[] = [];
+  for (const entry of folders) {
+    if (!entry.isDirectory()) continue;
+    const file = path.join(root, entry.name, "codex.exe");
+    try {
+      found.push({ file, at: statSync(file).mtimeMs });
+    } catch {
+      // A folder holding another of the app's programs, or one this update is still emptying.
+    }
+  }
+  return [...found.sort((a, b) => b.at - a.at).map((codex) => codex.file), ...mac];
 }
 
 export default {
