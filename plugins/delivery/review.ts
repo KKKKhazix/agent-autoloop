@@ -249,6 +249,9 @@ async function runReviewer(
     timeout: REVIEW_MINUTES * 60_000,
     maxBuffer: 8 * 1024 * 1024,
   });
+  // A reviewer can stop before it reads its prompt, and a long one then fails the write. An error nobody listens for would
+  // end this whole run; the exit code and stderr already say why the review didn't happen.
+  child.stdin!.on("error", () => {});
   child.stdin!.end(input.prompt);
   const text = await new Promise<string>((resolve, reject) => {
     let stdout = "";
