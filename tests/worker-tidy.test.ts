@@ -3,7 +3,7 @@
 // hand, or one not old enough, goes; one folder that can't be cleared
 // stops the worker or the rest of the clearing.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, promises as fs, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setup } from "./helpers.ts";
@@ -92,18 +92,28 @@ test("only finished runs' folders old enough go", async () => {
   rmSync(inHand, { recursive: true });
 });
 
-test("a folder that can't be cleared is said and leaves the rest to go", async (t) => {
-  const lines: string[] = [];
-  const worker = createWorker({ hub: quiet() as any, name: "w1", wait: 0, log: (line) => lines.push(line) });
-  const stuck = finished("5-1", 15);
-  const other = finished("6-1", 15);
-  const remove = fs.rm;
-  t.mock.method(fs, "rm", async (...args: Parameters<typeof remove>) => {
-    if (args[0] === stuck) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    return remove(...args);
-  });
-  await worker.tidy();
-  assert.equal(existsSync(other), false);
-  assert.equal(existsSync(stuck), true);
-  assert.ok(lines.some((line) => line.includes("5-1")));
-});
+test(
+  "a folder that can't be cleared is said and leaves the rest to go",
+  { skip: process.getuid!() === 0 },
+  async () => {
+    const lines: string[] = [];
+    const worker = createWorker({ hub: quiet() as any, name: "w1", wait: 0, log: (line) => lines.push(line) });
+    const stuck = finished("5-1", 15);
+    const locked = join(stuck, "locked");
+    mkdirSync(locked);
+    // Something inside: an empty folder goes even locked, since only its parent has to allow that.
+    writeFileSync(join(locked, "kept"), "");
+    chmodSync(locked, 0o000);
+    age(stuck, 15);
+    const other = finished("6-1", 15);
+    try {
+      await worker.tidy();
+      assert.equal(existsSync(other), false);
+      assert.equal(existsSync(stuck), true);
+      assert.ok(lines.some((line) => line.includes("5-1")));
+    } finally {
+      chmodSync(locked, 0o700);
+      rmSync(stuck, { recursive: true });
+    }
+  },
+);
