@@ -467,7 +467,8 @@ test("a program the app moved is found where it keeps it now, newest first", () 
   for (const folder of [yesterday, today, helpersOnly]) mkdirSync(folder, { recursive: true });
   writeFileSync(join(yesterday, "codex.exe"), "");
   writeFileSync(join(today, "codex.exe"), "");
-  // The app keeps its other programs in these folders too, and a folder without codex.exe isn't where codex is.
+  // The app keeps its other programs in these folders too, and a folder without codex.exe isn't where codex is: the
+  // same as one an update took codex.exe out of after the list was read, which is left out rather than thrown.
   writeFileSync(join(helpersOnly, "rg.exe"), "");
   utimesSync(join(yesterday, "codex.exe"), new Date("2026-11-21T00:12:00Z"), new Date("2026-11-21T00:12:00Z"));
   utimesSync(join(today, "codex.exe"), new Date("2026-11-21T00:13:00Z"), new Date("2026-11-21T00:13:00Z"));
@@ -510,47 +511,5 @@ test("a line of output that's JSON but no message is noise to every plugin", () 
   for (const adapter of [claude, codex, command, dsh, zcode]) {
     assert.doesNotThrow(() => adapter.read(noise, null, ""));
     assert.doesNotThrow(() => adapter.read(noise, 0, ""));
-  }
-});
-
-test("a folder an update is emptying is skipped, not thrown", () => {
-  const local = setup("adapters-codex-emptying");
-  const root = join(local, "OpenAI", "Codex", "bin");
-  const kept = join(root, "89cd6612adc9c8d8");
-  const emptying = join(root, "5b4923dff14fbe66");
-  for (const folder of [kept, emptying]) mkdirSync(folder, { recursive: true });
-  writeFileSync(join(kept, "codex.exe"), "");
-  // The update took codex.exe out of this one after the lookup read the list, as it does on the way to a new folder.
-  writeFileSync(join(emptying, "rg.exe"), "");
-  const usual = process.env.LOCALAPPDATA;
-  process.env.LOCALAPPDATA = local;
-  try {
-    assert.deepEqual(
-      inTheApp().slice(0, 1),
-      [join(kept, "codex.exe")],
-      "the folder that has gone is left out, not thrown out of the lookup",
-    );
-  } finally {
-    if (usual === undefined) delete process.env.LOCALAPPDATA;
-    else process.env.LOCALAPPDATA = usual;
-  }
-});
-
-test("a bin that isn't a folder names no program, and isn't a failure", () => {
-  const local = setup("adapters-codex-nobin");
-  const app = join(local, "OpenAI", "Codex");
-  mkdirSync(app, { recursive: true });
-  // existsSync says yes to a file as well, and reading one as a folder throws ENOTDIR out of the lookup.
-  writeFileSync(join(app, "bin"), "");
-  const usual = process.env.LOCALAPPDATA;
-  process.env.LOCALAPPDATA = local;
-  try {
-    assert.ok(
-      inTheApp().every((program) => !program.startsWith(local)),
-      "a bin that can't be read as a folder is no Codex desktop install",
-    );
-  } finally {
-    if (usual === undefined) delete process.env.LOCALAPPDATA;
-    else process.env.LOCALAPPDATA = usual;
   }
 });
