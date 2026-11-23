@@ -60,6 +60,14 @@ function keepChannelRunning(id: string, { use, key, ...options }: ChannelConfig,
 }
 
 export async function up() {
+  // Everything an Agent starts belongs to its turn: Windows ends the turn's job when the turn ends, and Unix signals the
+  // whole process group when it stops one. A hub started from inside a turn goes with it, so it says so and stays down.
+  const run = process.env.AGENT_AUTOLOOP_RUN;
+  if (run !== undefined)
+    throw new Error(
+      `这是在第 ${run} 轮 Agent 里启动的：这一轮结束时系统会把中台一起结束，通道也会跟着断。` +
+        "请在本人的登录会话里启动，不要让 Agent 在轮次里重启中台。",
+    );
   const config = readConfig();
   mkdirSync(HOME, { recursive: true, mode: 0o700 });
   const unlock = lock();
