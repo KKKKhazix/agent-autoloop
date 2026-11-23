@@ -413,7 +413,7 @@ export function createWorker({
   }
 
   /** A turn has ended. What it said is a result, or a reason to ask it again without redoing anything. */
-  function conclude(entry: Entry, adapter: Adapter, code: number | null) {
+  function conclude(entry: Entry, adapter: Adapter, code: number | null, unseen = false) {
     // One ended because its turn was over but it wouldn't exit said what it had to say first.
     const seen = read(entry, adapter, entry.finishedAt ? 0 : code);
     entry.usage = addUsage(addUsage(entry.usage, seen.usage), sessionRise(entry, seen));
@@ -424,7 +424,10 @@ export function createWorker({
     if (entry.why === "cancel") return endWith(entry, { outcome: "cancelled", summary: "已停止", ...known, ...usage });
     if (entry.why === "timeout") {
       const minutes = entry.job.agent.timeout ?? TIMEOUT_MINUTES;
-      const error = `超过 ${minutes} 分钟还没结束，已停止`;
+      // Past the grace period with a group that could be neither looked at nor signalled, nothing watched this run stop:
+      // 已停止 there is a claim about a fact nobody observed, and it is the line the owner reads on the third failure.
+      const stopped = unseen ? "停止信号发出后没能确认进程组已结束，进程可能还在" : "已停止";
+      const error = `超过 ${minutes} 分钟还没结束，${stopped}`;
       if (entry.repairs) return discardReceipt(entry, adapter, error);
       return endWith(entry, { outcome: "failed", error, ...known, ...usage });
     }
@@ -503,7 +506,7 @@ export function createWorker({
         if (!overdue) return;
         signal(entry, "SIGKILL");
         // A turn that was over, or a timeout, ends on what it said: `failed` there is tried again, redoing work done.
-        if (entry.why !== "cancel") return conclude(entry, adapter, exitCode());
+        if (entry.why !== "cancel") return conclude(entry, adapter, exitCode(), true);
         // Reporting `cancelled` would release the item while a process may still be in it, which the protocol forbids
         // (docs/protocol.md: 确认组内没有活进程后才交 cancelled). A cancelled run's `failed` isn't tried again.
         return endWith(entry, {
