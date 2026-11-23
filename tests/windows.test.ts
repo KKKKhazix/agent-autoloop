@@ -4,14 +4,26 @@
 // powershell.exe an Agent left in the turn's folder runs, outside its sandbox, in place of the system's; the npm.cmd and
 // npx.cmd that npm 10 and later write, which name their script through a variable, can't be run at all; a command line
 // longer than Windows starts fails with only "spawn ENAMETOOLONG", which doesn't say what is too long or what to do.
+// A private data directory is resecured even if already private, or keeps an extra grant after its permissions drift.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 import { POWERSHELL, powershell, psQuote } from "../host/command.ts";
+import { privateDirectory } from "../host/files.ts";
 
 const windows = process.platform === "win32";
 const scratch = mkdtempSync(join(tmpdir(), "agent-autoloop-windows-"));
@@ -375,6 +387,38 @@ test("Windows init keeps its keys private even inside a shared directory", { ski
   assert.ok(!sids.includes("S-1-1-0"), "Everyone can read the install's master key");
 });
 
+test("Windows skips unchanged private ACLs and revokes stale inheritance on a moved file", { skip: !windows }, () => {
+  const home = join(scratch, "acl on restart");
+  privateDirectory(home);
+  const runs = join(home, "worker", "runs");
+  mkdirSync(runs, { recursive: true });
+  const record = join(runs, "test-record.json");
+  writeFileSync(record, "{}");
+  const changedAt = statSync(home, { bigint: true }).ctimeNs;
+
+  privateDirectory(home);
+  assert.equal(statSync(home, { bigint: true }).ctimeNs, changedAt, "a matching ACL should not be rewritten");
+
+  const shared = join(scratch, "acl move source");
+  mkdirSync(shared);
+  const granted = spawnSync("icacls.exe", [shared, "/grant", "*S-1-1-0:(OI)(CI)R"], { encoding: "utf8" });
+  assert.equal(granted.status, 0, granted.stderr);
+  const moved = join(shared, "test-record.json");
+  writeFileSync(moved, "{}");
+  renameSync(moved, record);
+  assert.equal(statSync(home, { bigint: true }).ctimeNs, changedAt, "the move must leave the root ACL alone");
+  const canReadRecord = () =>
+    powershell(
+      `([IO.File]::GetAccessControl(${psQuote(record)})).Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }`,
+    )
+      .split(/\s+/)
+      .includes("S-1-1-0");
+  assert.ok(canReadRecord(), "the record must retain the inherited grant from its previous parent");
+
+  privateDirectory(home);
+  assert.ok(!canReadRecord(), "repair must revoke the grant inherited by an existing record");
+});
+
 test("Windows notification text remains data in PowerShell", { skip: !windows }, async () => {
   const { notifyCommand } = await import("../plugins/desktop/channel.ts");
   const title = "中文 '; throw 'injected' & <tag> %PATH%\nsecond line";
@@ -406,7 +450,6 @@ test(
     );
     if (!sid) return t.skip("Codex elevated sandbox is not installed");
     const home = join(scratch, "sandbox-data");
-    const { privateDirectory } = await import("../host/files.ts");
     privateDirectory(home);
     const contextFile = join(home, "context.json");
     const key = join(home, "master.key");
