@@ -549,10 +549,13 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
   let rejected: Rejected[] = [];
   // Told to stop, one that failed first has stopped all the same: trying again would start what the owner ended.
   if (result.outcome === "cancelled" || (result.outcome === "failed" && run.cancel_at)) {
+    // A failure here is the worker saying it couldn't see the stop finish: that, not "stopped", is what happened.
+    const error = result.outcome === "failed" ? result.error?.trim().replace(/[。.]+$/, "") || null : null;
     put(draft, "runs", id, {
       state: "cancelled",
       finished_at: draft.at,
       summary: result.summary ?? "",
+      error,
       cancel_at: null,
     });
     clearFiredTimers(draft, run);
