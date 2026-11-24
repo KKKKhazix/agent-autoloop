@@ -522,7 +522,8 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
     if (rule?.emits && typeMatches(rule.emits.types, event.type)) {
       const sent = ingest(draft, rule.emits.source, { ...event, hops: hopsOf(draft, run) + 1 });
       // A number already taken is an earlier event's, perhaps another source's: what it says isn't what this receipt sent.
-      if (!sent.duplicate) emitted.push(sent.event);
+      if (sent.duplicate) rejected.push({ what: "events", reason: `事件「${event.id}」的编号已被占用，没有入账` });
+      else emitted.push(sent.event);
     } else rejected.push({ what: "events", reason: `规则「${run.rule}」没有写可以发 ${event.type}` });
   }
   // The source whose event this run took reads them back (`eventOutcome`); nothing else links them to the run.
