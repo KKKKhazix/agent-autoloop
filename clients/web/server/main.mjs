@@ -4,15 +4,17 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { spawn } from "node:child_process";
 import { hubClient } from "../../../protocol/client.ts";
 import { readConfig } from "../../../host/config.ts";
 import { readRuns } from "../../../cli/runs.ts";
 import { formatWhy } from "../../../cli/why.ts";
 import { checkRules, localSettings, ruleFile, saveConnection, saveRules, saveWorker } from "./settings.mjs";
 import { deliveryView } from "./delivery.mjs";
-import { command, processStatus } from "./process.mjs";
+import { command, ensureHub, processStatus, stopHub } from "./process.mjs";
+import { openBrowser } from "./browser.mjs";
+import { clearRuntime, runningClient, writeRuntime } from "./runtime.mjs";
 
+const launching = process.argv.includes("--launch");
 const port = Number(process.env.AGENT_AUTOLOOP_WEB_PORT ?? 4317);
 const session = randomBytes(32).toString("hex");
 const dist = resolve(import.meta.dirname, "../dist");
@@ -41,6 +43,11 @@ async function api(req, res, path, query) {
   const body = post ? await bodyOf(req) : {};
   if (!post && path === "/local") return localSettings();
   if (!post && path === "/process") return processStatus();
+  if (post && path === "/shutdown") {
+    const hubOwned = processStatus().owned;
+    setTimeout(shutdown, 50);
+    return { ok: true, hubOwned };
+  }
   if (post && path.startsWith("/cli/")) return command(path.slice(5));
   if (post && path === "/connection") return saveConnection(body);
   if (post && path === "/worker") return saveWorker(body);
@@ -141,10 +148,56 @@ const server = createServer(async (req, res) => {
     json(res, { error: e.message === "fetch failed" ? "无法连接 Hub，请检查系统设置中的地址和进程。" : e.message });
   }
 });
-server.listen(port, "127.0.0.1", () => {
-  const url = "http://127.0.0.1:" + server.address().port + "/#connect=" + session;
+function shutdown() {
+  stopHub().finally(() => {
+    clearRuntime(process.pid);
+    server.close();
+    process.exit(0);
+  });
+}
+
+async function listen() {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const url = "http://127.0.0.1:" + address.port + "/#connect=" + session;
+  writeRuntime({ pid: process.pid, url, session, startedAt: new Date().toISOString() });
   console.log("Agent Autoloop 本地控制台  " + url);
-  if (process.platform === "win32" && process.argv.includes("--open"))
-    spawn("explorer.exe", [url], { windowsHide: true });
-});
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => process.exit(0));
+  if (launching || process.argv.includes("--open")) openBrowser(url);
+}
+
+async function start() {
+  if (launching) {
+    try {
+      await ensureHub({ log: (line) => console.log(line) });
+    } catch (error) {
+      console.error("启动失败：" + error.message);
+      process.exit(1);
+    }
+  }
+  try {
+    await listen();
+  } catch (error) {
+    if (error.code === "EADDRINUSE") {
+      const running = await runningClient();
+      if (running) {
+        console.log("本地控制台已经在运行：" + running.url);
+        openBrowser(running.url);
+        process.exit(0);
+      }
+      console.error(
+        `启动失败：端口 ${port} 已被其他程序占用。` +
+          "请关闭占用该端口的程序，或设置环境变量 AGENT_AUTOLOOP_WEB_PORT 换一个端口后重试。",
+      );
+    } else {
+      console.error("启动失败：" + error.message);
+    }
+    process.exit(1);
+  }
+}
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(signal, shutdown);
+if (process.platform === "win32") process.once("SIGBREAK", shutdown);
+start();
