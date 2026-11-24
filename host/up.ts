@@ -68,7 +68,7 @@ export async function up() {
   if (turn && !turn.startsWith("..") && !path.isAbsolute(turn))
     throw new Error(
       `这是在第 ${run} 轮 Agent 里启动这个中台：这一轮结束或被停掉时，中台可能跟着一起结束，通道也会断。` +
-        "要重启：装了登录服务的运行 agent-autoloop service install；用「启动」文件夹的，结束 up.pid 里记着的进程，十秒后会自动用新代码拉起；都没有的，请本人在自己的登录会话里启动。",
+        `要重启：装了登录服务的运行 agent-autoloop service install；用「启动」文件夹的，结束 ${path.join(HOME, "up.pid")} 里记着的进程，十秒后会自动用新代码拉起；都没有的，请本人在自己的登录会话里启动。`,
     );
   const config = readConfig();
   mkdirSync(HOME, { recursive: true, mode: 0o700 });

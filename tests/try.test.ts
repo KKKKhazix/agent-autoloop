@@ -51,9 +51,6 @@ async function install(t: { after: (done: () => unknown) => void }, agent: strin
   };
   delete env.AGENT_AUTOLOOP_RULES;
   delete env.AGENT_AUTOLOOP_PUBLIC_URL;
-  // A suite that itself runs inside an Agent turn would hand `up` the turn's own variables, and `up` refuses to start there.
-  delete env.AGENT_AUTOLOOP_RUN;
-  delete env.AGENT_AUTOLOOP_CONTEXT;
   const program = ["--disable-warning=ExperimentalWarning", bin];
   const port = await freePort();
   const init = spawnSync(

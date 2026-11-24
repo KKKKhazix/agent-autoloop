@@ -24,9 +24,6 @@ delete env.AGENT_AUTOLOOP_RULES;
 delete env.AGENT_AUTOLOOP_PUBLIC_URL;
 delete env.AGENT_AUTOLOOP_COMMIT;
 delete env.AGENT_AUTOLOOP_RELEASE;
-// Run from inside an Agent turn, this would hand `up` the turn's own variables, and `up` refuses to start there.
-delete env.AGENT_AUTOLOOP_RUN;
-delete env.AGENT_AUTOLOOP_CONTEXT;
 const cli = path.join(home, "app/bin/agent-autoloop.ts");
 let up: ChildProcess | undefined;
 const run = (...args: string[]) => {
