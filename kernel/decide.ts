@@ -886,7 +886,13 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
       clearFiredTimers(draft, run);
       closeStopped(draft, id, "已停止");
     } else if (run.state === "claimed") put(draft, "runs", id, { cancel_at: draft.at });
-    else throw new InputError("这一轮已经结束了");
+    // No worker reports this round any more, so there is no process a stop could reach and nothing to wait for: the owner
+    // ending it is the whole of it. The summary says it went quiet rather than that it stopped, which nobody knows.
+    else if (run.state === "unknown") {
+      put(draft, "runs", id, { state: "cancelled", finished_at: draft.at, summary: "本人停掉：这一轮早已没有回音" });
+      clearFiredTimers(draft, run);
+      closeStopped(draft, id, "本人不再等了");
+    } else throw new InputError("这一轮已经结束了");
   },
   resolve(draft, id, reason, by) {
     const card = draft.view.get("cards", id);
