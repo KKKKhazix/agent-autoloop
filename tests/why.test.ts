@@ -1,6 +1,6 @@
 // Failure modes: why dumps rules or JSON by default; related runs/events leak into the timeline; a question loses its
 // answer or continuation; receipt actions disappear; retry uses the wrong rules version; --json changes the raw facts;
-// local time is replaced by UTC or a year, columns drift; a provisional session link is presented after the agent has supplied its real session; a look-again that came due and ran is shown as cancelled; a stop nobody saw finish is shown as stopped.
+// local time is replaced by UTC or a year, columns drift; a provisional session link is presented after the agent has supplied its real session; a look-again that came due and ran is shown as cancelled; a stop nobody saw finish is shown as stopped, or a run stopped while waiting shows its last failure as why it ended.
 import assert from "node:assert/strict";
 import { rows } from "../kernel/evolve.ts";
 import { execFile } from "node:child_process";
@@ -145,4 +145,13 @@ test("why shows the worker's reason for a stop nobody saw finish, not that it st
   const output = await cli("why", String(job.run));
   assert.ok(output.includes("没能确认进程组已结束"), output);
   assert.ok(!output.includes("结束：已停止"), output);
+});
+test("why says a run stopped while waiting to try again was stopped, not why it last failed", async () => {
+  const at = Date.parse("2026-11-07T00:00:00Z");
+  hub.ingest("shop", { id: "order-99", type: "order.created", subject: "order-99" }, at);
+  const job = hub.claimNext("mac-mini", "waiting-1", at + 1000)!;
+  hub.finish(job.run, job.token, { outcome: "failed", error: "连接断开" }, at + 2000);
+  hub.cancel(job.run, at + 3000);
+  const output = await cli("why", String(job.run));
+  assert.ok(output.includes("结束：已停止"), output);
 });
