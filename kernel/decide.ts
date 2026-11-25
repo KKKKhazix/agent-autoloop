@@ -493,6 +493,9 @@ function scheduleReview(draft: Draft, run: Row, later: Later) {
 }
 
 /** A receipt takes effect here, all of it in the one fact. */
+const sameEvent = (kept: Row, sent: Row) =>
+  (["type", "subject", "summary", "detail", "link"] as const).every((field) => kept[field] === (sent[field] ?? ""));
+
 function applyReceipt(draft: Draft, run: Row, result: Result) {
   const { id } = run;
   const rule = ruleNamed(draft, run.rule);
@@ -522,10 +525,10 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
     if (rule?.emits && typeMatches(rule.emits.types, event.type)) {
       const sent = ingest(draft, rule.emits.source, { ...event, hops: hopsOf(draft, run) + 1 });
       // A number already taken is an earlier event's, perhaps another source's: what it says isn't what this receipt sent.
-      // It may also be the same thing sent again under its fixed number, so the reason doesn't call it a clash.
-      if (sent.duplicate)
-        rejected.push({ what: "events", reason: `事件「${event.id}」这个编号之前已经记过，这次没再记` });
-      else emitted.push(sent.event);
+      // Sending the same thing again under its fixed number is how sources stay idempotent, so only a clash is told.
+      if (!sent.duplicate) emitted.push(sent.event);
+      else if (!sameEvent(draft.view.get("events", sent.event)!, event))
+        rejected.push({ what: "events", reason: `事件「${event.id}」这个编号已经记过另一件事，这次没有记` });
     } else rejected.push({ what: "events", reason: `规则「${run.rule}」没有写可以发 ${event.type}` });
   }
   // The source whose event this run took reads them back (`eventOutcome`); nothing else links them to the run.

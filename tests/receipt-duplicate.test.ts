@@ -1,8 +1,8 @@
-// A receipt's event whose id is already taken is not applied, and the receipt says so in `rejected`, next to the ones
-// the rule's emits list turned away. An agent that sent one and got no number, no notice and no line anywhere could only
-// assume it landed. Failure cases: the duplicate vanishes silently (what happened before this test); the same execution
-// handing in the same result again is counted as rejected a second time instead of as the replay it is; a new id is
-// turned away.
+// A receipt's event whose id already holds a different event is not applied, and the receipt says so in `rejected`, next
+// to the ones the rule's emits list turned away. An agent that sent one and got no number, no notice and no line anywhere
+// could only assume it landed. Failure cases: the clash vanishes silently (what happened before this test); the same event
+// sent again under its fixed id, as a poll does every round, is reported as not applied; the same execution handing in
+// the same result again is counted as rejected a second time instead of as the replay it is; a new id is turned away.
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -59,7 +59,7 @@ test("an event id that is already taken is not applied, and the receipt lists it
   };
   const secondReceipt = hub.finish(second.run, second.token, result, at(6));
   assert.deepEqual(secondReceipt.rejected, [
-    { what: "events", reason: "事件「taken」这个编号之前已经记过，这次没再记" },
+    { what: "events", reason: "事件「taken」这个编号已经记过另一件事，这次没有记" },
   ]);
   assert.deepEqual(
     sent("taken"),
@@ -71,6 +71,22 @@ test("an event id that is already taken is not applied, and the receipt lists it
   // The same execution handing in the same result again is the replay it always was: same answer, marked as such.
   const again = hub.finish(second.run, second.token, result, at(7));
   assert.deepEqual(again, { rejected: secondReceipt.rejected, duplicate: true });
+  assert.equal(sent("taken").length, 1);
+
+  // The same event sent again under its number is how a source stays idempotent: nothing to report.
+  hub.ingest("app", note(4), at(8));
+  const fourth = hub.claimNext("w1", "claim-4", at(8))!;
+  const resent = hub.finish(
+    fourth.run,
+    fourth.token,
+    {
+      outcome: "done",
+      summary: "又发了一次",
+      events: [{ id: "taken", type: "feedback.done", subject: "#1", summary: "第一条" }],
+    },
+    at(9),
+  );
+  assert.deepEqual(resent.rejected, []);
   assert.equal(sent("taken").length, 1);
 
   // An id nobody has used is taken as before.
@@ -88,5 +104,5 @@ test("an event id that is already taken is not applied, and the receipt lists it
   );
   assert.deepEqual(thirdReceipt.rejected, []);
   assert.deepEqual(sent("fresh"), [{ key: "fresh", type: "feedback.new", subject: "#3" }]);
-  assert.equal(eventCount(), 5);
+  assert.equal(eventCount(), 6);
 });
