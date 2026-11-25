@@ -58,7 +58,9 @@ test("an event id that is already taken is not applied, and the receipt lists it
     events: [{ id: "taken", type: "feedback.new", subject: "#2", summary: "第二条" }],
   };
   const secondReceipt = hub.finish(second.run, second.token, result, at(6));
-  assert.deepEqual(secondReceipt.rejected, [{ what: "events", reason: "事件「taken」的编号已被占用，没有入账" }]);
+  assert.deepEqual(secondReceipt.rejected, [
+    { what: "events", reason: "事件「taken」这个编号之前已经记过，这次没再记" },
+  ]);
   assert.deepEqual(
     sent("taken"),
     [{ key: "taken", type: "feedback.done", subject: "#1" }],

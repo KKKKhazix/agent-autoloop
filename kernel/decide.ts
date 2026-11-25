@@ -522,7 +522,9 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
     if (rule?.emits && typeMatches(rule.emits.types, event.type)) {
       const sent = ingest(draft, rule.emits.source, { ...event, hops: hopsOf(draft, run) + 1 });
       // A number already taken is an earlier event's, perhaps another source's: what it says isn't what this receipt sent.
-      if (sent.duplicate) rejected.push({ what: "events", reason: `事件「${event.id}」的编号已被占用，没有入账` });
+      // It may also be the same thing sent again under its fixed number, so the reason doesn't call it a clash.
+      if (sent.duplicate)
+        rejected.push({ what: "events", reason: `事件「${event.id}」这个编号之前已经记过，这次没再记` });
       else emitted.push(sent.event);
     } else rejected.push({ what: "events", reason: `规则「${run.rule}」没有写可以发 ${event.type}` });
   }
