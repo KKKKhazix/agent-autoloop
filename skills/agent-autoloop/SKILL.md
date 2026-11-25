@@ -9,7 +9,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 ## 看情况、回答
 
-`agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（Token 含缓存，写出其中缓存占多少；同一轮重试的已报用量相加，没上报的轮数会写出来）。终端里它带颜色，接管道、被 Agent 调用或设了 `NO_COLOR` 时是纯文本。`agent-autoloop status --json` 输出 `/v1/state` 的原样结构，给脚本和看板用。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮，等整个进程组退出才报告已停。
+`agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（Token 含缓存，写出其中缓存占多少；同一轮重试的已报用量相加，没上报的轮数会写出来）。终端里它带颜色，接管道、被 Agent 调用或设了 `NO_COLOR` 时是纯文本。`agent-autoloop status --json` 输出 `/v1/state` 的原样结构，给脚本和看板用。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮：在跑的等整个进程组退出才报告已停；已经没有回音（`status` 里写着不确定）的一轮直接结束，不再收它后来交的结果。
 
 用户说 Agent 额度用完了、中台还在一轮轮派活时：内置的 Claude Code 插件已经会报恢复时间，中台到那时前不派活给这个 Agent，排着的事件到点自动接着做，不用暂停规则或调小 `parallel`；`status` 在这个 Agent 后面写着几点恢复。想提前试，对用它的一条规则 `agent-autoloop run`，跑通就恢复派活。别的 CLI 要有这个行为，在它的插件 `read` 里返回 `limitedUntil`（见 `docs/plugins.md`）。
 

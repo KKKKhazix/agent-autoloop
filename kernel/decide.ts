@@ -889,7 +889,12 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     // No worker reports this round any more, so there is no process a stop could reach and nothing to wait for: the owner
     // ending it is the whole of it. The summary says it went quiet rather than that it stopped, which nobody knows.
     else if (run.state === "unknown") {
-      put(draft, "runs", id, { state: "cancelled", finished_at: draft.at, summary: "本人停掉：这一轮早已没有回音" });
+      put(draft, "runs", id, {
+        state: "cancelled",
+        finished_at: draft.at,
+        summary: "本人停掉：这一轮早已没有回音",
+        cancel_at: null,
+      });
       clearFiredTimers(draft, run);
       closeStopped(draft, id, "本人不再等了");
     } else throw new InputError("这一轮已经结束了");
