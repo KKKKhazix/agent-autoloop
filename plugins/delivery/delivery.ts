@@ -404,7 +404,9 @@ export async function deliver(
         try {
           await io.wait();
         } catch (error) {
-          if (state === "waiting") throw new ChecksStillRunning(head, error);
+          // A finished run waits too when its required job was skipped or isn't there; only one still going ends on its own.
+          const going = state === "waiting" ? await newestCheck(head, config, io) : undefined;
+          if (going && going.id > after && going.status !== "completed") throw new ChecksStillRunning(head, error);
           throw error;
         }
       }
