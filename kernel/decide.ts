@@ -492,10 +492,10 @@ function scheduleReview(draft: Draft, run: Row, later: Later) {
   add(draft, "timers", { ...fields, rule, lane, key: later.key, source, event_id: null, created_at: draft.at });
 }
 
-/** A receipt takes effect here, all of it in the one fact. */
 const sameEvent = (kept: Row, sent: Row) =>
   (["type", "subject", "summary", "detail", "link"] as const).every((field) => kept[field] === (sent[field] ?? ""));
 
+/** A receipt takes effect here, all of it in the one fact. */
 function applyReceipt(draft: Draft, run: Row, result: Result) {
   const { id } = run;
   const rule = ruleNamed(draft, run.rule);
