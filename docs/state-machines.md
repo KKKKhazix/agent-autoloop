@@ -56,7 +56,7 @@
 | reviewed | deliver-review 要求只审查，完成清标签；部分清除失败不能变成全文交付 |
 | returned | delivery=failure，去 deliver/deliver-review；deliver-attended 由交接者领取，三分钟未领才按既有规则转告 |
 | withdrawn | 检查中撤 deliver，关闭 auto-merge，成功结束但未合并发布，明确报告撤回；不等于 live |
-| retrying | 中台 later 的 delivery-retry 保存 head、GitHub/执行错误计数；换 head 清计数，达限退回；不可写结果时保留重交 |
+| retrying | 中台 later 的 delivery-retry 保存 head、GitHub/执行错误计数；换 head 清计数，达限退回；完整检查还在跑时只顺延、不计数；不可写结果时保留重交 |
 
 关闭未合并的 PR 先写 delivery 失败再清标签，避免等待者卡 pending。ask-owner 是独立 Issue 的转告状态，转告成功才清除，不是上线阶段。来源只认可信账号的 `delivery-agent/<PR号>` 状态；PR 正文审查账本与可信状态绑定轮次、head、审查器和正文摘要。免审不是审查通过，填写「处理」不是复审完成；连续两轮挡上线后只认可信账号写的 `delivery-owner/<PR号>`。
 
