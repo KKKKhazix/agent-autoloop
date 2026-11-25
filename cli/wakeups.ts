@@ -76,7 +76,7 @@ export async function wakeupReport(owner: History, rule: string | undefined, lim
     const batch: HistoryRun[] = page.runs.slice(0, limit - examined);
     for (const run of batch) {
       examined++;
-      if (!run.finishedAt || (!run.claimedAt && !run.usage)) {
+      if (!run.finishedAt || (!run.claimedAt && !run.usage && !run.attempts)) {
         excluded++;
         continue;
       }

@@ -123,6 +123,30 @@ test("paging attributes failures once per run and distinguishes reported zero fr
   assert.deepEqual(group.examples, [4, 2]);
 });
 
+test("a stopped retry with its claim cleared still counts as an executed round", async () => {
+  const run = {
+    id: 1,
+    rule: "weekly",
+    events: [{ type: "export" }],
+    attempts: 1,
+    claimedAt: null,
+    finishedAt: "t",
+    usage: null,
+  };
+  const owner = {
+    ruleRuns: async () => ({ runs: [run], nextBefore: null }),
+    state: async () => {
+      throw Error("unexpected");
+    },
+    why: async () => {
+      throw Error("unexpected");
+    },
+  };
+  const report = await wakeupReport(owner, "weekly", 1);
+  assert.equal(report.excluded, 0);
+  assert.equal(report.groups[0].withFailures, 1);
+});
+
 test("an external timer.due stays external even when the same fact window contains a different timer", async () => {
   const world = new World();
   try {
