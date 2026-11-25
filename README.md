@@ -104,6 +104,8 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 保存后几秒内自动生效，可以运行 `agent-autoloop check` 检查，`agent-autoloop check <文件>` 检查一份草稿，不碰正在跑的中台；`agent-autoloop rules explain [文件]` 看生效的规则和下次定时（也可以指定一份草稿），`agent-autoloop emit <类型> --dry-run` 预演一条事件会派给谁（不连接中台、不写日志）。就算改错了，或者文件被删、读不到，系统也会继续按旧规则跑，并发卡片提醒你。
 
+用 `agent-autoloop wakeups [规则] [--limit 100] [--json]` 区分到期复查、人工回答和其他触发，查看每组的用量与轮次编号。遇到反复等待外部状态的规则，可以用[导出就绪实验](examples/recipes/export-wait/README.md)比较模型复查和脚本探测。
+
 ### Agent 怎么跟中台配合？
 
 中台对 Agent 只有一个约定：**在最后一条回复里交代结果**。事情办完了，正常输出一句结论就行。需要向你请示时，在回复末尾附一段 `agent-autoloop` 代码块：

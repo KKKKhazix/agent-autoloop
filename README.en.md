@@ -106,6 +106,8 @@ External events work the same way once the source is connected. To hand new GitH
 
 Changes take effect within seconds of saving. Run `agent-autoloop check` to validate, `agent-autoloop check <file>` to validate a draft without touching the running hub, `agent-autoloop rules explain [file]` to see the rules in effect and their next runs (a draft file too), and `agent-autoloop emit <type> --dry-run` to preview who an event would go to (it doesn't contact the hub or write to the log). If you make a mistake, or the file is deleted or can't be read, the hub keeps running the previous valid rules and sends you a card about it.
 
+Run `agent-autoloop wakeups [rule] [--limit 100] [--json]` to see usage and example run IDs grouped by rule and trigger, including timer rechecks and human answers. The [export readiness experiment](examples/recipes/export-wait/README.md) compares model rechecks with a deterministic probe. From the repository root, run `node examples/recipes/export-wait/compare.ts` for the offline comparison. Add `--codex` to measure four real calls using your signed-in account.
+
 ### How agents talk back to the hub
 
 The hub asks only one thing of an agent: **put your result in your final message**. When the job is done, a one-line conclusion is enough. To ask you something, the agent appends an `agent-autoloop` block:
