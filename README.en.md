@@ -227,7 +227,7 @@ Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledge
 | Startup at 1.1 million facts | 99.8 ms |
 | Runtime dependencies | 0 |
 
-As history grows, the status summary slows down and the log and indexes keep using disk. The first start after a format change rebuilds from the log, which took 43.1 seconds for 1.1 million facts. [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
+As history grows, the status summary slows down and the log and indexes keep using disk. The first start after a format change rebuilds from the log, which took 48.2 seconds for 1.1 million facts. [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
 
 ## Usage and provider terms
 
