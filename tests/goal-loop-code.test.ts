@@ -604,3 +604,31 @@ test("candidate-local executable acceptance entry must be declared", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test(
+  "Windows candidate-local npm shim resolves in the candidate checkout",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const { home, project, repository } = fixture();
+    try {
+      writeFileSync(join(repository, "check.cmd"), '@ECHO off\r\n"%~dp0\\node.exe" "%~dp0\\check.mjs" %*\r\n');
+      execFileSync("git", ["-C", repository, "add", "."]);
+      execFileSync(
+        "git",
+        ["-C", repository, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "shim"],
+        { stdio: "ignore" },
+      );
+      const config = projectConfig({
+        ...project,
+        code: { ...project.code, check: ["./check.cmd"], checkFiles: ["check.cmd", "check.mjs"] },
+      });
+      const workspace = codeWorkspace(config, join(home, "state"), "local-shim");
+      const result = await applyChanges(config, workspace, [
+        { path: "sum.mjs", content: "export const sum = (a, b) => a + b;\n" },
+      ]);
+      assert.equal(result.proof.passed, true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);

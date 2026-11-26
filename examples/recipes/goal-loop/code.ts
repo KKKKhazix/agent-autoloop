@@ -209,7 +209,10 @@ export async function applyChanges(project: Project, workspace: string, value: u
   if (JSON.stringify(prospective).length > 48000) throw new Error("代码上下文超过本示例上限");
   for (const change of changes) writeFileSync(join(workspace, change.path), change.content);
   const snapshot = inspectCode(project, workspace);
-  const [program, args] = commandLine(project.code.check);
+  // commandLine reads Windows npm shims before spawn applies cwd; resolve explicit local entries first.
+  const [entry, ...parameters] = project.code.check;
+  const executable = !isAbsolute(entry) && /[\\/]/.test(entry) ? resolve(workspace, entry) : entry;
+  const [program, args] = commandLine([executable, ...parameters]);
   const progress: CheckProgress = {
     attempt: randomUUID(),
     revision: snapshot.revision,
