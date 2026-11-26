@@ -24,6 +24,8 @@ let closing = false;
 let interrupted = false;
 let receiptFailure: Error | undefined;
 let uncertainCleanup = false;
+let failureReason: string | undefined;
+const failures: { run: number; role?: string; outcome: string; error?: string; rejected: unknown[] }[] = [];
 const interrupt = () => {
   interrupted = true;
 };
@@ -74,7 +76,21 @@ try {
         const ack = await client.result(run, token, receipt);
         // The hub has accepted the receipt even when individual actions were rejected. Do not make the worker replay it.
         if (ack.rejected.length) receiptFailure = new Error("中台拒绝了回执中的动作：" + JSON.stringify(ack.rejected));
-        if (closing && receipt.outcome === "failed") uncertainCleanup = true;
+        if (receipt.outcome === "failed" || ack.rejected.length) {
+          failures.push({
+            run,
+            role: roles.get(run),
+            outcome: receipt.outcome,
+            error: receipt.error,
+            rejected: ack.rejected,
+          });
+        }
+        // A timeout can fail to confirm shutdown before cleanup starts, too. Preserve evidence for every such stop.
+        if (
+          receipt.outcome === "failed" &&
+          worker?.entries().some((entry) => entry.run === run && entry.stopping !== undefined)
+        )
+          uncertainCleanup = true;
         // Observe only accepted receipts. Tokens and keys never enter the report.
         if (!ack.rejected.length && receipt.outcome === "done" && !trace.some((step) => step.run === run)) {
           const event = receipt.events?.[0];
@@ -124,6 +140,9 @@ try {
   assert.equal((await client.work({ claim: "closed", wait: 0, running: [], capacity: true })).job, null);
   assert.equal((await owner.state()).runs.length, 9);
   verified = true;
+} catch (error) {
+  failureReason = (error as Error).message;
+  throw error;
 } finally {
   closing = true;
   let reaped = false;
@@ -145,6 +164,9 @@ try {
       assert.equal(worker.entries().length, 0, "进程尚未退出，保留临时目录以便排查");
     }
     reaped = true;
+  } catch (error) {
+    failureReason ??= (error as Error).message;
+    throw error;
   } finally {
     try {
       writeFileSync(
@@ -152,6 +174,9 @@ try {
         JSON.stringify(
           {
             verified: verified && reaped,
+            failureReason,
+            failures,
+            ...(!reaped ? { retainedHome: home } : {}),
             node: process.version,
             platform: process.platform,
             model: "local Codex CLI default",
