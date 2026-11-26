@@ -1,13 +1,22 @@
 // Project policy for the goal loop. The hub routes and journals the validated events through its regular receipt protocol.
-import { dirname } from "node:path";
+import { dirname, isAbsolute, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type Project = { id: string; goal: string; acceptance: string; maxRounds: number; requiredText?: string[] };
+export type CodeSpec = { repository: string; files: string[]; check: string[]; checkFiles: string[] };
+export type CodeProof = { revision: string; passed: boolean; exitCode: number };
+export type Project = {
+  id: string;
+  goal: string;
+  acceptance: string;
+  maxRounds: number;
+  requiredText?: string[];
+  code?: CodeSpec;
+};
 export type Role = "plan" | "draft" | "review";
 type Event = { type: string; source: string; subject: string; detail: string };
 type Outbound = Omit<Event, "source"> & { id: string };
 type Reply = { summary: string; events?: Outbound[] };
-type Turn = { input: string; automatic?: Reply; accept(value: unknown): Reply };
+type Turn = { input: string; automatic?: Reply; accept(value: unknown, proof?: CodeProof): Reply };
 type Task = { round: number; capability: "draft" | "review"; task: string; acceptance: string };
 type WorkResult = {
   status: "done" | "blocked";
@@ -15,6 +24,7 @@ type WorkResult = {
   evidence: string;
   verdict?: "pass" | "revise";
   artifact?: string;
+  code?: CodeProof;
 };
 
 function object(value: unknown, fields: string[]) {
@@ -38,7 +48,7 @@ function packetWords(value: unknown, limit: number) {
 }
 
 export function projectConfig(value: unknown): Project {
-  const input = object(value, ["id", "goal", "acceptance", "maxRounds", "requiredText"]);
+  const input = object(value, ["id", "goal", "acceptance", "maxRounds", "requiredText", "code"]);
   const id = words(input.id, 40);
   if (!/^[a-z][a-z0-9-]*$/.test(id)) throw new Error("项目编号无效");
   // Each execution round emits two events. Four executions return to the planner exactly at the hub's eight-hop limit.
@@ -52,7 +62,65 @@ export function projectConfig(value: unknown): Project {
   if (input.requiredText !== undefined && (!Array.isArray(input.requiredText) || input.requiredText.length > 8))
     throw new Error("必含文字最多 8 项");
   const requiredText = (input.requiredText as unknown[] | undefined)?.map((value) => words(value, 120));
+  let code: CodeSpec | undefined;
+  if (input.code !== undefined) {
+    const spec = object(input.code, ["repository", "files", "check", "checkFiles"]);
+    if (
+      typeof spec.repository !== "string" ||
+      !spec.repository ||
+      spec.repository.length > 1000 ||
+      !spec.repository.isWellFormed()
+    )
+      throw new Error("代码仓库路径无效");
+    const repository = spec.repository;
+    if (!isAbsolute(repository) || repository.includes("\0")) throw new Error("代码仓库须为本地绝对路径");
+    if (
+      !Array.isArray(spec.files) ||
+      !spec.files.length ||
+      spec.files.length > 12 ||
+      !Array.isArray(spec.check) ||
+      !spec.check.length ||
+      spec.check.length > 16
+    )
+      throw new Error("需要文件白名单和固定验收命令");
+    const check = spec.check.map((part, index) => {
+      if (typeof part !== "string" || part.length > 1000 || !part.isWellFormed() || (index === 0 && !part.trim()))
+        throw new Error("验收命令参数无效");
+      return part;
+    });
+    if (check.some((part) => part.includes("\0"))) throw new Error("验收命令包含无效字符");
+    const files = spec.files.map((value) => {
+      const path = words(value, 200);
+      if (path !== value) throw new Error("文件路径不能包含首尾空格");
+      if (
+        !/^[A-Za-z0-9_-][A-Za-z0-9_./-]*$/.test(path) ||
+        path.split("/").some((part) => !part || part === "." || part === "..") ||
+        /(^|\/)(package(?:-lock)?\.json|tests?|__tests__)(\/|$)/.test(path) ||
+        /\.(test|spec)\./.test(path) ||
+        /(^|\/)(tsconfig(?:\.[\w-]+)?\.json|jsconfig(?:\.[\w-]+)?\.json|[^/]+\.config\.[^/]+)$/.test(path) ||
+        check.some((arg) => normalize(arg) === normalize(path))
+      )
+        throw new Error("文件越界或属于验收入口");
+      return path;
+    });
+    if (new Set(files).size !== files.length) throw new Error("文件白名单重复");
+    if (!Array.isArray(spec.checkFiles) || !spec.checkFiles.length || spec.checkFiles.length > 24)
+      throw new Error("须显式列出固定验收文件");
+    const checkFiles = spec.checkFiles.map((value) => {
+      const path = words(value, 200);
+      if (path !== value) throw new Error("文件路径不能包含首尾空格");
+      if (
+        !/^[A-Za-z0-9_-][A-Za-z0-9_./-]*$/.test(path) ||
+        path.split("/").some((part) => !part || part === "." || part === "..") ||
+        files.includes(path)
+      )
+        throw new Error("验收文件越界或与可改文件重叠");
+      return path;
+    });
+    code = { repository, files, check, checkFiles };
+  }
   return {
+    ...(code ? { code } : {}),
     ...(requiredText ? { requiredText } : {}),
     id,
     goal: words(input.goal, 2000),
@@ -75,8 +143,23 @@ function taskOf(value: unknown, project: Project): Task {
   return { round, capability, task: packetWords(input.task, 700), acceptance: packetWords(input.acceptance, 400) };
 }
 
+export function codeProof(value: unknown): CodeProof {
+  const proof = object(value, ["revision", "passed", "exitCode"]);
+  if (
+    typeof proof.revision !== "string" ||
+    !/^[a-f0-9]{64}$/.test(proof.revision) ||
+    typeof proof.passed !== "boolean" ||
+    !Number.isInteger(proof.exitCode) ||
+    (proof.exitCode as number) < 0 ||
+    (proof.exitCode as number) > 255 ||
+    (proof.passed && proof.exitCode !== 0)
+  )
+    throw new Error("代码验收证据无效");
+  return proof as CodeProof;
+}
+
 function resultOf(value: unknown): WorkResult {
-  const input = object(value, ["status", "output", "evidence", "verdict", "artifact"]);
+  const input = object(value, ["status", "output", "evidence", "verdict", "artifact", "code"]);
   if (input.verdict !== undefined && input.verdict !== "pass" && input.verdict !== "revise")
     throw new Error("审查结论无效");
   if (input.status !== "done" && input.status !== "blocked") throw new Error("回执状态无效");
@@ -84,9 +167,16 @@ function resultOf(value: unknown): WorkResult {
     status: input.status,
     output: packetWords(input.output, 1000),
     evidence: packetWords(input.evidence, 350),
+    ...(input.code ? { code: codeProof(input.code) } : {}),
     ...(input.verdict ? { verdict: input.verdict as "pass" | "revise" } : {}),
     ...(input.artifact !== undefined ? { artifact: packetWords(input.artifact, 1000) } : {}),
   };
+}
+
+// Model-owned fields are validated before the executor performs any local writes or starts acceptance commands.
+export function modelReply(value: unknown, role: "draft" | "review") {
+  object(value, role === "review" ? ["status", "output", "evidence", "verdict"] : ["status", "output", "evidence"]);
+  return resultOf(value);
 }
 
 export function next(project: Project, role: Role, events: Event[]): Turn {
@@ -116,7 +206,7 @@ export function next(project: Project, role: Role, events: Event[]): Turn {
     return {
       input: JSON.stringify({ ...base, round, maxRounds: project.maxRounds, previous, result }),
       automatic,
-      accept(value: unknown): Reply {
+      accept(value: unknown, proof?: CodeProof): Reply {
         if (automatic) return automatic;
         const plan = object(value, ["decision", "reason", "capability", "task", "acceptance"]);
         if (plan.decision === "complete" || plan.decision === "stop") {
@@ -128,7 +218,7 @@ export function next(project: Project, role: Role, events: Event[]): Turn {
               result.verdict !== "pass" ||
               !result.artifact ||
               !result.artifact.includes(result.evidence) ||
-              !meetsChecks(result.artifact))
+              !(project.code ? result.code?.passed : meetsChecks(result.artifact)))
           )
             throw new Error("结项需要实际草稿的审查和验收通过");
           const terminal = object(value, ["decision", "reason"]);
@@ -164,15 +254,22 @@ export function next(project: Project, role: Role, events: Event[]): Turn {
   if (task.capability !== role) throw new Error("执行能力不匹配");
   return {
     input: JSON.stringify({ ...base, task, previousResult }),
-    accept(value: unknown): Reply {
-      object(value, role === "review" ? ["status", "output", "evidence", "verdict"] : ["status", "output", "evidence"]);
-      const result = resultOf(value);
+    accept(value: unknown, proof?: CodeProof): Reply {
+      const result = modelReply(value, role);
+      if (project.code && (result.status === "done" || proof !== undefined)) {
+        result.code = codeProof(proof);
+        if (role === "review" && previousResult?.code?.revision !== result.code.revision)
+          throw new Error("审查代码与起草快照不一致");
+      }
       if (role === "review") {
         if (!previousResult || previousResult.status !== "done" || previousResult.verdict || previousResult.artifact)
           throw new Error("审查需要已完成的起草结果");
         if (!result.verdict || !previousResult.output.includes(result.evidence))
           throw new Error("审查必须给出结论并引用草稿原文");
-        if (result.verdict === "pass" && (result.status !== "done" || !meetsChecks(previousResult.output)))
+        if (
+          result.verdict === "pass" &&
+          (result.status !== "done" || !(project.code ? result.code?.passed : meetsChecks(previousResult.output)))
+        )
           throw new Error("草稿未通过程序验收，不能声明通过");
         // Bind the review to the exact draft supplied by the hub, never an artifact supplied by the reviewer.
         result.artifact = previousResult.output;

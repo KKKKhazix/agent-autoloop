@@ -1,16 +1,21 @@
 // Real model acceptance: an incomplete source must be rejected, repaired, reviewed again, and only then closed.
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { openSync, closeSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { openSync, closeSync, mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { HubError } from "../../../protocol/client.ts";
 import { parseResult, type Result } from "../../../protocol/validate.ts";
+import { codeWorkspace, inspectCode } from "./code.ts";
 import { projectConfig, rulesFor } from "./loop.ts";
 
-const [flag, report] = process.argv.slice(2);
-assert.ok(flag === "--run" && report && isAbsolute(report), "用法：node real.ts --run /absolute/path/report.json");
+const [flag, report, mode] = process.argv.slice(2);
+assert.ok(
+  flag === "--run" && report && isAbsolute(report) && (mode === undefined || mode === "code"),
+  "用法：node real.ts --run /absolute/path/report.json",
+);
 // Fail before creating state or spending model usage; never overwrite an earlier acceptance report.
 const reportFile = openSync(report, "wx", 0o600);
 let home: string | undefined;
@@ -40,7 +45,9 @@ const interrupt = () => {
 };
 process.on("SIGINT", interrupt);
 process.on("SIGTERM", interrupt);
-const project = projectConfig({
+let codeAcceptance: unknown;
+let preserveHome = false;
+let project = projectConfig({
   id: "real-loop",
   goal: "整理一份升级说明。第一轮起草只忠实转录旧稿，不补充：升级：安装新版。验证：查看版本号。审查后再根据指出的缺项修正旧稿。修正时可使用的资料：备份：保存当前配置。回退：安装旧版并恢复配置。",
   acceptance: "最终说明必须包含升级、验证、备份、回退四项具体操作；初稿只是旧资料，不视为验收通过。",
@@ -49,6 +56,35 @@ const project = projectConfig({
 });
 try {
   home = mkdtempSync(join(tmpdir(), "goal-loop-real-"));
+  if (mode === "code") {
+    const repository = join(home, "repository");
+    mkdirSync(repository);
+    const runGit = (...args: string[]) =>
+      execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-C", repository, ...args], { stdio: "ignore" });
+    runGit("init", "-b", "main");
+    writeFileSync(join(repository, "divide.mjs"), "export const divide = (a, b) => a + b;\n");
+    writeFileSync(
+      join(repository, "check.mjs"),
+      "import assert from 'node:assert/strict'; import { divide } from './divide.mjs'; assert.equal(divide(6, 2), 3); assert.throws(() => divide(1, 0), RangeError);\n",
+    );
+    runGit("add", ".");
+    runGit(
+      "-c",
+      "user.name=Goal Loop",
+      "-c",
+      "user.email=goal-loop@example.invalid",
+      "commit",
+      "-m",
+      "acceptance fixture",
+    );
+    project = projectConfig({
+      id: "real-loop",
+      maxRounds: 4,
+      goal: "修复 divide 函数：普通除法返回商，除数为 0 时抛出 RangeError。第一轮只将加法改成普通除法，暂不处理 0；独立审查发现问题后再修正。",
+      acceptance: "divide(6, 2) 等于 3，divide(1, 0) 抛出 RangeError，真实测试通过且独立审查通过。",
+      code: { repository, files: ["divide.mjs"], check: [process.execPath, "check.mjs"], checkFiles: ["check.mjs"] },
+    });
+  }
   process.env.AGENT_AUTOLOOP_HOME = home;
   process.env.AGENT_AUTOLOOP_RULES = join(home, "rules.json");
   const file = join(home, "project.json");
@@ -159,11 +195,24 @@ try {
   );
   assert.equal(results[1].result.verdict, "revise");
   assert.equal(results[3].result.verdict, "pass");
-  assert.notEqual(results[0].result.output, results[2].result.output);
+  if (!project.code) assert.notEqual(results[0].result.output, results[2].result.output);
   assert.equal(results[1].result.artifact, results[0].result.output);
   assert.equal(results[3].result.artifact, results[2].result.output);
-  assert.ok(project.requiredText!.some((text) => !results[0].result.output.includes(text)));
-  assert.ok(project.requiredText!.every((text) => results[2].result.output.includes(text)));
+  if (project.code) {
+    assert.equal(results[0].result.code.passed, false);
+    assert.notEqual(results[0].result.code.exitCode, 0);
+    assert.equal(results[2].result.code.passed, true);
+    assert.equal(results[2].result.code.exitCode, 0);
+    assert.notEqual(results[0].result.code.revision, results[2].result.code.revision);
+    const candidate = inspectCode(project, codeWorkspace(project, home, "acceptance"), results[3].result.code.revision);
+    const original = readFileSync(join(project.code.repository, "divide.mjs"), "utf8");
+    assert.equal(original, "export const divide = (a, b) => a + b;\n");
+    assert.notEqual(candidate.files[0].content, original);
+    codeAcceptance = { sourceUnchanged: true, initialProof: results[0].result.code, final: candidate };
+  } else {
+    assert.ok(project.requiredText!.some((text) => !results[0].result.output.includes(text)));
+    assert.ok(project.requiredText!.every((text) => results[2].result.output.includes(text)));
+  }
   assert.match(trace.at(-1)!.summary, /^验收通过，已结项：/);
   assert.equal((await client.work({ claim: "closed", wait: 0, running: [], capacity: true })).job, null);
   assert.equal((await owner.state()).runs.length, 9);
@@ -196,7 +245,18 @@ try {
     failureReason ??= (error as Error).message;
     throw error;
   } finally {
+    let reportSaved = false;
     try {
+      if (project.code && home && !codeAcceptance) {
+        const workspace = join(home, "goal-code", project.id, "acceptance", "workspace");
+        if (existsSync(workspace)) {
+          try {
+            codeAcceptance = { candidate: inspectCode(project, workspace) };
+          } catch {
+            preserveHome = true;
+          }
+        }
+      }
       writeFileSync(
         reportFile,
         JSON.stringify(
@@ -204,24 +264,28 @@ try {
             verified: verified && reaped,
             failureReason,
             failures,
-            ...(!reaped ? { retainedHome: home } : {}),
+            ...(!reaped || preserveHome ? { retainedHome: home } : {}),
             node: process.version,
             platform: process.platform,
             model: "local Codex CLI default",
             ms: Date.now() - started,
             project,
+            codeAcceptance,
             trace,
           },
           null,
           2,
         ),
       );
+      reportSaved = true;
     } finally {
       closeSync(reportFile);
       server?.closeAllConnections();
       if (server?.listening) await new Promise<void>((resolve) => server!.close(() => resolve()));
       runtime?.db.close();
-      if (home && reaped) rmSync(home, { recursive: true, force: true });
+      if (home && reaped && !preserveHome && (!project.code || reportSaved))
+        rmSync(home, { recursive: true, force: true });
+      else if (home) console.error("保留验收现场：" + home);
       process.off("SIGINT", interrupt);
       process.off("SIGTERM", interrupt);
     }
