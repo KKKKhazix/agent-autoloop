@@ -286,3 +286,24 @@ test("fixed check argv preserves empty arguments and boundary spaces", async () 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test(
+  "Windows repository spelling does not change its physical identity",
+  { skip: process.platform !== "win32" },
+  () => {
+    const { home, project } = fixture();
+    try {
+      const config = projectConfig({
+        ...project,
+        code: { ...project.code, repository: project.code!.repository.toUpperCase() },
+      });
+      const workspace = codeWorkspace(config, join(home, "state"), "path-case");
+      assert.equal(
+        readFileSync(join(workspace, "sum.mjs"), "utf8").replaceAll("\r\n", "\n"),
+        "export const sum = (a, b) => a - b;\n",
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);

@@ -3,9 +3,11 @@ import { execFileSync, spawn } from "node:child_process";
 import { commandLine } from "../../../host/command.ts";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, relative, sep } from "node:path";
 import { codeProof, modelReply, type Project, type CodeProof } from "./loop.ts";
 
+// Native resolution expands Windows short aliases; path.relative also respects Windows case-insensitive spelling.
+const realPath = realpathSync.native;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const git = (cwd: string, ...args: string[]) =>
   execFileSync(
@@ -29,8 +31,8 @@ export function codeWorkspace(project: Project, home: string, subject: string) {
     return workspace;
   }
   if (existsSync(workspace)) throw new Error("代码副本初始化未完成，请使用新的运行编号");
-  const repository = realpathSync(project.code.repository);
-  if (realpathSync(git(repository, "rev-parse", "--show-toplevel").trim()) !== repository)
+  const repository = realPath(project.code.repository);
+  if (relative(realPath(git(repository, "rev-parse", "--show-toplevel").trim()), repository) !== "")
     throw new Error("需要 Git 仓库根目录");
   const baseline = git(repository, "rev-parse", "--verify", "refs/heads/main^{commit}").trim();
   mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -53,25 +55,24 @@ export function codeWorkspace(project: Project, home: string, subject: string) {
   for (const path of project.code.files) {
     if (!/^100(644|755) blob /.test(git(workspace, "ls-tree", "HEAD", "--", path)))
       throw new Error("只能修改 main 已有的普通文件");
-    if (realpathSync(join(workspace, path)) !== join(realpathSync(workspace), path))
-      throw new Error("文件不能经过符号链接");
+    if (realPath(join(workspace, path)) !== join(realPath(workspace), path)) throw new Error("文件不能经过符号链接");
   }
-  const editable = project.code.files.map((path) => realpathSync(join(workspace, path)));
+  const editable = project.code.files.map((path) => realPath(join(workspace, path)));
   for (const path of project.code.checkFiles) {
-    const target = realpathSync(join(workspace, path));
-    if (!target.startsWith(realpathSync(workspace) + sep) || !lstatSync(target).isFile() || editable.includes(target))
+    const target = realPath(join(workspace, path));
+    if (!target.startsWith(realPath(workspace) + sep) || !lstatSync(target).isFile() || editable.includes(target))
       throw new Error("验收真实入口不能在白名单内或副本外");
   }
-  const originalRoot = realpathSync(project.code.repository);
+  const originalRoot = realPath(project.code.repository);
   for (const arg of project.code.check) {
     // Both positional paths and --root=/path style options must stay away from the source checkout.
     const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
     const resolved = resolve(workspace, value);
-    const actual = existsSync(resolved) ? realpathSync(resolved) : resolved;
+    const actual = existsSync(resolved) ? realPath(resolved) : resolved;
     if (actual === originalRoot || actual.startsWith(originalRoot + sep))
       throw new Error("验收命令不能指向原仓库，请使用副本相对路径");
     const target = resolve(workspace, arg);
-    if (existsSync(target) && editable.includes(realpathSync(target))) throw new Error("验收命令指向可修改文件");
+    if (existsSync(target) && editable.includes(realPath(target))) throw new Error("验收命令指向可修改文件");
   }
   writeFileSync(metadata, JSON.stringify({ policy: policy(project), baseline }), { mode: 0o600 });
   return workspace;
@@ -85,7 +86,7 @@ function sources(project: Project, workspace: string) {
   if (changed.some((path) => !project.code!.files.includes(path))) throw new Error("验收入口或白名单外文件被修改");
   return project.code.files.map((path) => {
     const full = join(workspace, path);
-    if (!lstatSync(full).isFile() || realpathSync(full) !== join(realpathSync(workspace), path))
+    if (!lstatSync(full).isFile() || realPath(full) !== join(realPath(workspace), path))
       throw new Error("代码路径不再是普通文件");
     const content = readFileSync(full, "utf8");
     if (content.length > 24000 || !content.isWellFormed()) throw new Error("单个代码文件最多 24000 字");
