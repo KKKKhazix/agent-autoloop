@@ -1,7 +1,7 @@
 // Local code execution stays outside the kernel. Only configured files in a private clone may be changed by the model.
 import { execFileSync, spawn } from "node:child_process";
 import { commandLine } from "../../../host/command.ts";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join, resolve, relative, sep } from "node:path";
 import { codeProof, modelReply, type Project, type CodeProof } from "./loop.ts";
@@ -94,13 +94,22 @@ function sources(project: Project, workspace: string) {
   });
 }
 
-type CheckLog = { command: string[]; stdout: string; stderr: string };
+type CheckLog = {
+  command: string[];
+  stdout: string;
+  stderr: string;
+  state?: "running" | "finished";
+  exitCode?: number;
+  logError?: string;
+};
+type CheckProgress = { attempt: string; revision: string; check: CheckLog };
 type CodeSnapshot = {
   files: { path: string; content: string }[];
   diff: string;
   revision: string;
   proof?: CodeProof;
   check?: CheckLog;
+  lastCheck?: CheckProgress;
 };
 export function inspectCode(
   project: Project,
@@ -108,7 +117,7 @@ export function inspectCode(
   expected: string,
 ): CodeSnapshot & { proof: CodeProof; check: CheckLog };
 export function inspectCode(project: Project, workspace: string, expected?: string): CodeSnapshot;
-export function inspectCode(project: Project, workspace: string, expected?: string) {
+export function inspectCode(project: Project, workspace: string, expected?: string): CodeSnapshot {
   const baseline = JSON.parse(readFileSync(join(dirname(workspace), "policy.json"), "utf8"));
   if (baseline.policy !== policy(project) || git(workspace, "rev-parse", "HEAD").trim() !== baseline.baseline)
     throw new Error("执行副本的配置或 main 基准发生变化");
@@ -117,13 +126,23 @@ export function inspectCode(project: Project, workspace: string, expected?: stri
   const record = join(dirname(workspace), "check.json");
   const check = existsSync(record) ? JSON.parse(readFileSync(record, "utf8")) : null;
   const proof = check ? codeProof(check.proof) : undefined;
-  if (expected && (expected !== revision || proof?.revision !== revision))
-    throw new Error("代码已变更，原测试和审查证据失效");
+  const progressFile = join(dirname(workspace), "check-progress.json");
+  const progress: CheckProgress | undefined = existsSync(progressFile)
+    ? JSON.parse(readFileSync(progressFile, "utf8"))
+    : undefined;
+  const matching = proof?.revision === revision && (!progress || progress.attempt === check.attempt);
+  if (expected && (expected !== revision || !matching)) throw new Error("代码已变更，原测试和审查证据失效");
   const diff = git(workspace, "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", ...project.code!.files);
   if (JSON.stringify(files).length > 48000) throw new Error("代码上下文超过本示例上限");
   // A candidate without a check for this exact revision is unchecked, never paired with an older result or log.
-  const matching = proof?.revision === revision;
-  return { files, diff, revision, proof: matching ? proof : undefined, check: matching ? check.check : undefined };
+  return {
+    files,
+    diff,
+    revision,
+    proof: matching ? proof : undefined,
+    check: matching ? check.check : progress?.revision === revision ? progress.check : undefined,
+    lastCheck: progress && progress.revision !== revision ? progress : undefined,
+  };
 }
 
 export async function applyChanges(project: Project, workspace: string, value: unknown) {
@@ -152,7 +171,26 @@ export async function applyChanges(project: Project, workspace: string, value: u
   for (const change of changes) writeFileSync(join(workspace, change.path), change.content);
   const snapshot = inspectCode(project, workspace);
   const [program, args] = commandLine(project.code.check);
-  // Drain both streams to bounded tails; output size must never decide whether tests ran or passed.
+  const progress: CheckProgress = {
+    attempt: randomUUID(),
+    revision: snapshot.revision,
+    check: { command: project.code.check, stdout: "", stderr: "", state: "running" },
+  };
+  const progressFile = join(dirname(workspace), "check-progress.json");
+  const persist = () => {
+    writeFileSync(progressFile + ".tmp", JSON.stringify(progress), { mode: 0o600 });
+    renameSync(progressFile + ".tmp", progressFile);
+  };
+  // Mark this attempt before launch so an older successful check cannot stand in for an interrupted rerun.
+  persist();
+  const remember = () => {
+    try {
+      persist();
+    } catch (error) {
+      progress.check.logError = String((error as { code?: string }).code ?? "IO");
+    }
+  };
+  // Drain and persist bounded tails during execution, including when the worker later terminates the whole tree.
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) =>
       [
@@ -178,23 +216,26 @@ export async function applyChanges(project: Project, workspace: string, value: u
   const { exitCode, stdout, stderr } = await new Promise<{ exitCode: number; stdout: string; stderr: string }>(
     (resolve, reject) => {
       const child = spawn(program, args, { cwd: workspace, env, stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = "";
-      let stderr = "";
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
-        stdout = (stdout + chunk).slice(-8000);
+        progress.check.stdout = (progress.check.stdout + chunk).slice(-8000);
+        remember();
       });
       child.stderr.on("data", (chunk: string) => {
-        stderr = (stderr + chunk).slice(-8000);
+        progress.check.stderr = (progress.check.stderr + chunk).slice(-8000);
+        remember();
       });
       child.once("error", () => reject(new Error("验收命令无法启动")));
       child.once("close", (code) => {
         if (code === null) reject(new Error("验收命令未正常结束，不能生成通过证据"));
-        else resolve({ exitCode: code, stdout, stderr });
+        else resolve({ exitCode: code, stdout: progress.check.stdout, stderr: progress.check.stderr });
       });
     },
   );
+  progress.check.state = "finished";
+  progress.check.exitCode = exitCode;
+  remember();
   // Tests must not rewrite the candidate: both the review and the recorded status bind to this exact source snapshot.
   if (inspectCode(project, workspace).revision !== snapshot.revision) throw new Error("验收命令改写了待审代码");
   const proof: CodeProof = {
@@ -206,7 +247,8 @@ export async function applyChanges(project: Project, workspace: string, value: u
   };
   const record = {
     proof,
-    check: { command: project.code.check, stdout: stdout.slice(-8000), stderr: stderr.slice(-8000) },
+    attempt: progress.attempt,
+    check: { ...progress.check, stdout, stderr },
   };
   const file = join(dirname(workspace), "check.json");
   writeFileSync(file + ".tmp", JSON.stringify(record), { mode: 0o600 });

@@ -151,7 +151,7 @@ export function codeProof(value: unknown): CodeProof {
     typeof proof.passed !== "boolean" ||
     !Number.isInteger(proof.exitCode) ||
     (proof.exitCode as number) < 0 ||
-    (proof.exitCode as number) > 255 ||
+    (proof.exitCode as number) > 0xffff_ffff ||
     (proof.passed && proof.exitCode !== 0)
   )
     throw new Error("代码验收证据无效");

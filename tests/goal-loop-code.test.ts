@@ -76,7 +76,7 @@ test("a coding review and completion require runner evidence for that revision",
     const execution = next(project, "draft", [{ ...task, source: "goal-code-demo-tasks" }]);
     const value = { status: "done", output: "改好了", evidence: "声称通过" };
     assert.throws(() => execution.accept(value));
-    const proof = { revision: "a".repeat(64), passed: false, exitCode: 1 };
+    const proof = { revision: "a".repeat(64), passed: false, exitCode: 256 };
     const result = execution.accept(value, proof).events![0];
     const reviewTask = next(project, "plan", [{ ...result, source: "goal-code-demo-results" }]).accept({
       ...proposal,
@@ -307,3 +307,115 @@ test(
     }
   },
 );
+
+test("in-flight checks persist current logs without reusing an older passing proof", async () => {
+  const { home, repository, project } = fixture();
+  let pid: number | undefined;
+  let ended = true;
+  let settled: Promise<boolean> | undefined;
+  try {
+    writeFileSync(
+      join(repository, "check.mjs"),
+      `import { existsSync, writeFileSync } from 'node:fs';
+import assert from 'node:assert/strict'; import { sum } from './sum.mjs';
+if (existsSync('hold-check')) {
+  writeFileSync('check.pid', String(process.pid));
+  process.stdout.write('CURRENT-CHECK-PROGRESS'); process.stderr.write('CURRENT-CHECK-ERR');
+  setInterval(() => {}, 1000);
+} else assert.equal(sum(2, 3), 5);
+`,
+    );
+    execFileSync("git", ["-C", repository, "add", "."]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        repository,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "foreground progress",
+      ],
+      { stdio: "ignore" },
+    );
+    const workspace = codeWorkspace(project, join(home, "state"), "progress");
+    const changes = [{ path: "sum.mjs", content: "export const sum = (a, b) => a + b;\n" }];
+    assert.equal((await applyChanges(project, workspace, changes)).proof.passed, true);
+    writeFileSync(join(workspace, "hold-check"), "1");
+    ended = false;
+    settled = applyChanges(project, workspace, changes)
+      .then(
+        (result) => result.proof.passed,
+        () => false,
+      )
+      .finally(() => {
+        ended = true;
+      });
+    const deadline = Date.now() + 8000;
+    let observed = false;
+    while (Date.now() < deadline) {
+      if (existsSync(join(workspace, "check.pid"))) {
+        pid = Number(readFileSync(join(workspace, "check.pid"), "utf8"));
+        const running = inspectCode(project, workspace);
+        if (
+          running.check?.stdout.includes("CURRENT-CHECK-PROGRESS") &&
+          running.check.stderr.includes("CURRENT-CHECK-ERR")
+        ) {
+          assert.equal(running.proof, undefined);
+          observed = true;
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(observed, "当前测试进度必须在进程结束前持久化");
+    process.kill(pid!, "SIGTERM");
+    assert.equal(await settled, false);
+    const stopped = inspectCode(project, workspace);
+    assert.notEqual(stopped.proof?.passed, true);
+    assert.ok(stopped.check?.stdout.includes("CURRENT-CHECK-PROGRESS"));
+  } finally {
+    if (!ended && pid) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {}
+    }
+    if (settled) await settled;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Windows native failure codes remain readable evidence", { skip: process.platform !== "win32" }, async () => {
+  const { home, repository, project } = fixture();
+  try {
+    writeFileSync(join(repository, "check.mjs"), "process.stderr.write('native failure'); process.exit(256);\n");
+    execFileSync("git", ["-C", repository, "add", "."]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        repository,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "native exit",
+      ],
+      { stdio: "ignore" },
+    );
+    const workspace = codeWorkspace(project, join(home, "state"), "native-code");
+    const result = await applyChanges(project, workspace, [
+      { path: "sum.mjs", content: "export const sum = (a, b) => a + b;\n" },
+    ]);
+    assert.equal(result.proof.exitCode, 256);
+    assert.equal(result.proof.passed, false);
+    assert.equal(inspectCode(project, workspace, result.revision).proof.exitCode, 256);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
