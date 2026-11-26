@@ -74,6 +74,7 @@ try {
       "-c",
       "user.email=goal-loop@example.invalid",
       "commit",
+      "--no-gpg-sign",
       "-m",
       "acceptance fixture",
     );

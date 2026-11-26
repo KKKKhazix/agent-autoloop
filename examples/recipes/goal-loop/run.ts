@@ -122,6 +122,8 @@ try {
           if (role === "draft") {
             const { changes, ...raw } = response;
             const value = modelReply(raw, "draft");
+            if (value.status === "blocked" && Object.hasOwn(response, "changes"))
+              throw new Error("阻塞回执不能携带文件修改");
             if (Object.keys(value).some((key) => !["status", "output", "evidence"].includes(key)))
               throw new Error("代码回执包含未授权字段");
             const proof = value.status === "done" ? (await applyChanges(project, workspace, changes)).proof : undefined;

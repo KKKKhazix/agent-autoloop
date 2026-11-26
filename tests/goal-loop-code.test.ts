@@ -582,3 +582,25 @@ test(
     }
   },
 );
+
+test("candidate-local executable acceptance entry must be declared", () => {
+  const { home, project } = fixture();
+  try {
+    // Keep another noneditable tracked file declared, so only the omitted executable causes rejection.
+    const repository = project.code!.repository;
+    writeFileSync(join(repository, "helper.mjs"), "export {};\n");
+    execFileSync("git", ["-C", repository, "add", "."]);
+    execFileSync(
+      "git",
+      ["-C", repository, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "helper"],
+      { stdio: "ignore" },
+    );
+    const config = projectConfig({
+      ...project,
+      code: { ...project.code, check: ["./check.mjs"], checkFiles: ["helper.mjs"] },
+    });
+    assert.throws(() => codeWorkspace(config, join(home, "state"), "executable-entry"), /checkFiles/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

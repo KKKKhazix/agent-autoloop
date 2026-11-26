@@ -49,6 +49,15 @@ function validateCodeWorkspace(project: Project, workspace: string) {
     const actual = existsSync(resolved) ? realPath(resolved) : resolved;
     if (actual === originalRoot || actual.startsWith(originalRoot + sep))
       throw new Error("验收命令不能指向原仓库，请使用副本相对路径");
+    if (
+      index === 0 &&
+      existsSync(actual) &&
+      relative(realPath(workspace), actual).split(sep)[0] !== ".." &&
+      !isAbsolute(relative(realPath(workspace), actual)) &&
+      lstatSync(actual).isFile() &&
+      !checkTargets.includes(actual)
+    )
+      throw new Error("副本内验收可执行文件必须列在 checkFiles 中");
     // Options also carry regexes and other literals. Only existing filesystem values are path references.
     if (index > 0 && (!optionValue || existsSync(resolved))) {
       const location = relative(realPath(workspace), actual);
