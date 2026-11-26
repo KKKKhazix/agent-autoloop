@@ -1,11 +1,12 @@
-// An invalid report destination must fail before opening a hub or starting a model, without leaving temporary state.
+// Invalid report paths must fail before startup; confirmed timeouts must fail without leaving temporary state.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 
 test("an unwritable report destination leaves no hub or model workspace", async () => {
   const home = mkdtempSync(join(tmpdir(), "goal-loop-report-"));
@@ -31,6 +32,7 @@ test("a confirmed worker timeout cleans its temporary state", async () => {
   const report = join(home, "report.json");
   const preload = join(home, "clock.mjs");
   const workerUrl = new URL("../worker/worker.ts", import.meta.url).href;
+  let diagnostics = "";
   // Replace only the external command and advance the supported worker clock; process stopping and ACK handling stay real.
   const wrapper = `import { createWorker as actual } from ${JSON.stringify(workerUrl)};
 export function createWorker(options) {
@@ -61,15 +63,19 @@ registerHooks({ resolve(specifier, context, next) {
     await assert.rejects(
       promisify(execFile)(
         process.execPath,
-        ["--import", preload, "examples/recipes/goal-loop/real.ts", "--run", report],
+        ["--import", pathToFileURL(preload).href, "examples/recipes/goal-loop/real.ts", "--run", report],
         {
           cwd: join(import.meta.dirname, ".."),
           env: { ...process.env, TMPDIR: home, TMP: home, TEMP: home },
           timeout: 20000,
         },
       ),
-      (error: any) => error.code === 1,
+      (error: any) => {
+        diagnostics = String(error.stderr);
+        return error.code === 1;
+      },
     );
+    assert.ok(existsSync(report), diagnostics);
     const result = JSON.parse(readFileSync(report, "utf8"));
     assert.equal(result.verified, false);
     assert.ok(
