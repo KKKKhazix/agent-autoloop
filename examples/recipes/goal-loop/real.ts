@@ -149,11 +149,8 @@ try {
             events: receipt.events,
           });
         }
-        // A timeout can fail to confirm shutdown before cleanup starts, too. Preserve evidence for every such stop.
-        if (
-          receipt.outcome === "failed" &&
-          worker?.entries().some((entry) => entry.run === run && entry.stopping !== undefined)
-        )
+        // A confirmed timeout is a failure with a stopped tree; retain state only for the worker's explicit uncertainty.
+        if (receipt.outcome === "failed" && receipt.error?.includes("停止信号发出后没能确认进程组已结束"))
           uncertainCleanup = true;
         // Observe only accepted receipts. Tokens and keys never enter the report.
         if (!ack.rejected.length && receipt.outcome === "done" && !trace.some((step) => step.run === run)) {
