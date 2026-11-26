@@ -511,3 +511,25 @@ test("acceptance entries must be declared files inside the candidate checkout", 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("non-path option values remain literal while file options stay confined", async () => {
+  const { home, project } = fixture();
+  try {
+    const config = projectConfig({
+      ...project,
+      code: { ...project.code, check: [process.execPath, "--test-name-pattern=/divide/i", "check.mjs"] },
+    });
+    const workspace = codeWorkspace(config, join(home, "state"), "option-value");
+    const result = await applyChanges(config, workspace, [
+      { path: "sum.mjs", content: "export const sum = (a, b) => a + b;\n" },
+    ]);
+    assert.equal(result.proof.passed, true);
+    const external = projectConfig({
+      ...project,
+      code: { ...project.code, check: [process.execPath, `--import=${join(project.code!.repository, "check.mjs")}`] },
+    });
+    assert.throws(() => codeWorkspace(external, join(home, "state"), "external-option"), /原仓库/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

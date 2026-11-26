@@ -39,12 +39,14 @@ function validateCodeWorkspace(project: Project, workspace: string) {
   const originalRoot = realPath(project.code.repository);
   for (const [index, arg] of project.code.check.entries()) {
     // Both positional paths and --root=/path style options must stay away from the source checkout.
-    const value = index > 0 && arg.startsWith("-") && arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
+    const optionValue = index > 0 && arg.startsWith("-") && arg.includes("=");
+    const value = optionValue ? arg.slice(arg.indexOf("=") + 1) : arg;
     const resolved = resolve(realPath(workspace), value);
     const actual = existsSync(resolved) ? realPath(resolved) : resolved;
     if (actual === originalRoot || actual.startsWith(originalRoot + sep))
       throw new Error("验收命令不能指向原仓库，请使用副本相对路径");
-    if (index > 0) {
+    // Options also carry regexes and other literals. Only existing filesystem values are path references.
+    if (index > 0 && (!optionValue || existsSync(resolved))) {
       const location = relative(realPath(workspace), actual);
       if (
         isAbsolute(value) ||
