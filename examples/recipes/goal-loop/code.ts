@@ -210,7 +210,7 @@ export async function applyChanges(project: Project, workspace: string, value: u
         "APPDATA",
         "LOCALAPPDATA",
         "LANG",
-      ].includes(key),
+      ].includes(process.platform === "win32" ? key.toUpperCase() : key),
     ),
   );
   const { exitCode, stdout, stderr } = await new Promise<{ exitCode: number; stdout: string; stderr: string }>(

@@ -45,7 +45,7 @@ function model(role: "plan" | "draft" | "review", input: string, folder: string,
           "LOCALAPPDATA",
           "LANG",
           "CODEX_HOME",
-        ].includes(key),
+        ].includes(process.platform === "win32" ? key.toUpperCase() : key),
       ),
     );
     execFileSync(

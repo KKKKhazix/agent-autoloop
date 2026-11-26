@@ -419,3 +419,53 @@ test("Windows native failure codes remain readable evidence", { skip: process.pl
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("Windows checks preserve the standard mixed-case Path environment", { skip: process.platform !== "win32" }, () => {
+  const { home, repository, project } = fixture();
+  try {
+    const originalPath = process.env.PATH!;
+    writeFileSync(
+      join(repository, "check.mjs"),
+      "import assert from 'node:assert/strict'; assert.ok(process.env.PATH === " +
+        JSON.stringify(originalPath) +
+        ", 'PATH must be preserved');\n",
+    );
+    execFileSync("git", ["-C", repository, "add", "."]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        repository,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "mixed-case environment",
+      ],
+      { stdio: "ignore" },
+    );
+    const entry = new URL("../examples/recipes/goal-loop/code.ts", import.meta.url).href;
+    const driver = join(home, "driver.mjs");
+    writeFileSync(
+      driver,
+      `import assert from 'node:assert/strict';
+import { codeWorkspace, applyChanges } from ${JSON.stringify(entry)};
+assert.ok(Object.keys(process.env).includes('Path'));
+const project = ${JSON.stringify(project)};
+const workspace = codeWorkspace(project, ${JSON.stringify(join(home, "state"))}, 'mixed-case-path');
+const result = await applyChanges(project, workspace, [{path:'sum.mjs', content:'export const sum = (a, b) => a + b;\\n'}]);
+assert.equal(result.proof.passed, true);
+`,
+    );
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "path"));
+    execFileSync(process.execPath, [driver], {
+      env: { ...env, Path: originalPath },
+      timeout: 20000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
