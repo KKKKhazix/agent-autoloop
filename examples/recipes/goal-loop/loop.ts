@@ -147,8 +147,8 @@ export function next(project: Project, role: Role, events: Event[]): Turn {
           { round, capability: plan.capability, task: plan.task, acceptance: plan.acceptance },
           project,
         );
-        // Carry the first draft's criteria through review and repair; a later plan cannot silently weaken acceptance.
-        if (previous) task.acceptance = previous.acceptance;
+        // A review must check the draft's own criteria. Repairs may define a new task, always under the fixed project policy.
+        if (task.capability === "review") task.acceptance = previous!.acceptance;
         return {
           summary: "已安排第 " + round + " 轮",
           events: [publish("goal." + task.capability, round, { task, previousResult: result })],
