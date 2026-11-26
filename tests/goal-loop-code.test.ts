@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from "node:os";
 import { join, dirname, delimiter, relative } from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { projectConfig, next } from "../examples/recipes/goal-loop/loop.ts";
 import { codeWorkspace, applyChanges, inspectCode } from "../examples/recipes/goal-loop/code.ts";
 
@@ -537,3 +538,47 @@ test("non-path option values remain literal while file options stay confined", a
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("file URL options cannot load acceptance from another checkout", () => {
+  const { home, project } = fixture();
+  try {
+    const config = projectConfig({
+      ...project,
+      code: {
+        ...project.code,
+        check: [
+          process.execPath,
+          `--import=${pathToFileURL(join(project.code!.repository, "check.mjs")).href}`,
+          "check.mjs",
+        ],
+      },
+    });
+    assert.throws(() => codeWorkspace(config, join(home, "state"), "url-option"), /相对路径/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test(
+  "acceptance symlink cannot declare generated Git metadata as baseline",
+  { skip: process.platform === "win32" },
+  () => {
+    const { home, project, repository } = fixture();
+    try {
+      symlinkSync(".git/config", join(repository, "check-config"));
+      execFileSync("git", ["-C", repository, "add", "check-config"]);
+      execFileSync(
+        "git",
+        ["-C", repository, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "alias"],
+        { stdio: "ignore" },
+      );
+      const config = projectConfig({
+        ...project,
+        code: { ...project.code, checkFiles: ["check.mjs", "check-config"] },
+      });
+      assert.throws(() => codeWorkspace(config, join(home, "state"), "git-metadata"), /main/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);

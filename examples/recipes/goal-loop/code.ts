@@ -34,6 +34,9 @@ function validateCodeWorkspace(project: Project, workspace: string) {
     const target = realPath(join(workspace, path));
     if (!target.startsWith(realPath(workspace) + sep) || !lstatSync(target).isFile() || editable.includes(target))
       throw new Error("验收真实入口不能在白名单内或副本外");
+    const tracked = relative(realPath(workspace), target).split(sep).join("/");
+    if (!/^100(644|755) blob /.test(git(workspace, "ls-tree", "HEAD", "--", tracked)))
+      throw new Error("验收文件真实目标必须是 main 已有的普通文件");
     return target;
   });
   const originalRoot = realPath(project.code.repository);
@@ -41,6 +44,7 @@ function validateCodeWorkspace(project: Project, workspace: string) {
     // Both positional paths and --root=/path style options must stay away from the source checkout.
     const optionValue = index > 0 && arg.startsWith("-") && arg.includes("=");
     const value = optionValue ? arg.slice(arg.indexOf("=") + 1) : arg;
+    if (index > 0 && /^file:/i.test(value)) throw new Error("验收路径参数须使用副本内相对路径");
     const resolved = resolve(realPath(workspace), value);
     const actual = existsSync(resolved) ? realPath(resolved) : resolved;
     if (actual === originalRoot || actual.startsWith(originalRoot + sep))
@@ -48,13 +52,7 @@ function validateCodeWorkspace(project: Project, workspace: string) {
     // Options also carry regexes and other literals. Only existing filesystem values are path references.
     if (index > 0 && (!optionValue || existsSync(resolved))) {
       const location = relative(realPath(workspace), actual);
-      if (
-        isAbsolute(value) ||
-        /^file:/i.test(value) ||
-        location === ".." ||
-        location.startsWith(".." + sep) ||
-        isAbsolute(location)
-      )
+      if (isAbsolute(value) || location === ".." || location.startsWith(".." + sep) || isAbsolute(location))
         throw new Error("验收路径参数须使用副本内相对路径");
       if (existsSync(actual) && lstatSync(actual).isFile() && !checkTargets.includes(actual))
         throw new Error("验收引用的文件必须列在 checkFiles 中");
