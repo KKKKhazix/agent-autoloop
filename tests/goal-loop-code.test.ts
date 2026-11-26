@@ -41,6 +41,10 @@ test("real code changes and test exit codes are isolated from the source reposit
   const { home, repository, project } = fixture();
   try {
     const workspace = codeWorkspace(project, join(home, "state"), "run-1");
+    assert.equal(
+      inspectCode(project, workspace).acceptanceFiles[0].content,
+      readFileSync(join(repository, "check.mjs"), "utf8"),
+    );
     const failing = await applyChanges(project, workspace, [
       { path: "sum.mjs", content: "export const sum = (a, b) => a - b;\n" },
     ]);

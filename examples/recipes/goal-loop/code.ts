@@ -127,6 +127,7 @@ type CheckLog = {
 };
 type CheckProgress = { attempt: string; revision: string; check: CheckLog };
 type CodeSnapshot = {
+  acceptanceFiles: { path: string; content: string }[];
   files: { path: string; content: string }[];
   diff: string;
   revision: string;
@@ -146,6 +147,12 @@ export function inspectCode(project: Project, workspace: string, expected?: stri
     throw new Error("执行副本的配置或 main 基准发生变化");
   validateCodeWorkspace(project, workspace);
   const files = sources(project, workspace);
+  const acceptanceFiles = project.code!.checkFiles.map((path) => {
+    const content = readFileSync(join(workspace, path), "utf8");
+    if (content.length > 24000 || !content.isWellFormed()) throw new Error("单个验收文件最多 24000 字");
+    return { path, content };
+  });
+  if (JSON.stringify(acceptanceFiles).length > 48000) throw new Error("验收文件上下文超过本示例上限");
   const revision = hash(JSON.stringify(files));
   const record = join(dirname(workspace), "check.json");
   const check = existsSync(record) ? JSON.parse(readFileSync(record, "utf8")) : null;
@@ -161,6 +168,7 @@ export function inspectCode(project: Project, workspace: string, expected?: stri
   // A candidate without a check for this exact revision is unchecked, never paired with an older result or log.
   return {
     files,
+    acceptanceFiles,
     diff,
     revision,
     proof: matching ? proof : undefined,
