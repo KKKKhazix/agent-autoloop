@@ -45,7 +45,7 @@ test("completion requires review of the actual artifact and deterministic accept
     "plan",
   );
   assert.match(exhausted.accept(plan).summary, /已达到项目轮数上限/);
-  assert.throws(() => exhausted.accept({ decision: "complete", reason: "轮数用完" }));
+  assert.match(exhausted.accept({ decision: "complete", reason: "轮数用完" }).summary, /已达到项目轮数上限/);
   const closing = send(
     recheck.accept({ status: "done", output: "通过", evidence: "升级说明与回退", verdict: "pass" }),
     "plan",
@@ -178,4 +178,37 @@ test("the hub journals each handoff once and rejects a result token from another
   });
   assert.equal((await worker.work({ claim: "no-more", wait: 0, running: [], capacity: true })).job, null);
   assert.equal((await owner.state()).runs.filter((run: { rule: string }) => run.rule === "demo 起草").length, 1);
+});
+
+test("exhaustion is terminal before a planner model response is needed", () => {
+  const policy = { ...project, maxRounds: 1 };
+  const task = next(policy, "plan", [event("run.manual", "goal-demo-results")]).accept(plan).events![0];
+  const result = next(policy, "draft", [{ ...task, source: "goal-demo-tasks" }]).accept({
+    status: "done",
+    output: "草稿",
+    evidence: "写好了",
+  }).events![0];
+  const terminal = next(policy, "plan", [{ ...result, source: "goal-demo-results" }]);
+  assert.match(terminal.automatic!.summary, /已达到项目轮数上限/);
+  assert.equal(terminal.accept({ decision: "complete", reason: "错误的模型建议" }), terminal.automatic);
+});
+
+test("escaped text stays within the shared protocol handoff budget", () => {
+  const planner = next(project, "plan", [event("run.manual", "goal-demo-results")]);
+  const proposal = { ...plan, task: '"'.repeat(350), acceptance: "\\".repeat(200) };
+  const task = planner.accept(proposal).events![0];
+  const draft = next(project, "draft", [{ ...task, source: "goal-demo-tasks" }]);
+  assert.throws(() => draft.accept({ status: "done", output: '"'.repeat(1000), evidence: "写好了" }));
+  const result = draft.accept({ status: "done", output: '"'.repeat(500), evidence: "\\".repeat(175) }).events![0];
+  const followup = next(project, "plan", [{ ...result, source: "goal-demo-results" }]).accept({
+    ...proposal,
+    capability: "review",
+  }).events![0];
+  const reviewed = next(project, "review", [{ ...followup, source: "goal-demo-tasks" }]).accept({
+    status: "done",
+    output: '"'.repeat(500),
+    evidence: '"'.repeat(175),
+    verdict: "revise",
+  }).events![0];
+  assert.ok([...reviewed.detail].length <= 4000);
 });

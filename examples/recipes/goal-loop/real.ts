@@ -22,6 +22,8 @@ const started = Date.now();
 let verified = false;
 let closing = false;
 let interrupted = false;
+let receiptFailure: Error | undefined;
+let uncertainCleanup = false;
 const interrupt = () => {
   interrupted = true;
 };
@@ -70,9 +72,11 @@ try {
       async result(run, token, raw) {
         const receipt = parseResult(raw);
         const ack = await client.result(run, token, receipt);
-        assert.deepEqual(ack.rejected, []);
+        // The hub has accepted the receipt even when individual actions were rejected. Do not make the worker replay it.
+        if (ack.rejected.length) receiptFailure = new Error("中台拒绝了回执中的动作：" + JSON.stringify(ack.rejected));
+        if (closing && receipt.outcome === "failed") uncertainCleanup = true;
         // Observe only accepted receipts. Tokens and keys never enter the report.
-        if (receipt.outcome === "done" && !trace.some((step) => step.run === run)) {
+        if (!ack.rejected.length && receipt.outcome === "done" && !trace.some((step) => step.run === run)) {
           const event = receipt.events?.[0];
           trace.push({
             run,
@@ -92,6 +96,7 @@ try {
     assert.ok(!interrupted, "真实模型验收已中断");
     assert.ok(Date.now() - started < 30 * 60_000, "真实模型验收超时");
     await worker.tick();
+    if (receiptFailure) throw receiptFailure;
     const state: { runs: { error?: string; state: string }[] } = await owner.state();
     const failed = state.runs.find((run: any) => run.error || ["failed", "cancelled"].includes(run.state));
     assert.ok(!failed, failed?.error ?? "真实执行失败");
@@ -125,12 +130,18 @@ try {
   try {
     // Cancellation uses the worker's existing Unix process-group / Windows Job Object implementation.
     if (worker && owner) {
-      for (const entry of worker.entries()) await owner.cancel(entry.run);
+      const state: { runs: { id: number; state: string }[] } = await owner.state();
+      for (const entry of worker.entries()) {
+        // A result may already be committed while its local ACK is still pending; terminal runs cannot be cancelled.
+        const run = state.runs.find((run) => run.id === entry.run);
+        if (run && ["queued", "claimed"].includes(run.state)) await owner.cancel(entry.run);
+      }
       const deadline = Date.now() + 30_000;
       while (worker.entries().length && Date.now() < deadline) {
         await worker.tick();
         await delay(100);
       }
+      assert.ok(!uncertainCleanup, "没能确认进程树结束，保留临时目录以便排查");
       assert.equal(worker.entries().length, 0, "进程尚未退出，保留临时目录以便排查");
     }
     reaped = true;

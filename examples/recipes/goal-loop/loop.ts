@@ -7,6 +7,7 @@ export type Role = "plan" | "draft" | "review";
 type Event = { type: string; source: string; subject: string; detail: string };
 type Outbound = Omit<Event, "source"> & { id: string };
 type Reply = { summary: string; events?: Outbound[] };
+type Turn = { input: string; automatic?: Reply; accept(value: unknown): Reply };
 type Task = { round: number; capability: "draft" | "review"; task: string; acceptance: string };
 type WorkResult = {
   status: "done" | "blocked";
@@ -27,6 +28,13 @@ function words(value: unknown, limit: number) {
   if (typeof value !== "string" || !value.trim() || value.length > limit || !value.isWellFormed())
     throw new Error("文字缺失或超过长度");
   return value.trim();
+}
+
+// Budget the JSON representation before accepting model text: the draft is copied into its review receipt.
+function packetWords(value: unknown, limit: number) {
+  const text = words(value, limit);
+  if ([...JSON.stringify(text)].length - 2 > limit) throw new Error("文字的 JSON 编码超过交接预算");
+  return text;
 }
 
 export function projectConfig(value: unknown): Project {
@@ -64,7 +72,7 @@ function taskOf(value: unknown, project: Project): Task {
     (capability !== "draft" && capability !== "review")
   )
     throw new Error("任务轮次或能力超出项目规则");
-  return { round, capability, task: words(input.task, 700), acceptance: words(input.acceptance, 400) };
+  return { round, capability, task: packetWords(input.task, 700), acceptance: packetWords(input.acceptance, 400) };
 }
 
 function resultOf(value: unknown): WorkResult {
@@ -74,21 +82,21 @@ function resultOf(value: unknown): WorkResult {
   if (input.status !== "done" && input.status !== "blocked") throw new Error("回执状态无效");
   return {
     status: input.status,
-    output: words(input.output, 1000),
-    evidence: words(input.evidence, 350),
+    output: packetWords(input.output, 1000),
+    evidence: packetWords(input.evidence, 350),
     ...(input.verdict ? { verdict: input.verdict as "pass" | "revise" } : {}),
-    ...(input.artifact !== undefined ? { artifact: words(input.artifact, 1000) } : {}),
+    ...(input.artifact !== undefined ? { artifact: packetWords(input.artifact, 1000) } : {}),
   };
 }
 
-export function next(project: Project, role: Role, events: Event[]) {
+export function next(project: Project, role: Role, events: Event[]): Turn {
   const [event] = events;
   if (events.length !== 1 || !event || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(event.subject))
     throw new Error("需要唯一的目标运行编号");
   const source = "goal-" + project.id;
   const publish = (type: string, round: number, body: unknown): Outbound => {
     const detail = JSON.stringify(body);
-    if (detail.length > 4000) throw new Error("交接资料过长");
+    if ([...detail].length > 4000) throw new Error("交接资料过长");
     return { id: event.subject + "-" + round + "-" + type, type, subject: event.subject, detail };
   };
   const base = { goal: project.goal, acceptance: project.acceptance, requiredText: project.requiredText ?? [] };
@@ -100,9 +108,16 @@ export function next(project: Project, role: Role, events: Event[]) {
     const previous = feedback ? taskOf(feedback.task, project) : null;
     const result = feedback ? resultOf(feedback.result) : null;
     const round = (previous?.round ?? 0) + 1;
+    // Exhaustion is a policy outcome, not a model decision or a retryable execution failure.
+    const automatic =
+      round > project.maxRounds && result?.verdict !== "pass"
+        ? { summary: "已达到项目轮数上限，待人工检查" }
+        : undefined;
     return {
       input: JSON.stringify({ ...base, round, maxRounds: project.maxRounds, previous, result }),
+      automatic,
       accept(value: unknown): Reply {
+        if (automatic) return automatic;
         const plan = object(value, ["decision", "reason", "capability", "task", "acceptance"]);
         if (plan.decision === "complete" || plan.decision === "stop") {
           // A round ending successfully is not acceptance. Only the review of this artifact may close the goal.
@@ -128,7 +143,6 @@ export function next(project: Project, role: Role, events: Event[]) {
         const expected = previous?.capability === "draft" ? "review" : "draft";
         if (plan.capability !== expected) throw new Error("必须起草后审查，未通过后修正再审查");
         if (result?.verdict === "pass") throw new Error("验收通过后应结项或停止");
-        if (round > project.maxRounds) return { summary: "已达到项目轮数上限，待人工检查" };
         const task = taskOf(
           { round, capability: plan.capability, task: plan.task, acceptance: plan.acceptance },
           project,
