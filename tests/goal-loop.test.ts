@@ -212,3 +212,26 @@ test("escaped text stays within the shared protocol handoff budget", () => {
   }).events![0];
   assert.ok([...reviewed.detail].length <= 4000);
 });
+
+test("review and repair retain the original draft acceptance criteria", () => {
+  const policy = { ...project, maxRounds: 4 };
+  const first = next(policy, "plan", [event("run.manual", "goal-demo-results")]).accept({
+    ...plan,
+    acceptance: "说明何时触发回退及回退步骤",
+  }).events![0];
+  const result = next(policy, "draft", [{ ...first, source: "goal-demo-tasks" }]).accept({
+    status: "done",
+    output: "回退步骤",
+    evidence: "写好了",
+  }).events![0];
+  const inspection = next(policy, "plan", [{ ...result, source: "goal-demo-results" }]).accept(review).events![0];
+  assert.equal(JSON.parse(inspection.detail).task.acceptance, "说明何时触发回退及回退步骤");
+  const rejected = next(policy, "review", [{ ...inspection, source: "goal-demo-tasks" }]).accept({
+    status: "done",
+    output: "缺少触发条件",
+    evidence: "回退步骤",
+    verdict: "revise",
+  }).events![0];
+  const repair = next(policy, "plan", [{ ...rejected, source: "goal-demo-results" }]).accept(plan).events![0];
+  assert.equal(JSON.parse(repair.detail).task.acceptance, "说明何时触发回退及回退步骤");
+});

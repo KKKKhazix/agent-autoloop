@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseResult } from "../../../protocol/validate.ts";
+import { HubError } from "../../../protocol/client.ts";
+import { parseResult, type Result } from "../../../protocol/validate.ts";
 import { projectConfig, rulesFor } from "./loop.ts";
 
 const [flag, report] = process.argv.slice(2);
@@ -25,7 +26,15 @@ let interrupted = false;
 let receiptFailure: Error | undefined;
 let uncertainCleanup = false;
 let failureReason: string | undefined;
-const failures: { run: number; role?: string; outcome: string; error?: string; rejected: unknown[] }[] = [];
+const failures: {
+  run: number;
+  role?: string;
+  outcome: string;
+  error?: string;
+  rejected: unknown[];
+  summary?: string;
+  events?: Result["events"];
+}[] = [];
 const interrupt = () => {
   interrupted = true;
 };
@@ -73,7 +82,24 @@ try {
       started: client.started,
       async result(run, token, raw) {
         const receipt = parseResult(raw);
-        const ack = await client.result(run, token, receipt);
+        let ack;
+        try {
+          ack = await client.result(run, token, receipt);
+        } catch (error) {
+          if (error instanceof HubError && error.status >= 400 && error.status < 500) {
+            receiptFailure = new Error(`回执提交被拒绝（HTTP ${error.status}）：${error.message}`);
+            failures.push({
+              run,
+              role: roles.get(run),
+              outcome: receipt.outcome,
+              error: receiptFailure.message,
+              rejected: [],
+              summary: receipt.summary,
+              events: receipt.events,
+            });
+          }
+          throw error;
+        }
         // The hub has accepted the receipt even when individual actions were rejected. Do not make the worker replay it.
         if (ack.rejected.length) receiptFailure = new Error("中台拒绝了回执中的动作：" + JSON.stringify(ack.rejected));
         if (receipt.outcome === "failed" || ack.rejected.length) {
@@ -83,6 +109,8 @@ try {
             outcome: receipt.outcome,
             error: receipt.error,
             rejected: ack.rejected,
+            summary: receipt.summary,
+            events: receipt.events,
           });
         }
         // A timeout can fail to confirm shutdown before cleanup starts, too. Preserve evidence for every such stop.
