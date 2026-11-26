@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, delimiter } from "node:path";
+import { join, dirname, delimiter, relative } from "node:path";
 import { test } from "node:test";
 import { projectConfig, next } from "../examples/recipes/goal-loop/loop.ts";
 import { codeWorkspace, applyChanges, inspectCode } from "../examples/recipes/goal-loop/code.ts";
@@ -465,6 +465,48 @@ assert.equal(result.proof.passed, true);
       timeout: 20000,
       stdio: ["ignore", "pipe", "pipe"],
     });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("acceptance entries must be declared files inside the candidate checkout", () => {
+  const { home, project } = fixture();
+  try {
+    const other = join(home, "other-checkout");
+    mkdirSync(other);
+    const external = join(other, "check.mjs");
+    writeFileSync(external, "process.exit(0);\n");
+    const absolute = projectConfig({ ...project, code: { ...project.code, check: [process.execPath, external] } });
+    assert.throws(() => codeWorkspace(absolute, join(home, "state"), "other-absolute"), /副本/);
+    const expectedWorkspace = join(home, "state", "goal-code", project.id, "other-relative", "workspace");
+    const escaping = projectConfig({
+      ...project,
+      code: { ...project.code, check: [process.execPath, relative(expectedWorkspace, external)] },
+    });
+    assert.throws(() => codeWorkspace(escaping, join(home, "state"), "other-relative"), /副本/);
+    writeFileSync(join(project.code!.repository, "alternate.mjs"), "process.exit(0);\n");
+    execFileSync("git", ["-C", project.code!.repository, "add", "."]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        project.code!.repository,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "alternate entry",
+      ],
+      { stdio: "ignore" },
+    );
+    const undeclared = projectConfig({
+      ...project,
+      code: { ...project.code, check: [process.execPath, "alternate.mjs"] },
+    });
+    assert.throws(() => codeWorkspace(undeclared, join(home, "state"), "undeclared"), /验收/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

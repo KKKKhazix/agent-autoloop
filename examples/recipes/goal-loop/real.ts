@@ -213,6 +213,7 @@ try {
   assert.match(trace.at(-1)!.summary, /^验收通过，已结项：/);
   assert.equal((await client.work({ claim: "closed", wait: 0, running: [], capacity: true })).job, null);
   assert.equal((await owner.state()).runs.length, 9);
+  assert.ok(!interrupted, "真实模型验收已中断");
   verified = true;
 } catch (error) {
   failureReason = (error as Error).message;

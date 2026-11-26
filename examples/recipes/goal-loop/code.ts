@@ -3,7 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { commandLine } from "../../../host/command.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, join, resolve, relative, sep } from "node:path";
+import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { codeProof, modelReply, type Project, type CodeProof } from "./loop.ts";
 
 // Native resolution expands Windows short aliases; path.relative also respects Windows case-insensitive spelling.
@@ -20,6 +20,48 @@ const git = (cwd: string, ...args: string[]) =>
   );
 const policy = (project: Project) => hash(JSON.stringify(project));
 
+// Revalidate on reuse too: a cached workspace must not bypass the current acceptance-file boundary.
+function validateCodeWorkspace(project: Project, workspace: string) {
+  if (!project.code) throw new Error("未配置代码任务");
+  // Source files must already be regular files on main, with no symlink ancestors. Acceptance files remain at baseline.
+  for (const path of project.code.files) {
+    if (!/^100(644|755) blob /.test(git(workspace, "ls-tree", "HEAD", "--", path)))
+      throw new Error("只能修改 main 已有的普通文件");
+    if (realPath(join(workspace, path)) !== join(realPath(workspace), path)) throw new Error("文件不能经过符号链接");
+  }
+  const editable = project.code.files.map((path) => realPath(join(workspace, path)));
+  const checkTargets = project.code.checkFiles.map((path) => {
+    const target = realPath(join(workspace, path));
+    if (!target.startsWith(realPath(workspace) + sep) || !lstatSync(target).isFile() || editable.includes(target))
+      throw new Error("验收真实入口不能在白名单内或副本外");
+    return target;
+  });
+  const originalRoot = realPath(project.code.repository);
+  for (const [index, arg] of project.code.check.entries()) {
+    // Both positional paths and --root=/path style options must stay away from the source checkout.
+    const value = index > 0 && arg.startsWith("-") && arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
+    const resolved = resolve(realPath(workspace), value);
+    const actual = existsSync(resolved) ? realPath(resolved) : resolved;
+    if (actual === originalRoot || actual.startsWith(originalRoot + sep))
+      throw new Error("验收命令不能指向原仓库，请使用副本相对路径");
+    if (index > 0) {
+      const location = relative(realPath(workspace), actual);
+      if (
+        isAbsolute(value) ||
+        /^file:/i.test(value) ||
+        location === ".." ||
+        location.startsWith(".." + sep) ||
+        isAbsolute(location)
+      )
+        throw new Error("验收路径参数须使用副本内相对路径");
+      if (existsSync(actual) && lstatSync(actual).isFile() && !checkTargets.includes(actual))
+        throw new Error("验收引用的文件必须列在 checkFiles 中");
+    }
+    const target = resolve(workspace, arg);
+    if (existsSync(target) && editable.includes(realPath(target))) throw new Error("验收命令指向可修改文件");
+  }
+}
+
 export function codeWorkspace(project: Project, home: string, subject: string) {
   if (!project.code || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(subject)) throw new Error("代码项目或运行编号无效");
   const folder = join(resolve(home), "goal-code", project.id, subject);
@@ -28,6 +70,7 @@ export function codeWorkspace(project: Project, home: string, subject: string) {
   if (existsSync(metadata)) {
     if (JSON.parse(readFileSync(metadata, "utf8")).policy !== policy(project))
       throw new Error("目标运行期间项目配置发生变化");
+    validateCodeWorkspace(project, workspace);
     return workspace;
   }
   if (existsSync(workspace)) throw new Error("代码副本初始化未完成，请使用新的运行编号");
@@ -51,29 +94,7 @@ export function codeWorkspace(project: Project, home: string, subject: string) {
     { stdio: "ignore" },
   );
   git(workspace, "checkout", "--detach", baseline);
-  // Source files must already be regular files on main, with no symlink ancestors. Acceptance files remain at baseline.
-  for (const path of project.code.files) {
-    if (!/^100(644|755) blob /.test(git(workspace, "ls-tree", "HEAD", "--", path)))
-      throw new Error("只能修改 main 已有的普通文件");
-    if (realPath(join(workspace, path)) !== join(realPath(workspace), path)) throw new Error("文件不能经过符号链接");
-  }
-  const editable = project.code.files.map((path) => realPath(join(workspace, path)));
-  for (const path of project.code.checkFiles) {
-    const target = realPath(join(workspace, path));
-    if (!target.startsWith(realPath(workspace) + sep) || !lstatSync(target).isFile() || editable.includes(target))
-      throw new Error("验收真实入口不能在白名单内或副本外");
-  }
-  const originalRoot = realPath(project.code.repository);
-  for (const arg of project.code.check) {
-    // Both positional paths and --root=/path style options must stay away from the source checkout.
-    const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
-    const resolved = resolve(workspace, value);
-    const actual = existsSync(resolved) ? realPath(resolved) : resolved;
-    if (actual === originalRoot || actual.startsWith(originalRoot + sep))
-      throw new Error("验收命令不能指向原仓库，请使用副本相对路径");
-    const target = resolve(workspace, arg);
-    if (existsSync(target) && editable.includes(realPath(target))) throw new Error("验收命令指向可修改文件");
-  }
+  validateCodeWorkspace(project, workspace);
   writeFileSync(metadata, JSON.stringify({ policy: policy(project), baseline }), { mode: 0o600 });
   return workspace;
 }
@@ -121,6 +142,7 @@ export function inspectCode(project: Project, workspace: string, expected?: stri
   const baseline = JSON.parse(readFileSync(join(dirname(workspace), "policy.json"), "utf8"));
   if (baseline.policy !== policy(project) || git(workspace, "rev-parse", "HEAD").trim() !== baseline.baseline)
     throw new Error("执行副本的配置或 main 基准发生变化");
+  validateCodeWorkspace(project, workspace);
   const files = sources(project, workspace);
   const revision = hash(JSON.stringify(files));
   const record = join(dirname(workspace), "check.json");
@@ -165,7 +187,7 @@ export async function applyChanges(project: Project, workspace: string, value: u
     seen.add(item.path);
     return { path: item.path as string, content: item.content as string };
   });
-  const current = sources(project, workspace);
+  const current = inspectCode(project, workspace).files;
   const prospective = current.map((file) => changes.find((change) => change.path === file.path) ?? file);
   if (JSON.stringify(prospective).length > 48000) throw new Error("代码上下文超过本示例上限");
   for (const change of changes) writeFileSync(join(workspace, change.path), change.content);
