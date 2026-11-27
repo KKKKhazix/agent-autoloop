@@ -4,7 +4,8 @@
 // powershell.exe an Agent left in the turn's folder runs, outside its sandbox, in place of the system's; the npm.cmd and
 // npx.cmd that npm 10 and later write, which name their script through a variable, can't be run at all; a command line
 // longer than Windows starts fails with only "spawn ENAMETOOLONG", which doesn't say what is too long or what to do;
-// a running turn launches PowerShell just to check a child process the worker still holds.
+// a running turn launches PowerShell just to check a child process the worker still holds; a desktop notice shown from a
+// process with no console puts a console window on the desktop.
 import assert from "node:assert/strict";
 import { createHook } from "node:async_hooks";
 import { spawn, spawnSync } from "node:child_process";
