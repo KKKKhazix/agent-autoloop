@@ -109,8 +109,8 @@ export function latestBefore(cron: Cron, due: number, now: number, zone: string)
 
 export function dayStart(now: number, zone: string) {
   const clock = wallClock(now, zone);
-  // Some zones skip midnight itself (Beirut, Santiago, Havana): the day begins at the first hour that exists, as a
-  // schedule's first moment does. Taking `now` would leave today's spending and counts at nothing for the whole day.
+  // Some zones skip midnight itself (Beirut, Santiago, Havana): the day begins at the first hour that exists. Taking
+  // `now` would leave today's spending and counts at nothing for the whole day.
   for (let hour = 0; hour < 24; hour++) {
     const at = moment(clock.year, clock.month, clock.day, hour, 0, zone);
     if (at !== null) return at;
