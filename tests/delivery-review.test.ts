@@ -1,5 +1,6 @@
 // Failure modes: empty/failed reviews pass; findings are unhandled but attested; Codex reads developer
 // config or memories, writes files, sees credentials, or executes a PR's programs/settings. Review receives a text snapshot;
+// a branch's own diff filter or external diff program runs while its changes are read for review;
 // what an octopus merge brings never reaches the reviewer, so it passes unseen; Git escapes a Chinese path so it matches no
 // pattern; a root file named like a commit is taken for one and the review can't finish; a Windows npm shim cannot start the reviewer; a failed reviewer's
 // reason starts half way through a character.
@@ -171,6 +172,24 @@ function project(review: (stand: (name: string) => string[]) => object = () => (
     [Symbol.dispose]: () => rmSync(root, { recursive: true, force: true }),
   };
 }
+test("a branch's own diff filter and external diff never run while its changes are read", async () => {
+  using p = project();
+  const ran = (name: string) => join(p.repo, "..", name);
+  const script = join(p.repo, "..", "filter.mjs");
+  writeFileSync(script, "import fs from 'node:fs';fs.writeFileSync(process.argv[2],'ran');\n");
+  const command = (name: string) => `"${process.execPath}" "${script}" "${ran(name)}"`;
+  // Both drivers run a program of this machine's own making, once a path in the branch names them.
+  p.git("config", "diff.evil.textconv", command("textconv"));
+  p.git("config", "diff.external", command("external"));
+  p.write(".gitattributes", "*.md diff=evil\n");
+  p.write("notes.md", "words only the branch wrote\n");
+  const head = p.commit();
+  assert.deepEqual(await p.review(head), []);
+  assert.ok(p.reviewed(), "the reviewer read the change");
+  assert.ok(!existsSync(ran("textconv")), "the branch's textconv driver never ran");
+  assert.ok(!existsSync(ran("external")), "the branch's external diff never ran");
+  assert.match(p.changes(), /words only the branch wrote/);
+});
 test("a branch with an octopus merge is reported, not reviewed without what the merge brought", async () => {
   using p = project();
   for (const name of ["one", "two"]) {
