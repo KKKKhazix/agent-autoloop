@@ -83,7 +83,13 @@ export function mutate() {
     // All of it: a test that reads a folder left out here fails the baseline here and nowhere else (#119, then #128).
     for (const name of readdirSync(root).filter((name) => ![".git", ".claude", "node_modules"].includes(name)))
       cpSync(join(root, name), join(folder, name), { recursive: true });
-    symlinkSync(join(root, "node_modules"), join(folder, "node_modules"));
+    // A junction needs no privilege on Windows, where a directory symlink does: the same reason `cli/main.ts` links the
+    // skill with one. Node reads through either.
+    symlinkSync(
+      join(root, "node_modules"),
+      join(folder, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const baseline = run();
     assert.equal(baseline.status, 0, baseline.stdout + baseline.stderr);
     assert.ok(Number(/# tests (\d+)/.exec(baseline.stdout)?.[1]) > 50, "基线必须确实执行行为测试");
